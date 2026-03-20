@@ -10,6 +10,7 @@ dependencies = [
  "alfred-lisp",
  "alfred-plugin",
  "alfred-tui",
+ "crossterm",
 ]
 
 [[package]]

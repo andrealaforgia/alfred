@@ -9,3 +9,4 @@ alfred-core = { path = "../alfred-core" }
 alfred-lisp = { path = "../alfred-lisp" }
 alfred-plugin = { path = "../alfred-plugin" }
 alfred-tui = { path = "../alfred-tui" }
+crossterm = "0.28"

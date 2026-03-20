@@ -4,6 +4,7 @@
 //! crossterm and rendering via ratatui, delegating all domain logic
 //! to alfred-core.
 
+pub mod app;
 pub mod renderer;
 
 /// Returns the crate version string.
