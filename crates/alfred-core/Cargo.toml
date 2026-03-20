@@ -1,0 +1,8 @@
+[package]
+name = "alfred-core"
+version = "0.1.0"
+edition = "2021"
+description = "Pure domain core for the Alfred text editor"
+
+[dependencies]
+ropey = "1"

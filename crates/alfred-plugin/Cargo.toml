@@ -1,0 +1,7 @@
+[package]
+name = "alfred-plugin"
+version = "0.1.0"
+edition = "2021"
+description = "Plugin system for Alfred (stub)"
+
+[dependencies]

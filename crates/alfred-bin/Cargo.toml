@@ -1,0 +1,11 @@
+[package]
+name = "alfred-bin"
+version = "0.1.0"
+edition = "2021"
+description = "Binary entry point for the Alfred text editor"
+
+[dependencies]
+alfred-core = { path = "../alfred-core" }
+alfred-lisp = { path = "../alfred-lisp" }
+alfred-plugin = { path = "../alfred-plugin" }
+alfred-tui = { path = "../alfred-tui" }

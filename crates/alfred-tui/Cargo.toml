@@ -1,0 +1,10 @@
+[package]
+name = "alfred-tui"
+version = "0.1.0"
+edition = "2021"
+description = "Terminal UI shell for the Alfred text editor"
+
+[dependencies]
+alfred-core = { path = "../alfred-core" }
+crossterm = "0.28"
+ratatui = "0.29"
