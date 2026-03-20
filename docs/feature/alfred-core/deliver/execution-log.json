@@ -1,5 +1,6 @@
 {
   "schema_version": "3.0",
+  "project_id": "alfred-core",
   "feature_id": "alfred-core",
   "events": [
     {
@@ -29,6 +30,13 @@
       "s": "EXECUTED",
       "d": "PASS",
       "t": "2026-03-20T22:18:21Z"
+    },
+    {
+      "sid": "01-01",
+      "p": "COMMIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-20T22:19:36Z"
     }
   ]
 }
