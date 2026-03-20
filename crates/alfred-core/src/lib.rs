@@ -5,6 +5,7 @@
 //! (alfred-tui, alfred-lisp, alfred-plugin).
 
 pub mod buffer;
+pub mod cursor;
 pub mod error;
 
 /// Returns the crate version string.

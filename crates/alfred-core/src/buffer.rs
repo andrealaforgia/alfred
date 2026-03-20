@@ -37,6 +37,20 @@ pub struct Buffer {
 }
 
 impl Buffer {
+    /// Creates a new Buffer from a string.
+    ///
+    /// Useful for testing and for creating buffers from non-file sources.
+    /// The buffer has no filename, `modified` is `false`, and `version` starts at 1.
+    pub fn from_string(text: &str) -> Self {
+        Buffer {
+            id: next_id(),
+            rope: Rope::from_str(text),
+            filename: None,
+            modified: false,
+            version: 1,
+        }
+    }
+
     /// Loads a text file into a new Buffer.
     ///
     /// Returns an error if the file cannot be read. The buffer's `modified`
