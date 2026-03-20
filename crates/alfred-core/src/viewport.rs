@@ -60,12 +60,16 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_viewport_and_cursor_when_cursor_moves_beyond_boundaries_then_viewport_adjusts_to_keep_cursor_visible() {
+    fn given_viewport_and_cursor_when_cursor_moves_beyond_boundaries_then_viewport_adjusts_to_keep_cursor_visible(
+    ) {
         // Given: a viewport with top_line=0 and height=24
         let viewport = new(0, 24, 80);
 
         // When: cursor is at line 25 (beyond viewport bottom)
-        let cursor = Cursor { line: 25, column: 0 };
+        let cursor = Cursor {
+            line: 25,
+            column: 0,
+        };
         let adjusted = adjust(viewport, &cursor);
 
         // Then: top_line adjusts so cursor is on the last visible line
@@ -83,7 +87,10 @@ mod tests {
 
         // When: cursor is within the viewport
         let viewport = new(5, 24, 80);
-        let cursor_within = Cursor { line: 15, column: 3 };
+        let cursor_within = Cursor {
+            line: 15,
+            column: 3,
+        };
         let adjusted = adjust(viewport, &cursor_within);
 
         // Then: viewport does not change
@@ -101,7 +108,10 @@ mod tests {
     #[test]
     fn cursor_below_viewport_causes_scroll_down() {
         let viewport = new(0, 24, 80);
-        let cursor = Cursor { line: 24, column: 0 };
+        let cursor = Cursor {
+            line: 24,
+            column: 0,
+        };
         let adjusted = adjust(viewport, &cursor);
         assert_eq!(adjusted.top_line, 1); // 24 - 23 = 1
     }
@@ -109,7 +119,10 @@ mod tests {
     #[test]
     fn cursor_far_below_viewport_scrolls_to_correct_position() {
         let viewport = new(0, 10, 80);
-        let cursor = Cursor { line: 50, column: 0 };
+        let cursor = Cursor {
+            line: 50,
+            column: 0,
+        };
         let adjusted = adjust(viewport, &cursor);
         assert_eq!(adjusted.top_line, 41); // 50 - 9 = 41
         assert!(cursor.line < adjusted.top_line + adjusted.height as usize);
@@ -142,7 +155,10 @@ mod tests {
     #[test]
     fn cursor_within_viewport_causes_no_change() {
         let viewport = new(5, 24, 80);
-        let cursor = Cursor { line: 20, column: 10 };
+        let cursor = Cursor {
+            line: 20,
+            column: 10,
+        };
         let adjusted = adjust(viewport, &cursor);
         assert_eq!(adjusted, viewport);
     }
@@ -159,7 +175,10 @@ mod tests {
     fn cursor_at_last_visible_line_causes_no_change() {
         let viewport = new(5, 24, 80);
         // Last visible line = 5 + 24 - 1 = 28
-        let cursor = Cursor { line: 28, column: 0 };
+        let cursor = Cursor {
+            line: 28,
+            column: 0,
+        };
         let adjusted = adjust(viewport, &cursor);
         assert_eq!(adjusted, viewport);
     }
@@ -181,7 +200,10 @@ mod tests {
     #[test]
     fn adjust_returns_new_viewport_without_mutating_original() {
         let original = new(0, 24, 80);
-        let cursor = Cursor { line: 30, column: 0 };
+        let cursor = Cursor {
+            line: 30,
+            column: 0,
+        };
         let adjusted = adjust(original, &cursor);
 
         // original is unchanged (Copy type, but semantically verifying purity)
@@ -196,7 +218,10 @@ mod tests {
     #[test]
     fn adjust_preserves_viewport_dimensions() {
         let viewport = new(0, 24, 80);
-        let cursor = Cursor { line: 30, column: 0 };
+        let cursor = Cursor {
+            line: 30,
+            column: 0,
+        };
         let adjusted = adjust(viewport, &cursor);
         assert_eq!(adjusted.height, 24);
         assert_eq!(adjusted.width, 80);

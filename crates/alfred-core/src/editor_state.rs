@@ -16,6 +16,23 @@ pub type Keymap = String;
 /// Stub type for hooks. Full implementation in a future milestone.
 pub type Hook = String;
 
+/// The editor mode, determining how key events are interpreted.
+///
+/// In M1 only `Normal` mode exists. `Insert` will be added in M7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorMode {
+    /// Normal (command) mode -- the default mode.
+    Normal,
+}
+
+impl std::fmt::Display for EditorMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditorMode::Normal => write!(f, "normal"),
+        }
+    }
+}
+
 /// The top-level editor state, aggregating all subsystems.
 ///
 /// This is the single mutable container passed through the event loop.
@@ -26,7 +43,7 @@ pub struct EditorState {
     pub cursor: Cursor,
     pub viewport: Viewport,
     pub commands: CommandRegistry,
-    pub mode: String,
+    pub mode: EditorMode,
     pub active_keymaps: Vec<Keymap>,
     pub hooks: Vec<Hook>,
     pub message: Option<String>,
@@ -49,7 +66,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         cursor: crate::cursor::new(0, 0),
         viewport: crate::viewport::new(0, height, width),
         commands: CommandRegistry::new(),
-        mode: "normal".to_string(),
+        mode: EditorMode::Normal,
         active_keymaps: Vec::new(),
         hooks: Vec::new(),
         message: None,
@@ -131,7 +148,7 @@ mod tests {
     #[test]
     fn given_new_editor_state_then_mode_is_normal() {
         let state = editor_state::new(80, 24);
-        assert_eq!(state.mode, "normal");
+        assert_eq!(state.mode, crate::editor_state::EditorMode::Normal);
     }
 
     #[test]

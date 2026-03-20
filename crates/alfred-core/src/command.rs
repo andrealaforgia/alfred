@@ -30,6 +30,23 @@ impl CommandRegistry {
             commands: HashMap::new(),
         }
     }
+
+    /// Returns the native function pointer for the named command, if it exists.
+    ///
+    /// This extracts a `Copy` value, allowing callers to release the borrow
+    /// on the registry before invoking the function pointer.
+    pub(crate) fn lookup_native_fn(
+        &self,
+        name: &str,
+    ) -> Option<fn(&mut EditorState) -> Result<()>> {
+        self.commands.get(name).map(|CommandHandler::Native(f)| *f)
+    }
+}
+
+impl Default for CommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Registers a command handler under the given name.
@@ -51,15 +68,12 @@ pub fn lookup<'a>(registry: &'a CommandRegistry, name: &str) -> Option<&'a Comma
 /// Looks up the command by name in the state's command registry,
 /// then invokes the handler. Returns an error if the command is not found.
 pub fn execute(state: &mut EditorState, name: &str) -> Result<()> {
-    // Look up the function pointer first, before borrowing state mutably
-    let handler_fn = match state.commands.commands.get(name) {
-        Some(CommandHandler::Native(f)) => *f,
-        None => {
-            return Err(crate::error::AlfredError::CommandNotFound {
-                name: name.to_string(),
-            });
+    // Extract the Copy function pointer first to release the borrow on state.commands
+    let handler_fn = state.commands.lookup_native_fn(name).ok_or_else(|| {
+        crate::error::AlfredError::CommandNotFound {
+            name: name.to_string(),
         }
-    };
+    })?;
     handler_fn(state)
 }
 

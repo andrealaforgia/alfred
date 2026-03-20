@@ -106,7 +106,7 @@ fn compute_cursor_position(state: &EditorState) -> Position {
 ///
 /// Raw mode disables line buffering, echo, and special key processing,
 /// allowing the editor to handle every keystroke directly.
-pub fn enter_raw_mode() -> io::Result<()> {
+fn enter_raw_mode() -> io::Result<()> {
     crossterm::terminal::enable_raw_mode()
 }
 
@@ -114,14 +114,14 @@ pub fn enter_raw_mode() -> io::Result<()> {
 ///
 /// This should be called on shutdown or on error to ensure the terminal
 /// is usable after the editor exits.
-pub fn exit_raw_mode() -> io::Result<()> {
+fn exit_raw_mode() -> io::Result<()> {
     crossterm::terminal::disable_raw_mode()
 }
 
 /// A guard that enables raw mode on creation and disables it on drop.
 ///
 /// This ensures raw mode is always cleaned up, even on panic or early return.
-pub struct RawModeGuard;
+pub(crate) struct RawModeGuard;
 
 impl RawModeGuard {
     /// Creates a new RawModeGuard, enabling raw mode immediately.

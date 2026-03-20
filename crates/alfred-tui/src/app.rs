@@ -29,7 +29,7 @@ use crate::renderer;
 /// This is a pure mapping function with no side effects. It translates
 /// crossterm's key code and modifier representation into alfred-core's
 /// domain-independent representation.
-pub fn convert_crossterm_key(ct_key: CtKeyEvent) -> KeyEvent {
+pub(crate) fn convert_crossterm_key(ct_key: CtKeyEvent) -> KeyEvent {
     let code = convert_key_code(ct_key.code);
     let modifiers = convert_modifiers(ct_key.modifiers);
     KeyEvent::new(code, modifiers)
@@ -80,7 +80,7 @@ fn convert_modifiers(ct_mods: CtKeyModifiers) -> Modifiers {
 ///
 /// After handling cursor movement, the viewport is adjusted to ensure
 /// the cursor remains visible.
-pub fn handle_key_event(state: &mut EditorState, key: KeyEvent) {
+pub(crate) fn handle_key_event(state: &mut EditorState, key: KeyEvent) {
     match key {
         KeyEvent {
             code: KeyCode::Char('q'),
@@ -91,34 +91,34 @@ pub fn handle_key_event(state: &mut EditorState, key: KeyEvent) {
         KeyEvent {
             code: KeyCode::Up,
             modifiers: Modifiers { ctrl: false, .. },
-        } => {
-            state.cursor = cursor::move_up(state.cursor, &state.buffer);
-            state.viewport = viewport::adjust(state.viewport, &state.cursor);
-        }
+        } => move_cursor_and_adjust_viewport(state, cursor::move_up),
         KeyEvent {
             code: KeyCode::Down,
             modifiers: Modifiers { ctrl: false, .. },
-        } => {
-            state.cursor = cursor::move_down(state.cursor, &state.buffer);
-            state.viewport = viewport::adjust(state.viewport, &state.cursor);
-        }
+        } => move_cursor_and_adjust_viewport(state, cursor::move_down),
         KeyEvent {
             code: KeyCode::Left,
             modifiers: Modifiers { ctrl: false, .. },
-        } => {
-            state.cursor = cursor::move_left(state.cursor, &state.buffer);
-            state.viewport = viewport::adjust(state.viewport, &state.cursor);
-        }
+        } => move_cursor_and_adjust_viewport(state, cursor::move_left),
         KeyEvent {
             code: KeyCode::Right,
             modifiers: Modifiers { ctrl: false, .. },
-        } => {
-            state.cursor = cursor::move_right(state.cursor, &state.buffer);
-            state.viewport = viewport::adjust(state.viewport, &state.cursor);
-        }
+        } => move_cursor_and_adjust_viewport(state, cursor::move_right),
         // M1: all other keys are ignored (buffer is read-only)
         _ => {}
     }
+}
+
+/// Applies a cursor movement function and adjusts the viewport to follow.
+fn move_cursor_and_adjust_viewport(
+    state: &mut EditorState,
+    move_fn: fn(
+        alfred_core::cursor::Cursor,
+        &alfred_core::buffer::Buffer,
+    ) -> alfred_core::cursor::Cursor,
+) {
+    state.cursor = move_fn(state.cursor, &state.buffer);
+    state.viewport = viewport::adjust(state.viewport, &state.cursor);
 }
 
 // ---------------------------------------------------------------------------
@@ -215,9 +215,7 @@ mod tests {
         // Viewport should be adjusted after each key event
         // (cursor is visible within viewport)
         assert!(state.cursor.line >= state.viewport.top_line);
-        assert!(
-            state.cursor.line < state.viewport.top_line + state.viewport.height as usize
-        );
+        assert!(state.cursor.line < state.viewport.top_line + state.viewport.height as usize);
 
         // When: press Ctrl-Q
         super::handle_key_event(
@@ -237,8 +235,8 @@ mod tests {
         // Given: an EditorState with a small viewport (height=5) and a 10-line buffer
         let mut state = editor_state::new(80, 5);
         let lines: Vec<&str> = vec![
-            "Line0", "Line1", "Line2", "Line3", "Line4", "Line5", "Line6", "Line7",
-            "Line8", "Line9",
+            "Line0", "Line1", "Line2", "Line3", "Line4", "Line5", "Line6", "Line7", "Line8",
+            "Line9",
         ];
         state.buffer = Buffer::from_string(&lines.join("\n"));
         assert_eq!(state.viewport.top_line, 0);
@@ -254,9 +252,7 @@ mod tests {
         // And: viewport has scrolled to keep cursor visible
         assert!(state.viewport.top_line > 0);
         assert!(state.cursor.line >= state.viewport.top_line);
-        assert!(
-            state.cursor.line < state.viewport.top_line + state.viewport.height as usize
-        );
+        assert!(state.cursor.line < state.viewport.top_line + state.viewport.height as usize);
     }
 
     // -----------------------------------------------------------------------

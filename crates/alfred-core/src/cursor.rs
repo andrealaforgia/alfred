@@ -25,22 +25,31 @@ fn line_length(buf: &Buffer, line_index: usize) -> usize {
         .unwrap_or(0)
 }
 
+/// Returns the zero-indexed last line of the buffer (0 for an empty buffer).
+fn last_line_index(buf: &Buffer) -> usize {
+    buffer::line_count(buf).saturating_sub(1)
+}
+
+/// Creates a cursor at the given line with column clamped to line length.
+fn clamp_column_to_line(line: usize, desired_column: usize, buf: &Buffer) -> Cursor {
+    let max_column = line_length(buf, line);
+    Cursor {
+        line,
+        column: desired_column.min(max_column),
+    }
+}
+
 /// Moves the cursor down by one line, clamping column to the target line length.
 ///
 /// If already on the last line, the cursor stays unchanged.
 pub fn move_down(cursor: Cursor, buf: &Buffer) -> Cursor {
-    let total_lines = buffer::line_count(buf);
-    let last_line = if total_lines > 0 { total_lines - 1 } else { 0 };
+    let last_line = last_line_index(buf);
     let new_line = if cursor.line < last_line {
         cursor.line + 1
     } else {
         cursor.line
     };
-    let max_column = line_length(buf, new_line);
-    Cursor {
-        line: new_line,
-        column: cursor.column.min(max_column),
-    }
+    clamp_column_to_line(new_line, cursor.column, buf)
 }
 
 /// Moves the cursor up by one line, clamping column to the target line length.
@@ -48,11 +57,7 @@ pub fn move_down(cursor: Cursor, buf: &Buffer) -> Cursor {
 /// If already on the first line, the cursor stays unchanged.
 pub fn move_up(cursor: Cursor, buf: &Buffer) -> Cursor {
     let new_line = cursor.line.saturating_sub(1);
-    let max_column = line_length(buf, new_line);
-    Cursor {
-        line: new_line,
-        column: cursor.column.min(max_column),
-    }
+    clamp_column_to_line(new_line, cursor.column, buf)
 }
 
 /// Moves the cursor right by one column.
@@ -66,17 +71,13 @@ pub fn move_right(cursor: Cursor, buf: &Buffer) -> Cursor {
             line: cursor.line,
             column: cursor.column + 1,
         }
-    } else {
-        let total_lines = buffer::line_count(buf);
-        let last_line = if total_lines > 0 { total_lines - 1 } else { 0 };
-        if cursor.line < last_line {
-            Cursor {
-                line: cursor.line + 1,
-                column: 0,
-            }
-        } else {
-            cursor
+    } else if cursor.line < last_line_index(buf) {
+        Cursor {
+            line: cursor.line + 1,
+            column: 0,
         }
+    } else {
+        cursor
     }
 }
 
@@ -107,14 +108,8 @@ pub fn move_left(cursor: Cursor, buf: &Buffer) -> Cursor {
 /// If the line is beyond the buffer, clamps to the last line. If the column
 /// is beyond the line length, clamps to the end of that line.
 pub fn ensure_within_bounds(cursor: Cursor, buf: &Buffer) -> Cursor {
-    let total_lines = buffer::line_count(buf);
-    let last_line = if total_lines > 0 { total_lines - 1 } else { 0 };
-    let clamped_line = cursor.line.min(last_line);
-    let max_column = line_length(buf, clamped_line);
-    Cursor {
-        line: clamped_line,
-        column: cursor.column.min(max_column),
-    }
+    let clamped_line = cursor.line.min(last_line_index(buf));
+    clamp_column_to_line(clamped_line, cursor.column, buf)
 }
 
 #[cfg(test)]
