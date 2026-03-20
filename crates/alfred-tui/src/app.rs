@@ -70,23 +70,74 @@ fn convert_modifiers(ct_mods: CtKeyModifiers) -> Modifiers {
 // Pure function: handle a key event by updating EditorState
 // ---------------------------------------------------------------------------
 
+/// Tracks multi-key input state (e.g., command-line after `:`)
+#[derive(Debug, PartialEq)]
+pub(crate) enum InputState {
+    /// Normal key dispatch
+    Normal,
+    /// Accumulating a command-line string (entered via `:`)
+    Command(String),
+}
+
 /// Handles a key event by updating the editor state.
 ///
-/// This function dispatches on the key event to perform cursor movement
-/// or quit the editor. For M1, keybindings are hardcoded:
+/// For M1, keybindings are hardcoded:
 /// - Arrow keys: cursor movement (Up, Down, Left, Right)
-/// - Ctrl-Q: quit (set running = false)
+/// - `:` enters command mode; type `q` then Enter to quit
+/// - Escape cancels command mode
 /// - All other keys: ignored (read-only in M1)
-///
-/// After handling cursor movement, the viewport is adjusted to ensure
-/// the cursor remains visible.
-pub(crate) fn handle_key_event(state: &mut EditorState, key: KeyEvent) {
+pub(crate) fn handle_key_event(
+    state: &mut EditorState,
+    key: KeyEvent,
+    input_state: InputState,
+) -> InputState {
+    // Command-line mode: accumulating input after `:`
+    if let InputState::Command(mut cmd) = input_state {
+        match key.code {
+            KeyCode::Enter => {
+                // Execute the command
+                let trimmed = cmd.trim();
+                if trimmed == "q" || trimmed == "quit" {
+                    state.running = false;
+                } else {
+                    state.message = Some(format!("Unknown command: {}", trimmed));
+                }
+                return InputState::Normal;
+            }
+            KeyCode::Escape => {
+                // Cancel command input
+                state.message = None;
+                return InputState::Normal;
+            }
+            KeyCode::Backspace => {
+                cmd.pop();
+                if cmd.is_empty() {
+                    state.message = None;
+                    return InputState::Normal;
+                }
+                state.message = Some(format!(":{}", cmd));
+                return InputState::Command(cmd);
+            }
+            KeyCode::Char(c) => {
+                cmd.push(c);
+                state.message = Some(format!(":{}", cmd));
+                return InputState::Command(cmd);
+            }
+            _ => {
+                return InputState::Command(cmd);
+            }
+        }
+    }
+
+    // Normal mode
     match key {
+        // `:` enters command mode
         KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: Modifiers { ctrl: true, .. },
+            code: KeyCode::Char(':'),
+            modifiers: Modifiers { ctrl: false, .. },
         } => {
-            state.running = false;
+            state.message = Some(":".to_string());
+            return InputState::Command(String::new());
         }
         KeyEvent {
             code: KeyCode::Up,
@@ -107,6 +158,7 @@ pub(crate) fn handle_key_event(state: &mut EditorState, key: KeyEvent) {
         // M1: all other keys are ignored (buffer is read-only)
         _ => {}
     }
+    InputState::Normal
 }
 
 /// Applies a cursor movement function and adjusts the viewport to follow.
@@ -143,6 +195,8 @@ pub fn run(state: &mut EditorState) -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
+    let mut input_state = InputState::Normal;
+
     while state.running {
         renderer::render_frame(&mut terminal, state)?;
 
@@ -150,7 +204,7 @@ pub fn run(state: &mut EditorState) -> io::Result<()> {
             // Only handle key press events (not release/repeat)
             if ct_key.kind == KeyEventKind::Press {
                 let key = convert_crossterm_key(ct_key);
-                handle_key_event(state, key);
+                input_state = handle_key_event(state, key, input_state);
             }
         }
     }
@@ -188,26 +242,26 @@ mod tests {
         assert!(state.running);
 
         // When: press Down arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
         // Then: cursor moves to line 1
         assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 0);
 
         // When: press Right arrow twice
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right));
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
         // Then: cursor at (1, 2)
         assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 2);
 
         // When: press Up arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up), super::InputState::Normal);
         // Then: cursor moves to line 0, column 2
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 2);
 
         // When: press Left arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left), super::InputState::Normal);
         // Then: cursor at (0, 1)
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 1);
@@ -217,10 +271,21 @@ mod tests {
         assert!(state.cursor.line >= state.viewport.top_line);
         assert!(state.cursor.line < state.viewport.top_line + state.viewport.height as usize);
 
-        // When: press Ctrl-Q
+        // When: type :q Enter to quit
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            result,
+        );
         super::handle_key_event(
             &mut state,
-            KeyEvent::new(KeyCode::Char('q'), Modifiers::ctrl()),
+            KeyEvent::plain(KeyCode::Enter),
+            result,
         );
         // Then: running is false
         assert!(!state.running);
@@ -243,7 +308,7 @@ mod tests {
 
         // When: move cursor down 6 times (past the 5-line viewport)
         for _ in 0..6 {
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down));
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
         }
 
         // Then: cursor is at line 6
@@ -388,7 +453,7 @@ mod tests {
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
         assert_eq!(state.cursor.line, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
         assert_eq!(state.cursor.line, 1);
     }
 
@@ -398,7 +463,7 @@ mod tests {
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
         state.cursor = cursor::new(2, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up), super::InputState::Normal);
         assert_eq!(state.cursor.line, 1);
     }
 
@@ -408,7 +473,7 @@ mod tests {
         state.buffer = Buffer::from_string("Hello");
         assert_eq!(state.cursor.column, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
         assert_eq!(state.cursor.column, 1);
     }
 
@@ -418,18 +483,128 @@ mod tests {
         state.buffer = Buffer::from_string("Hello");
         state.cursor = cursor::new(0, 3);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left), super::InputState::Normal);
         assert_eq!(state.cursor.column, 2);
     }
 
     #[test]
-    fn given_editor_when_ctrl_q_then_running_becomes_false() {
+    fn given_editor_when_colon_q_enter_then_running_becomes_false() {
         let mut state = editor_state::new(80, 24);
         assert!(state.running);
 
+        // `:` enters command mode
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        assert!(matches!(result, super::InputState::Command(_)));
+        assert_eq!(state.message, Some(":".to_string()));
+
+        // Type `q`
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            result,
+        );
+        assert!(matches!(result, super::InputState::Command(_)));
+        assert_eq!(state.message, Some(":q".to_string()));
+
+        // Press Enter to execute
         super::handle_key_event(
             &mut state,
-            KeyEvent::new(KeyCode::Char('q'), Modifiers::ctrl()),
+            KeyEvent::plain(KeyCode::Enter),
+            result,
+        );
+        assert!(!state.running);
+    }
+
+    #[test]
+    fn given_editor_in_command_mode_when_escape_then_command_cancelled() {
+        let mut state = editor_state::new(80, 24);
+
+        // Enter command mode
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        assert!(matches!(result, super::InputState::Command(_)));
+
+        // Type some chars
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            result,
+        );
+
+        // Escape cancels
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Escape),
+            result,
+        );
+        assert_eq!(result, super::InputState::Normal);
+        assert!(state.running);
+        assert_eq!(state.message, None);
+    }
+
+    #[test]
+    fn given_editor_when_unknown_command_then_shows_error_message() {
+        let mut state = editor_state::new(80, 24);
+
+        // :foo Enter
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('f')),
+            result,
+        );
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('o')),
+            result,
+        );
+        let result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('o')),
+            result,
+        );
+        super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Enter),
+            result,
+        );
+
+        assert!(state.running); // Did NOT quit
+        assert_eq!(state.message, Some("Unknown command: foo".to_string()));
+    }
+
+    #[test]
+    fn given_editor_when_quit_command_then_also_accepts_full_word() {
+        let mut state = editor_state::new(80, 24);
+
+        // :quit Enter
+        let mut result = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        for c in "quit".chars() {
+            result = super::handle_key_event(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char(c)),
+                result,
+            );
+        }
+        super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Enter),
+            result,
         );
         assert!(!state.running);
     }
@@ -442,7 +617,7 @@ mod tests {
         let running_before = state.running;
 
         // Press 'a' -- no insert in M1, should be ignored
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Char('a')));
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Char('a')), super::InputState::Normal);
         assert_eq!(state.cursor, cursor_before);
         assert_eq!(state.running, running_before);
     }
@@ -455,7 +630,7 @@ mod tests {
 
         // Move cursor past viewport bottom
         for _ in 0..4 {
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down));
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
         }
         // Viewport should have scrolled
         assert!(state.viewport.top_line > 0);
