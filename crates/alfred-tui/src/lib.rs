@@ -4,6 +4,8 @@
 //! crossterm and rendering via ratatui, delegating all domain logic
 //! to alfred-core.
 
+pub mod renderer;
+
 /// Returns the crate version string.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
