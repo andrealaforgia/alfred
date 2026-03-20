@@ -1,149 +1,139 @@
 {
-  "schema_version": "2.0",
-  "feature_id": "alfred-core",
-  "title": "Alfred Editor Walking Skeleton - M1: Rust Kernel",
-  "description": "Implement the Rust kernel for the Alfred editor: Cargo workspace, rope-based buffer, cursor movement, viewport scrolling, terminal rendering, and event loop. M1 proves the system can display a file and navigate it.",
-  "milestone": "M1",
-  "paradigm": "functional",
-  "crafter": "nw-functional-software-crafter",
-  "validation": {
-    "status": "approved",
-    "reviewed_at": "2026-03-20T10:30:00Z",
-    "reviewer": "nw-software-crafter-reviewer"
+  "roadmap": {
+    "project_id": "alfred-core",
+    "created_at": "2026-03-20T10:00:00Z",
+    "total_steps": 7
   },
-  "steps": [
+  "phases": [
     {
-      "step_id": "01-01",
-      "title": "Cargo workspace and crate scaffolding",
-      "description": "Create the Cargo workspace with 5 crates: alfred-core (pure domain), alfred-lisp (stub), alfred-plugin (stub), alfred-tui (terminal shell), alfred-bin (entry point). alfred-core depends on ropey. alfred-tui depends on alfred-core, crossterm, ratatui. alfred-bin depends on all crates. Stub crates have lib.rs with a placeholder pub function.",
-      "acceptance_criteria": [
-        "Cargo workspace structure: 5 crates in crates/ (alfred-core, alfred-lisp, alfred-plugin, alfred-tui, alfred-bin)",
-        "alfred-core Cargo.toml specifies ropey as sole external dependency",
-        "alfred-tui Cargo.toml specifies alfred-core, crossterm, and ratatui dependencies",
-        "alfred-core has zero runtime dependencies on alfred-tui, alfred-lisp, or alfred-plugin (verified by build)",
-        "alfred-bin main() entry point exists and successfully links all crates"
-      ],
-      "files_to_modify": [
-        "Cargo.toml",
-        "crates/alfred-core/Cargo.toml",
-        "crates/alfred-core/src/lib.rs",
-        "crates/alfred-lisp/Cargo.toml",
-        "crates/alfred-lisp/src/lib.rs",
-        "crates/alfred-plugin/Cargo.toml",
-        "crates/alfred-plugin/src/lib.rs",
-        "crates/alfred-tui/Cargo.toml",
-        "crates/alfred-tui/src/lib.rs",
-        "crates/alfred-bin/Cargo.toml",
-        "crates/alfred-bin/src/main.rs"
-      ],
-      "depends_on": []
-    },
-    {
-      "step_id": "01-02",
-      "title": "Buffer type wrapping ropey Rope",
-      "description": "Implement the Buffer type in alfred-core. Buffer wraps ropey::Rope with metadata (id, filename, modified, version). Provide pure functions: Buffer::from_file(path) -> Result<Buffer>, buffer::get_line(buffer, n) -> Option<&str>, buffer::line_count(buffer) -> usize, buffer::content(buffer) -> String. Buffer is immutable-friendly: operations return new Buffer instances where practical.",
-      "acceptance_criteria": [
-        "Buffer::from_file loads a text file into a Rope",
-        "buffer::get_line returns the correct line content",
-        "buffer::line_count returns accurate count",
-        "Buffer stores filename and reports modified=false after loading",
-        "Loading a nonexistent file returns an error, not a panic"
-      ],
-      "files_to_modify": [
-        "crates/alfred-core/src/buffer.rs",
-        "crates/alfred-core/src/lib.rs",
-        "crates/alfred-core/src/error.rs"
-      ],
-      "depends_on": ["01-01"]
-    },
-    {
-      "step_id": "01-03",
-      "title": "Cursor and Position types with movement logic",
-      "description": "Implement Cursor (line, column) and movement functions in alfred-core. All functions are pure: cursor::move_up(cursor, buffer) -> Cursor, cursor::move_down(cursor, buffer) -> Cursor, cursor::move_left(cursor, buffer) -> Cursor, cursor::move_right(cursor, buffer) -> Cursor, cursor::ensure_within_bounds(cursor, buffer) -> Cursor. Movement clamps to buffer boundaries (no negative, no past-last-line, no past-line-length).",
-      "acceptance_criteria": [
-        "move_down from line 0 returns Cursor at line 1",
-        "move_up from line 0 returns Cursor still at line 0 (clamped)",
-        "move_right from end-of-line: if next line exists, move to (line+1, 0); if at last line, clamp to current line end",
-        "move_left from start-of-line: if previous line exists, move to (line-1, end); if at first line, clamp to column 0",
-        "ensure_within_bounds clamps cursor when buffer shrinks"
-      ],
-      "files_to_modify": [
-        "crates/alfred-core/src/cursor.rs",
-        "crates/alfred-core/src/lib.rs"
-      ],
-      "depends_on": ["01-02"]
-    },
-    {
-      "step_id": "01-04",
-      "title": "Viewport with scrolling logic",
-      "description": "Implement Viewport (top_line, height, width, gutter_width) in alfred-core. Pure function: viewport::adjust(viewport, cursor) -> Viewport that ensures the cursor is always visible. If cursor moves above top_line, scroll up. If cursor moves below top_line + height, scroll down. Viewport is a simple value type.",
-      "acceptance_criteria": [
-        "Viewport with top_line=0, height=24: cursor at line 25 causes top_line to adjust",
-        "Cursor at line 0 with top_line=10: top_line adjusts to 0",
-        "Cursor within viewport: no viewport change",
-        "Viewport adjustment is pure (returns new Viewport, does not mutate)",
-        "Viewport gutter_width initialized to 0 in M1 (reserved for M4 line-numbers plugin)"
-      ],
-      "files_to_modify": [
-        "crates/alfred-core/src/viewport.rs",
-        "crates/alfred-core/src/lib.rs"
-      ],
-      "depends_on": ["01-03"]
-    },
-    {
-      "step_id": "01-05",
-      "title": "KeyEvent, CommandRegistry, and EditorState",
-      "description": "Implement KeyEvent (code, modifiers), CommandRegistry (register/lookup/execute named commands), and EditorState (aggregating buffer, cursor, viewport, commands, running flag, message). CommandRegistry maps String -> CommandHandler where CommandHandler is Native(fn). EditorState is the top-level state passed through the event loop. Include the Mode, Keymap stubs (just the type definitions, full implementation in M6).",
-      "acceptance_criteria": [
-        "KeyEvent type represents single key inputs: character, arrow key, or Ctrl-modifier combination",
-        "CommandRegistry stores commands by name and can look them up by string",
-        "Command execution mutates EditorState (e.g., moves cursor, modifies message)",
-        "EditorState is the single mutable container: buffer, cursor, viewport, command registry, mode, running flag",
-        "EditorState initialization sets cursor to (0, 0), viewport to fit terminal, running=true, registries empty"
-      ],
-      "files_to_modify": [
-        "crates/alfred-core/src/key_event.rs",
-        "crates/alfred-core/src/command.rs",
-        "crates/alfred-core/src/editor_state.rs",
-        "crates/alfred-core/src/lib.rs"
-      ],
-      "depends_on": ["01-04"]
-    },
-    {
-      "step_id": "01-06",
-      "title": "Terminal renderer with ratatui",
-      "description": "Implement the terminal renderer in alfred-tui. Uses crossterm for raw mode and ratatui for rendering. Renderer draws: buffer content (visible lines based on viewport), cursor position, message line (bottom row). The renderer takes &EditorState and produces a frame. No hardcoded UI beyond the text area and message line (gutter and status bar are plugins in M4/M5).",
-      "acceptance_criteria": [
-        "Renderer enters raw mode on start and restores on exit",
-        "Buffer content renders as visible lines within viewport bounds",
-        "Cursor appears at the correct position in the terminal",
-        "Message line shows content of state.message at bottom of screen",
-        "Empty buffer renders without panic"
-      ],
-      "files_to_modify": [
-        "crates/alfred-tui/src/renderer.rs",
-        "crates/alfred-tui/src/lib.rs"
-      ],
-      "depends_on": ["01-05"]
-    },
-    {
-      "step_id": "01-07",
-      "title": "Event loop with hardcoded keybindings",
-      "description": "Implement the main event loop in alfred-tui. Reads crossterm events, dispatches to registered commands (or hardcoded handlers for M1). Loop: read event -> handle key -> update state -> render. Hardcoded bindings for M1: arrow keys -> cursor movement, Ctrl-Q -> quit. These will be replaced by plugin-defined keybindings in M6. Wire everything through alfred-bin main().",
-      "acceptance_criteria": [
-        "Arrow keys move cursor in the correct direction",
-        "Ctrl-Q sets running=false and exits the event loop cleanly",
-        "Terminal is restored to normal mode on exit (even on error)",
-        "Opening a file from CLI argument displays its content",
-        "Scrolling works when cursor moves past viewport boundaries",
-        "Buffer is read-only in M1: no text insertion or deletion available (modification operations are not yet implemented)"
-      ],
-      "files_to_modify": [
-        "crates/alfred-tui/src/app.rs",
-        "crates/alfred-tui/src/lib.rs",
-        "crates/alfred-bin/src/main.rs"
-      ],
-      "depends_on": ["01-06"]
+      "id": "01",
+      "name": "M1 Rust Kernel",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Cargo workspace scaffolding",
+          "criteria": [
+            "5 crates in crates/ directory",
+            "alfred-core depends only on ropey",
+            "alfred-tui depends on alfred-core crossterm ratatui",
+            "alfred-core has zero outward dependencies",
+            "alfred-bin main links all crates"
+          ],
+          "files_to_modify": [
+            "Cargo.toml",
+            "crates/alfred-core/Cargo.toml",
+            "crates/alfred-core/src/lib.rs",
+            "crates/alfred-lisp/Cargo.toml",
+            "crates/alfred-lisp/src/lib.rs",
+            "crates/alfred-plugin/Cargo.toml",
+            "crates/alfred-plugin/src/lib.rs",
+            "crates/alfred-tui/Cargo.toml",
+            "crates/alfred-tui/src/lib.rs",
+            "crates/alfred-bin/Cargo.toml",
+            "crates/alfred-bin/src/main.rs"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "Buffer type wrapping ropey",
+          "criteria": [
+            "from_file loads text into Rope",
+            "get_line returns correct content",
+            "line_count returns accurate count",
+            "Stores filename with modified false",
+            "Missing file returns error not panic"
+          ],
+          "files_to_modify": [
+            "crates/alfred-core/src/buffer.rs",
+            "crates/alfred-core/src/lib.rs",
+            "crates/alfred-core/src/error.rs"
+          ],
+          "deps": ["01-01"]
+        },
+        {
+          "id": "01-03",
+          "name": "Cursor with pure movement logic",
+          "criteria": [
+            "move_down advances to next line",
+            "move_up clamps at first line",
+            "move_right wraps or clamps at line end",
+            "move_left wraps or clamps at line start",
+            "ensure_within_bounds clamps to buffer"
+          ],
+          "files_to_modify": [
+            "crates/alfred-core/src/cursor.rs",
+            "crates/alfred-core/src/lib.rs"
+          ],
+          "deps": ["01-02"]
+        },
+        {
+          "id": "01-04",
+          "name": "Viewport with scrolling",
+          "criteria": [
+            "Scrolls down when cursor passes bottom",
+            "Scrolls up when cursor passes top",
+            "No change when cursor within viewport",
+            "Adjustment is pure returns new Viewport",
+            "gutter_width initialized to zero"
+          ],
+          "files_to_modify": [
+            "crates/alfred-core/src/viewport.rs",
+            "crates/alfred-core/src/lib.rs"
+          ],
+          "deps": ["01-03"]
+        },
+        {
+          "id": "01-05",
+          "name": "KeyEvent CommandRegistry EditorState",
+          "criteria": [
+            "KeyEvent represents char arrow ctrl inputs",
+            "CommandRegistry stores and looks up by name",
+            "Command execution mutates EditorState",
+            "EditorState aggregates all core state",
+            "Initializes with cursor at origin running true"
+          ],
+          "files_to_modify": [
+            "crates/alfred-core/src/key_event.rs",
+            "crates/alfred-core/src/command.rs",
+            "crates/alfred-core/src/editor_state.rs",
+            "crates/alfred-core/src/lib.rs"
+          ],
+          "deps": ["01-04"]
+        },
+        {
+          "id": "01-06",
+          "name": "Terminal renderer with ratatui",
+          "criteria": [
+            "Raw mode entered on start restored on exit",
+            "Visible lines rendered within viewport",
+            "Cursor at correct terminal position",
+            "Message line shows at bottom row",
+            "Empty buffer renders without panic"
+          ],
+          "files_to_modify": [
+            "crates/alfred-tui/src/renderer.rs",
+            "crates/alfred-tui/src/lib.rs"
+          ],
+          "deps": ["01-05"]
+        },
+        {
+          "id": "01-07",
+          "name": "Event loop with hardcoded keybindings",
+          "criteria": [
+            "Arrow keys move cursor correctly",
+            "Ctrl-Q exits event loop cleanly",
+            "Terminal restored on exit even on error",
+            "CLI file argument displays content",
+            "Scrolling works past viewport boundaries"
+          ],
+          "files_to_modify": [
+            "crates/alfred-tui/src/app.rs",
+            "crates/alfred-tui/src/lib.rs",
+            "crates/alfred-bin/src/main.rs"
+          ],
+          "deps": ["01-06"]
+        }
+      ]
     }
   ]
 }
