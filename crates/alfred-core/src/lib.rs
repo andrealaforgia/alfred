@@ -4,6 +4,9 @@
 //! and all domain types. It has zero runtime dependencies on IO crates
 //! (alfred-tui, alfred-lisp, alfred-plugin).
 
+pub mod buffer;
+pub mod error;
+
 /// Returns the crate version string.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

@@ -6,3 +6,7 @@ description = "Pure domain core for the Alfred text editor"
 
 [dependencies]
 ropey = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
