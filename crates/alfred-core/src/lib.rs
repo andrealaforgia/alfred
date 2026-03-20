@@ -5,8 +5,11 @@
 //! (alfred-tui, alfred-lisp, alfred-plugin).
 
 pub mod buffer;
+pub mod command;
 pub mod cursor;
+pub mod editor_state;
 pub mod error;
+pub mod key_event;
 pub mod viewport;
 
 /// Returns the crate version string.

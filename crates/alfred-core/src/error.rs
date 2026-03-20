@@ -14,6 +14,10 @@ pub enum AlfredError {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    /// Command not found in the registry.
+    #[error("command not found: '{name}'")]
+    CommandNotFound { name: String },
 }
 
 /// Convenience alias used throughout alfred-core.
