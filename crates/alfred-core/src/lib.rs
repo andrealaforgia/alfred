@@ -7,6 +7,7 @@
 pub mod buffer;
 pub mod cursor;
 pub mod error;
+pub mod viewport;
 
 /// Returns the crate version string.
 pub fn version() -> &'static str {
