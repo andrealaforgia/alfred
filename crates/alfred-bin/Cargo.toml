@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Binary entry point for the Alfred text editor"
 
+[[bin]]
+name = "alfred"
+path = "src/main.rs"
+
 [dependencies]
 alfred-core = { path = "../alfred-core" }
 alfred-lisp = { path = "../alfred-lisp" }
