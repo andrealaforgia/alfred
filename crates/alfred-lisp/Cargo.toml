@@ -5,3 +5,6 @@ edition = "2021"
 description = "Lisp interpreter integration for Alfred (stub)"
 
 [dependencies]
+alfred-core = { version = "0.1.0", path = "../alfred-core" }
+rust_lisp = "0.18.0"
+thiserror = "1"

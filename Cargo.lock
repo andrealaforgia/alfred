@@ -25,6 +25,11 @@ dependencies = [
 [[package]]
 name = "alfred-lisp"
 version = "0.1.0"
+dependencies = [
+ "alfred-core",
+ "rust_lisp",
+ "thiserror",
+]
 
 [[package]]
 name = "alfred-plugin"
@@ -455,6 +460,15 @@ checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
 dependencies = [
  "smallvec",
  "str_indices",
+]
+
+[[package]]
+name = "rust_lisp"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5c5734eceb60a15465bc85cafe540f454b79e23732bf56f913d081d9ae008ee"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
