@@ -17,6 +17,30 @@ use alfred_core::viewport;
 
 use crate::runtime::LispRuntime;
 
+/// Registers a native closure into the Lisp environment under the given name.
+fn define_native_closure<F>(env: &Rc<RefCell<Env>>, name: &str, closure: F)
+where
+    F: Fn(Rc<RefCell<Env>>, Vec<Value>) -> Result<Value, RuntimeError> + 'static,
+{
+    env.borrow_mut().define(
+        Symbol(name.to_string()),
+        Value::NativeClosure(Rc::new(RefCell::new(closure))),
+    );
+}
+
+/// Extracts a required string argument from the args list, returning a clear error on type mismatch or missing arg.
+fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeError> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(other) => Err(RuntimeError {
+            msg: format!("{}: expected string argument, got {}", fn_name, other),
+        }),
+        None => Err(RuntimeError {
+            msg: format!("{}: expected 1 argument, got 0", fn_name),
+        }),
+    }
+}
+
 /// Registers all core buffer, cursor, message, and mode primitives into the runtime.
 ///
 /// After calling this, the following Lisp functions become available:
@@ -41,69 +65,39 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
 
 /// Registers `buffer-insert`: inserts text at the current cursor position.
 fn register_buffer_insert(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, args: Vec<Value>| -> Result<Value, RuntimeError> {
-        let text = match args.first() {
-            Some(Value::String(s)) => s.clone(),
-            Some(other) => {
-                return Err(RuntimeError {
-                    msg: format!("buffer-insert: expected string argument, got {}", other),
-                });
-            }
-            None => {
-                return Err(RuntimeError {
-                    msg: "buffer-insert: expected 1 argument, got 0".to_string(),
-                });
-            }
-        };
-
+    define_native_closure(&env, "buffer-insert", move |_env, args| {
+        let text = extract_string_arg(&args, "buffer-insert")?;
         let mut editor = state.borrow_mut();
         let cursor_line = editor.cursor.line;
         let cursor_column = editor.cursor.column;
         editor.buffer = buffer::insert_at(&editor.buffer, cursor_line, cursor_column, &text);
-
         Ok(Value::NIL)
-    };
-
-    env.borrow_mut().define(
-        Symbol("buffer-insert".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Registers `buffer-delete`: removes one character at the cursor position.
 fn register_buffer_delete(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, _args: Vec<Value>| -> Result<Value, RuntimeError> {
+    define_native_closure(&env, "buffer-delete", move |_env, _args| {
         let mut editor = state.borrow_mut();
         let cursor_line = editor.cursor.line;
         let cursor_column = editor.cursor.column;
         editor.buffer = buffer::delete_at(&editor.buffer, cursor_line, cursor_column);
-
         Ok(Value::NIL)
-    };
-
-    env.borrow_mut().define(
-        Symbol("buffer-delete".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Registers `buffer-content`: returns the entire buffer text as a string.
 fn register_buffer_content(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, _args: Vec<Value>| -> Result<Value, RuntimeError> {
+    define_native_closure(&env, "buffer-content", move |_env, _args| {
         let editor = state.borrow();
         let text = buffer::content(&editor.buffer);
         Ok(Value::String(text))
-    };
-
-    env.borrow_mut().define(
-        Symbol("buffer-content".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Registers `cursor-position`: returns the cursor's (line column) as a list.
 fn register_cursor_position(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, _args: Vec<Value>| -> Result<Value, RuntimeError> {
+    define_native_closure(&env, "cursor-position", move |_env, _args| {
         let editor = state.borrow();
         let line = editor.cursor.line as i32;
         let column = editor.cursor.column as i32;
@@ -111,12 +105,7 @@ fn register_cursor_position(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
             .into_iter()
             .collect();
         Ok(Value::List(list))
-    };
-
-    env.borrow_mut().define(
-        Symbol("cursor-position".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Extracts a direction string from either a symbol (`:down`) or a string (`"down"`).
@@ -162,7 +151,7 @@ fn apply_cursor_move(
 /// Direction can be a symbol (`:up`, `:down`, `:left`, `:right`) or a
 /// string (`"up"`, `"down"`, `"left"`, `"right"`). Count defaults to 1.
 fn register_cursor_move(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, args: Vec<Value>| -> Result<Value, RuntimeError> {
+    define_native_closure(&env, "cursor-move", move |_env, args| {
         let direction_value = args.first().ok_or_else(|| RuntimeError {
             msg: "cursor-move: expected at least 1 argument (direction), got 0".to_string(),
         })?;
@@ -188,59 +177,30 @@ fn register_cursor_move(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
         editor.viewport = viewport::adjust(editor.viewport, &editor.cursor);
 
         Ok(Value::NIL)
-    };
-
-    env.borrow_mut().define(
-        Symbol("cursor-move".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Registers `message`: sets the editor message line.
 ///
 /// Usage: `(message "text")` -- sets `state.message = Some("text")`.
 fn register_message(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, args: Vec<Value>| -> Result<Value, RuntimeError> {
-        let text = match args.first() {
-            Some(Value::String(s)) => s.clone(),
-            Some(other) => {
-                return Err(RuntimeError {
-                    msg: format!("message: expected string argument, got {}", other),
-                });
-            }
-            None => {
-                return Err(RuntimeError {
-                    msg: "message: expected 1 argument, got 0".to_string(),
-                });
-            }
-        };
-
+    define_native_closure(&env, "message", move |_env, args| {
+        let text = extract_string_arg(&args, "message")?;
         let mut editor = state.borrow_mut();
         editor.message = Some(text);
-
         Ok(Value::NIL)
-    };
-
-    env.borrow_mut().define(
-        Symbol("message".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 /// Registers `current-mode`: returns the current editor mode name as a string.
 ///
 /// Usage: `(current-mode)` -- returns `"normal"` (or other mode name).
 fn register_current_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    let closure = move |_env: Rc<RefCell<Env>>, _args: Vec<Value>| -> Result<Value, RuntimeError> {
+    define_native_closure(&env, "current-mode", move |_env, _args| {
         let editor = state.borrow();
         let mode_name = editor.mode.to_string();
         Ok(Value::String(mode_name))
-    };
-
-    env.borrow_mut().define(
-        Symbol("current-mode".to_string()),
-        Value::NativeClosure(Rc::new(RefCell::new(closure))),
-    );
+    });
 }
 
 #[cfg(test)]
