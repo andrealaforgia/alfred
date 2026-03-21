@@ -284,3 +284,204 @@ mod tests {
         assert!(result.is_err());
     }
 }
+
+/// Performance baseline tests measuring single Lisp primitive eval latency.
+///
+/// Kill signal threshold: 1ms per call. If any primitive exceeds this,
+/// evaluate Janet as an alternative interpreter.
+///
+/// Run with `cargo test --package alfred-lisp -- --nocapture perf_baseline`
+/// to see timing output.
+#[cfg(test)]
+mod perf_baseline {
+    use super::*;
+    use crate::bridge;
+    use alfred_core::cursor;
+    use alfred_core::editor_state;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::time::{Duration, Instant};
+
+    const KILL_SIGNAL_THRESHOLD: Duration = Duration::from_millis(1);
+    const WARMUP_ITERATIONS: usize = 10;
+    const MEASUREMENT_ITERATIONS: usize = 100;
+
+    /// Creates a runtime with bridge primitives registered and a multi-line buffer.
+    fn create_benchmarkable_runtime() -> (LispRuntime, Rc<RefCell<editor_state::EditorState>>) {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer =
+                alfred_core::buffer::Buffer::from_string("Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+            editor.cursor = cursor::new(0, 0);
+        }
+        let runtime = LispRuntime::new();
+        bridge::register_core_primitives(&runtime, state.clone());
+        (runtime, state)
+    }
+
+    /// Measures the median latency of a single eval call over multiple iterations.
+    ///
+    /// Runs warmup iterations first (discarded), then measures and returns
+    /// the median duration from the measurement iterations.
+    fn measure_eval_latency(runtime: &LispRuntime, expression: &str) -> Duration {
+        // Warmup: let JIT / caches settle
+        for _ in 0..WARMUP_ITERATIONS {
+            let _ = runtime.eval(expression);
+        }
+
+        // Measure
+        let mut durations: Vec<Duration> = Vec::with_capacity(MEASUREMENT_ITERATIONS);
+        for _ in 0..MEASUREMENT_ITERATIONS {
+            let start = Instant::now();
+            let _ = runtime.eval(expression);
+            durations.push(start.elapsed());
+        }
+
+        durations.sort();
+        durations[MEASUREMENT_ITERATIONS / 2]
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance: all core primitives complete under 1ms kill signal threshold
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn all_core_primitives_eval_under_kill_signal_threshold() {
+        let (runtime, _state) = create_benchmarkable_runtime();
+
+        let primitives = [
+            ("arithmetic (+ 1 2)", "(+ 1 2)"),
+            ("buffer-insert", "(buffer-insert \"x\")"),
+            ("cursor-move", "(cursor-move ':down 1)"),
+            ("message", "(message \"test\")"),
+            ("buffer-content", "(buffer-content)"),
+            ("cursor-position", "(cursor-position)"),
+            ("current-mode", "(current-mode)"),
+        ];
+
+        println!();
+        println!("=== Alfred Lisp Performance Baseline (Step 02-05) ===");
+        println!(
+            "Kill signal threshold: {:?} per call",
+            KILL_SIGNAL_THRESHOLD
+        );
+        println!(
+            "Measurement: median of {} iterations ({} warmup)",
+            MEASUREMENT_ITERATIONS, WARMUP_ITERATIONS
+        );
+        println!("---------------------------------------------------");
+
+        let mut all_passed = true;
+        let mut results: Vec<(String, Duration, bool)> = Vec::new();
+
+        for (name, expression) in &primitives {
+            let median_latency = measure_eval_latency(&runtime, expression);
+            let within_threshold = median_latency < KILL_SIGNAL_THRESHOLD;
+            let status = if within_threshold {
+                "PASS"
+            } else {
+                "KILL SIGNAL"
+            };
+
+            println!("  {:<25} {:>10.2?}  [{}]", name, median_latency, status);
+
+            if !within_threshold {
+                all_passed = false;
+            }
+            results.push((name.to_string(), median_latency, within_threshold));
+        }
+
+        println!("---------------------------------------------------");
+
+        if !all_passed {
+            let failures: Vec<String> = results
+                .iter()
+                .filter(|(_, _, passed)| !passed)
+                .map(|(name, latency, _)| format!("{}: {:?}", name, latency))
+                .collect();
+
+            panic!(
+                "KILL SIGNAL: The following primitives exceeded the 1ms threshold.\n\
+                 Evaluate Janet as an alternative interpreter.\n\
+                 Failures: {}",
+                failures.join(", ")
+            );
+        }
+
+        println!("Result: ALL PRIMITIVES WITHIN THRESHOLD -- rust_lisp is viable.");
+        println!("===================================================");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit: individual primitive latency measurements
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn buffer_insert_eval_latency_under_one_millisecond() {
+        let (runtime, _state) = create_benchmarkable_runtime();
+        let median_latency = measure_eval_latency(&runtime, "(buffer-insert \"x\")");
+
+        println!(
+            "\n[perf] buffer-insert median latency: {:?} (threshold: {:?})",
+            median_latency, KILL_SIGNAL_THRESHOLD
+        );
+
+        assert!(
+            median_latency < KILL_SIGNAL_THRESHOLD,
+            "KILL SIGNAL: buffer-insert latency {:?} exceeds 1ms threshold. Evaluate Janet.",
+            median_latency
+        );
+    }
+
+    #[test]
+    fn cursor_move_eval_latency_under_one_millisecond() {
+        let (runtime, _state) = create_benchmarkable_runtime();
+        let median_latency = measure_eval_latency(&runtime, "(cursor-move ':down 1)");
+
+        println!(
+            "\n[perf] cursor-move median latency: {:?} (threshold: {:?})",
+            median_latency, KILL_SIGNAL_THRESHOLD
+        );
+
+        assert!(
+            median_latency < KILL_SIGNAL_THRESHOLD,
+            "KILL SIGNAL: cursor-move latency {:?} exceeds 1ms threshold. Evaluate Janet.",
+            median_latency
+        );
+    }
+
+    #[test]
+    fn arithmetic_eval_latency_under_one_millisecond() {
+        let (runtime, _state) = create_benchmarkable_runtime();
+        let median_latency = measure_eval_latency(&runtime, "(+ 1 2)");
+
+        println!(
+            "\n[perf] arithmetic (+ 1 2) median latency: {:?} (threshold: {:?})",
+            median_latency, KILL_SIGNAL_THRESHOLD
+        );
+
+        assert!(
+            median_latency < KILL_SIGNAL_THRESHOLD,
+            "KILL SIGNAL: arithmetic eval latency {:?} exceeds 1ms threshold. Evaluate Janet.",
+            median_latency
+        );
+    }
+
+    #[test]
+    fn message_eval_latency_under_one_millisecond() {
+        let (runtime, _state) = create_benchmarkable_runtime();
+        let median_latency = measure_eval_latency(&runtime, "(message \"hello\")");
+
+        println!(
+            "\n[perf] message median latency: {:?} (threshold: {:?})",
+            median_latency, KILL_SIGNAL_THRESHOLD
+        );
+
+        assert!(
+            median_latency < KILL_SIGNAL_THRESHOLD,
+            "KILL SIGNAL: message latency {:?} exceeds 1ms threshold. Evaluate Janet.",
+            median_latency
+        );
+    }
+}
