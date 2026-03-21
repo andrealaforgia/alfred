@@ -123,6 +123,60 @@ pub fn content(buffer: &Buffer) -> String {
     buffer.rope.to_string()
 }
 
+/// Inserts text at the given line and column position, returning a new Buffer.
+///
+/// The line and column are clamped to valid positions within the buffer.
+/// The new buffer has an incremented version and `modified` set to true.
+pub fn insert_at(buffer: &Buffer, line: usize, column: usize, text: &str) -> Buffer {
+    let mut rope = buffer.rope.clone();
+    let char_index = line_column_to_char_index(&rope, line, column);
+    rope.insert(char_index, text);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
+/// Deletes one character at the given line and column position, returning a new Buffer.
+///
+/// If the position is at the end of the buffer (no character to delete),
+/// the buffer is returned unchanged.
+/// The new buffer has an incremented version and `modified` set to true.
+pub fn delete_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
+    let mut rope = buffer.rope.clone();
+    let char_index = line_column_to_char_index(&rope, line, column);
+
+    if char_index >= rope.len_chars() {
+        return buffer.clone();
+    }
+
+    rope.remove(char_index..char_index + 1);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
+/// Converts a (line, column) position to a character index in the rope.
+///
+/// Clamps the line to the last line and the column to the line length.
+fn line_column_to_char_index(rope: &Rope, line: usize, column: usize) -> usize {
+    let max_line = rope.len_lines().saturating_sub(1);
+    let clamped_line = line.min(max_line);
+    let line_start = rope.line_to_char(clamped_line);
+    let line_len = rope.line(clamped_line).len_chars();
+    let clamped_column = column.min(line_len);
+    line_start + clamped_column
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

@@ -99,6 +99,13 @@ impl LispRuntime {
         }
     }
 
+    /// Returns a reference to the underlying environment.
+    ///
+    /// Used by the bridge module to register native closures.
+    pub fn env(&self) -> Rc<RefCell<Env>> {
+        self.env.clone()
+    }
+
     /// Parse and evaluate a Lisp source string.
     ///
     /// If the source contains multiple expressions, all are evaluated
