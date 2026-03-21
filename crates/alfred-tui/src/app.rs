@@ -211,10 +211,13 @@ pub(crate) fn eval_and_display(
     runtime: &LispRuntime,
     expression: &str,
 ) {
+    // Clear the command-line text before eval so we can detect if a primitive sets the message
+    state_rc.borrow_mut().message = None;
+
     match runtime.eval(expression) {
         Ok(value) => {
-            // The bridge primitives (like `message`) may have already set the message.
-            // Only overwrite if the message hasn't been set by the expression itself.
+            // If a bridge primitive (like `message`) already set the message during eval,
+            // keep it. Otherwise show the eval result.
             let mut state = state_rc.borrow_mut();
             if state.message.is_none() {
                 let display = format!("{}", value);
