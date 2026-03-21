@@ -1,137 +1,93 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-20T10:00:00Z",
-    "total_steps": 7
+    "created_at": "2026-03-21T10:00:00Z",
+    "total_steps": 5
   },
   "phases": [
     {
-      "id": "01",
-      "name": "M1 Rust Kernel",
+      "id": "02",
+      "name": "M2 Lisp Integration",
       "steps": [
         {
-          "id": "01-01",
-          "name": "Cargo workspace scaffolding",
+          "id": "02-01",
+          "name": "Integrate rust_lisp into alfred-lisp",
           "criteria": [
-            "5 crates in crates/ directory",
-            "alfred-core depends only on ropey",
-            "alfred-tui depends on alfred-core crossterm ratatui",
-            "alfred-core has zero outward dependencies",
-            "alfred-bin main links all crates"
+            "rust_lisp added as dependency to alfred-lisp",
+            "A runtime can be instantiated and is ready to evaluate Lisp expressions",
+            "eval function parses and evaluates a Lisp string",
+            "Arithmetic expressions evaluate correctly",
+            "Syntax errors return Result Err not panic"
           ],
           "files_to_modify": [
-            "Cargo.toml",
-            "crates/alfred-core/Cargo.toml",
-            "crates/alfred-core/src/lib.rs",
             "crates/alfred-lisp/Cargo.toml",
             "crates/alfred-lisp/src/lib.rs",
-            "crates/alfred-plugin/Cargo.toml",
-            "crates/alfred-plugin/src/lib.rs",
-            "crates/alfred-tui/Cargo.toml",
-            "crates/alfred-tui/src/lib.rs",
-            "crates/alfred-bin/Cargo.toml",
-            "crates/alfred-bin/src/main.rs"
+            "crates/alfred-lisp/src/runtime.rs"
           ]
         },
         {
-          "id": "01-02",
-          "name": "Buffer type wrapping ropey",
+          "id": "02-02",
+          "name": "Bridge registers buffer primitives",
           "criteria": [
-            "from_file loads text into Rope",
-            "get_line returns correct content",
-            "line_count returns accurate count",
-            "Stores filename with modified false",
-            "Missing file returns error not panic"
+            "buffer-insert primitive adds text at cursor position",
+            "buffer-delete primitive removes character at cursor",
+            "buffer-content primitive returns buffer text as string",
+            "cursor-position primitive returns line and column",
+            "Primitives registered at runtime startup"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/buffer.rs",
-            "crates/alfred-core/src/lib.rs",
-            "crates/alfred-core/src/error.rs"
+            "crates/alfred-lisp/src/bridge.rs",
+            "crates/alfred-lisp/src/lib.rs",
+            "crates/alfred-core/src/buffer.rs"
           ],
-          "deps": ["01-01"]
+          "deps": ["02-01"]
         },
         {
-          "id": "01-03",
-          "name": "Cursor with pure movement logic",
+          "id": "02-03",
+          "name": "Bridge registers cursor and message primitives",
           "criteria": [
-            "move_down advances to next line",
-            "move_up clamps at first line",
-            "move_right wraps or clamps at line end",
-            "move_left wraps or clamps at line start",
-            "ensure_within_bounds clamps to buffer"
+            "cursor-move primitive moves cursor by direction and count",
+            "message primitive sets the editor message line",
+            "current-mode primitive returns the current mode name",
+            "All primitives accessible from Lisp evaluation",
+            "Wrong argument types return error messages"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/cursor.rs",
-            "crates/alfred-core/src/lib.rs"
+            "crates/alfred-lisp/src/bridge.rs"
           ],
-          "deps": ["01-02"]
+          "deps": ["02-02"]
         },
         {
-          "id": "01-04",
-          "name": "Viewport with scrolling",
+          "id": "02-04",
+          "name": "Wire Lisp runtime into event loop",
           "criteria": [
-            "Scrolls down when cursor passes bottom",
-            "Scrolls up when cursor passes top",
-            "No change when cursor within viewport",
-            "Adjustment is pure returns new Viewport",
-            "gutter_width initialized to zero"
-          ],
-          "files_to_modify": [
-            "crates/alfred-core/src/viewport.rs",
-            "crates/alfred-core/src/lib.rs"
-          ],
-          "deps": ["01-03"]
-        },
-        {
-          "id": "01-05",
-          "name": "KeyEvent CommandRegistry EditorState",
-          "criteria": [
-            "KeyEvent represents char arrow ctrl inputs",
-            "CommandRegistry stores and looks up by name",
-            "Command execution mutates EditorState",
-            "EditorState aggregates all core state",
-            "Initializes with cursor at origin running true"
-          ],
-          "files_to_modify": [
-            "crates/alfred-core/src/key_event.rs",
-            "crates/alfred-core/src/command.rs",
-            "crates/alfred-core/src/editor_state.rs",
-            "crates/alfred-core/src/lib.rs"
-          ],
-          "deps": ["01-04"]
-        },
-        {
-          "id": "01-06",
-          "name": "Terminal renderer with ratatui",
-          "criteria": [
-            "Raw mode entered on start restored on exit",
-            "Visible lines rendered within viewport",
-            "Cursor at correct terminal position",
-            "Message line shows at bottom row",
-            "Empty buffer renders without panic"
-          ],
-          "files_to_modify": [
-            "crates/alfred-tui/src/renderer.rs",
-            "crates/alfred-tui/src/lib.rs"
-          ],
-          "deps": ["01-05"]
-        },
-        {
-          "id": "01-07",
-          "name": "Event loop with hardcoded keybindings",
-          "criteria": [
-            "Arrow keys move cursor correctly",
-            "Ctrl-Q exits event loop cleanly",
-            "Terminal restored on exit even on error",
-            "CLI file argument displays content",
-            "Scrolling works past viewport boundaries"
+            "LispRuntime created and initialized in main",
+            "Colon command mode can evaluate Lisp via :eval prefix",
+            "Lisp errors display as messages not crashes",
+            "Editor state accessible to Lisp primitives during eval",
+            "eval-file function loads and evaluates a Lisp file"
           ],
           "files_to_modify": [
             "crates/alfred-tui/src/app.rs",
-            "crates/alfred-tui/src/lib.rs",
-            "crates/alfred-bin/src/main.rs"
+            "crates/alfred-bin/src/main.rs",
+            "crates/alfred-tui/Cargo.toml"
           ],
-          "deps": ["01-06"]
+          "deps": ["02-03"]
+        },
+        {
+          "id": "02-05",
+          "name": "Performance baseline and kill signal check",
+          "criteria": [
+            "Benchmark test measures single primitive eval latency",
+            "Latency under 1ms for buffer-insert call",
+            "Latency under 1ms for cursor-move call",
+            "Results documented in test output",
+            "Kill signal: if over 1ms evaluate Janet alternative"
+          ],
+          "files_to_modify": [
+            "crates/alfred-lisp/src/runtime.rs"
+          ],
+          "deps": ["02-04"]
         }
       ]
     }

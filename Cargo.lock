@@ -28,6 +28,7 @@ version = "0.1.0"
 dependencies = [
  "alfred-core",
  "rust_lisp",
+ "tempfile",
  "thiserror",
 ]
 
@@ -40,6 +41,7 @@ name = "alfred-tui"
 version = "0.1.0"
 dependencies = [
  "alfred-core",
+ "alfred-lisp",
  "crossterm",
  "ratatui",
 ]

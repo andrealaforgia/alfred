@@ -24,6 +24,10 @@ pub enum LispError {
     /// A runtime error during evaluation (undefined symbol, type mismatch, etc.).
     #[error("Runtime error: {message}")]
     RuntimeError { message: String },
+
+    /// An I/O error (e.g., file not found for eval_file).
+    #[error("IO error: {message}")]
+    IoError { message: String },
 }
 
 impl From<ParseError> for LispError {
@@ -70,6 +74,12 @@ impl LispValue {
     }
 }
 
+impl std::fmt::Display for LispValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
 impl From<Value> for LispValue {
     fn from(value: Value) -> Self {
         LispValue { inner: value }
@@ -104,6 +114,19 @@ impl LispRuntime {
     /// Used by the bridge module to register native closures.
     pub fn env(&self) -> Rc<RefCell<Env>> {
         self.env.clone()
+    }
+
+    /// Read a file and evaluate its contents as Lisp source.
+    ///
+    /// Loads the file at `path`, parses and evaluates all expressions,
+    /// and returns the result of the last expression.
+    ///
+    /// Returns `Err(LispError::IoError)` if the file cannot be read.
+    pub fn eval_file(&self, path: &std::path::Path) -> Result<LispValue, LispError> {
+        let source = std::fs::read_to_string(path).map_err(|err| LispError::IoError {
+            message: format!("{}: {}", path.display(), err),
+        })?;
+        self.eval(&source)
     }
 
     /// Parse and evaluate a Lisp source string.
@@ -232,5 +255,32 @@ mod tests {
         let result = runtime.eval("(define a 10) (+ a 5)").unwrap();
 
         assert_eq!(result.as_integer(), Some(15));
+    }
+
+    // -- eval_file: load and evaluate a .lisp file --
+
+    #[test]
+    fn eval_file_evaluates_file_contents_and_returns_last_result() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.lisp");
+        {
+            let mut f = std::fs::File::create(&file_path).unwrap();
+            writeln!(f, "(define x 10)").unwrap();
+            writeln!(f, "(+ x 5)").unwrap();
+        }
+
+        let runtime = LispRuntime::new();
+        let result = runtime.eval_file(&file_path).unwrap();
+
+        assert_eq!(result.as_integer(), Some(15));
+    }
+
+    #[test]
+    fn eval_file_returns_error_for_nonexistent_file() {
+        let runtime = LispRuntime::new();
+        let result = runtime.eval_file(std::path::Path::new("/nonexistent/file.lisp"));
+
+        assert!(result.is_err());
     }
 }

@@ -4,7 +4,9 @@
 //! and key dispatch logic. The event loop is I/O (reads terminal events),
 //! but key conversion and key handling are pure functions that are easily tested.
 
+use std::cell::RefCell;
 use std::io;
+use std::rc::Rc;
 
 use crossterm::event::{
     self as ct_event, Event, KeyCode as CtKeyCode, KeyEvent as CtKeyEvent, KeyEventKind,
@@ -17,6 +19,7 @@ use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
 use alfred_core::viewport;
+use alfred_lisp::runtime::LispRuntime;
 
 use crate::renderer;
 
@@ -81,50 +84,52 @@ pub(crate) enum InputState {
 
 /// Handles a key event by updating the editor state.
 ///
-/// For M1, keybindings are hardcoded:
+/// Returns `(InputState, Option<String>)` where the second element is
+/// a Lisp expression to evaluate when the command starts with `eval `.
+/// The caller is responsible for executing the eval (to avoid borrow
+/// conflicts with `Rc<RefCell<EditorState>>`).
+///
+/// Keybindings:
 /// - Arrow keys: cursor movement (Up, Down, Left, Right)
-/// - `:` enters command mode; type `q` then Enter to quit
+/// - `:` enters command mode
+/// - `:q` / `:quit` quits the editor
+/// - `:eval <expr>` returns the expression for Lisp evaluation
 /// - Escape cancels command mode
 /// - All other keys: ignored (read-only in M1)
 pub(crate) fn handle_key_event(
     state: &mut EditorState,
     key: KeyEvent,
     input_state: InputState,
-) -> InputState {
+) -> (InputState, Option<String>) {
     // Command-line mode: accumulating input after `:`
     if let InputState::Command(mut cmd) = input_state {
         match key.code {
             KeyCode::Enter => {
                 // Execute the command
-                let trimmed = cmd.trim();
-                if trimmed == "q" || trimmed == "quit" {
-                    state.running = false;
-                } else {
-                    state.message = Some(format!("Unknown command: {}", trimmed));
-                }
-                return InputState::Normal;
+                let trimmed = cmd.trim().to_string();
+                return execute_colon_command(state, &trimmed);
             }
             KeyCode::Escape => {
                 // Cancel command input
                 state.message = None;
-                return InputState::Normal;
+                return (InputState::Normal, None);
             }
             KeyCode::Backspace => {
                 cmd.pop();
                 if cmd.is_empty() {
                     state.message = None;
-                    return InputState::Normal;
+                    return (InputState::Normal, None);
                 }
                 state.message = Some(format!(":{}", cmd));
-                return InputState::Command(cmd);
+                return (InputState::Command(cmd), None);
             }
             KeyCode::Char(c) => {
                 cmd.push(c);
                 state.message = Some(format!(":{}", cmd));
-                return InputState::Command(cmd);
+                return (InputState::Command(cmd), None);
             }
             _ => {
-                return InputState::Command(cmd);
+                return (InputState::Command(cmd), None);
             }
         }
     }
@@ -137,7 +142,7 @@ pub(crate) fn handle_key_event(
             modifiers: Modifiers { ctrl: false, .. },
         } => {
             state.message = Some(":".to_string());
-            return InputState::Command(String::new());
+            return (InputState::Command(String::new()), None);
         }
         KeyEvent {
             code: KeyCode::Up,
@@ -158,7 +163,30 @@ pub(crate) fn handle_key_event(
         // M1: all other keys are ignored (buffer is read-only)
         _ => {}
     }
-    InputState::Normal
+    (InputState::Normal, None)
+}
+
+/// Executes a colon command, returning the new input state and optionally
+/// a Lisp expression to evaluate.
+///
+/// This is a pure function that separates command parsing from side effects.
+/// When the command starts with `eval `, the expression is returned for the
+/// caller to evaluate via the Lisp runtime (avoiding borrow conflicts).
+fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState, Option<String>) {
+    match command {
+        "q" | "quit" => {
+            state.running = false;
+            (InputState::Normal, None)
+        }
+        cmd if cmd.starts_with("eval ") => {
+            let expression = cmd.strip_prefix("eval ").unwrap().to_string();
+            (InputState::Normal, Some(expression))
+        }
+        unknown => {
+            state.message = Some(format!("Unknown command: {}", unknown));
+            (InputState::Normal, None)
+        }
+    }
 }
 
 /// Applies a cursor movement function and adjusts the viewport to follow.
@@ -171,6 +199,32 @@ fn move_cursor_and_adjust_viewport(
 ) {
     state.cursor = move_fn(state.cursor, &state.buffer);
     state.viewport = viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Evaluates a Lisp expression and sets the result (or error) as the editor message.
+///
+/// This function borrows `state_rc` only when needed, avoiding conflicts
+/// with handle_key_event's borrow. The runtime's bridge closures also
+/// borrow `state_rc`, so this must be called after `handle_key_event` returns.
+pub(crate) fn eval_and_display(
+    state_rc: &Rc<RefCell<EditorState>>,
+    runtime: &LispRuntime,
+    expression: &str,
+) {
+    match runtime.eval(expression) {
+        Ok(value) => {
+            // The bridge primitives (like `message`) may have already set the message.
+            // Only overwrite if the message hasn't been set by the expression itself.
+            let mut state = state_rc.borrow_mut();
+            if state.message.is_none() {
+                let display = format!("{}", value);
+                state.message = Some(display);
+            }
+        }
+        Err(err) => {
+            state_rc.borrow_mut().message = Some(format!("Lisp error: {}", err));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -187,8 +241,9 @@ fn move_cursor_and_adjust_viewport(
 ///    b. Reads the next crossterm event (blocking)
 ///    c. Converts crossterm KeyEvent to alfred-core KeyEvent
 ///    d. Handles the key event (updates state)
+///    e. If an eval expression was returned, evaluates it via the Lisp runtime
 /// 4. On exit: clears screen, raw mode guard drops (restores terminal)
-pub fn run(state: &mut EditorState) -> io::Result<()> {
+pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Result<()> {
     let _raw_guard = renderer::RawModeGuard::new()?;
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -197,14 +252,33 @@ pub fn run(state: &mut EditorState) -> io::Result<()> {
 
     let mut input_state = InputState::Normal;
 
-    while state.running {
-        renderer::render_frame(&mut terminal, state)?;
+    loop {
+        // Check if still running
+        if !state_rc.borrow().running {
+            break;
+        }
+
+        // Render current frame
+        renderer::render_frame(&mut terminal, &state_rc.borrow())?;
 
         if let Event::Key(ct_key) = ct_event::read()? {
             // Only handle key press events (not release/repeat)
             if ct_key.kind == KeyEventKind::Press {
                 let key = convert_crossterm_key(ct_key);
-                input_state = handle_key_event(state, key, input_state);
+
+                // Handle the key event (borrow state, then drop before eval)
+                let eval_expression = {
+                    let mut state = state_rc.borrow_mut();
+                    let (new_input_state, eval_expr) =
+                        handle_key_event(&mut state, key, input_state);
+                    input_state = new_input_state;
+                    eval_expr
+                }; // borrow dropped here
+
+                // If there's a Lisp expression to evaluate, do it now
+                if let Some(expr) = eval_expression {
+                    eval_and_display(state_rc, runtime, &expr);
+                }
             }
         }
     }
@@ -218,11 +292,21 @@ mod tests {
     use alfred_core::buffer::Buffer;
     use alfred_core::cursor;
     use alfred_core::editor_state;
-    use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
+    use alfred_core::key_event::{KeyCode, KeyEvent};
     use crossterm::event::{
         KeyCode as CtKeyCode, KeyEvent as CtKeyEvent, KeyEventKind, KeyEventState,
         KeyModifiers as CtKeyModifiers,
     };
+
+    /// Helper: call handle_key_event and return just the InputState (ignoring eval).
+    /// Used by existing tests that chain key events and don't care about Lisp eval.
+    fn handle_key(
+        state: &mut alfred_core::editor_state::EditorState,
+        key: KeyEvent,
+        input_state: super::InputState,
+    ) -> super::InputState {
+        super::handle_key_event(state, key, input_state).0
+    }
 
     // -----------------------------------------------------------------------
     // Acceptance test: simulate a sequence of key events on EditorState,
@@ -242,26 +326,46 @@ mod tests {
         assert!(state.running);
 
         // When: press Down arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Down),
+            super::InputState::Normal,
+        );
         // Then: cursor moves to line 1
         assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 0);
 
         // When: press Right arrow twice
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Right),
+            super::InputState::Normal,
+        );
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Right),
+            super::InputState::Normal,
+        );
         // Then: cursor at (1, 2)
         assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 2);
 
         // When: press Up arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Up),
+            super::InputState::Normal,
+        );
         // Then: cursor moves to line 0, column 2
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 2);
 
         // When: press Left arrow
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Left),
+            super::InputState::Normal,
+        );
         // Then: cursor at (0, 1)
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 1);
@@ -272,21 +376,13 @@ mod tests {
         assert!(state.cursor.line < state.viewport.top_line + state.viewport.height as usize);
 
         // When: type :q Enter to quit
-        let result = super::handle_key_event(
+        let result = handle_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('q')),
-            result,
-        );
-        super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Enter),
-            result,
-        );
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
+        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
         // Then: running is false
         assert!(!state.running);
     }
@@ -308,7 +404,11 @@ mod tests {
 
         // When: move cursor down 6 times (past the 5-line viewport)
         for _ in 0..6 {
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
+            handle_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Down),
+                super::InputState::Normal,
+            );
         }
 
         // Then: cursor is at line 6
@@ -453,7 +553,11 @@ mod tests {
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
         assert_eq!(state.cursor.line, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Down),
+            super::InputState::Normal,
+        );
         assert_eq!(state.cursor.line, 1);
     }
 
@@ -463,7 +567,11 @@ mod tests {
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
         state.cursor = cursor::new(2, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Up), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Up),
+            super::InputState::Normal,
+        );
         assert_eq!(state.cursor.line, 1);
     }
 
@@ -473,7 +581,11 @@ mod tests {
         state.buffer = Buffer::from_string("Hello");
         assert_eq!(state.cursor.column, 0);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Right), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Right),
+            super::InputState::Normal,
+        );
         assert_eq!(state.cursor.column, 1);
     }
 
@@ -483,7 +595,11 @@ mod tests {
         state.buffer = Buffer::from_string("Hello");
         state.cursor = cursor::new(0, 3);
 
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Left), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Left),
+            super::InputState::Normal,
+        );
         assert_eq!(state.cursor.column, 2);
     }
 
@@ -493,29 +609,22 @@ mod tests {
         assert!(state.running);
 
         // `:` enters command mode
-        let result = super::handle_key_event(
+        let (input_state, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
-        assert!(matches!(result, super::InputState::Command(_)));
+        assert!(matches!(input_state, super::InputState::Command(_)));
         assert_eq!(state.message, Some(":".to_string()));
 
         // Type `q`
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('q')),
-            result,
-        );
-        assert!(matches!(result, super::InputState::Command(_)));
+        let (input_state, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Char('q')), input_state);
+        assert!(matches!(input_state, super::InputState::Command(_)));
         assert_eq!(state.message, Some(":q".to_string()));
 
         // Press Enter to execute
-        super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Enter),
-            result,
-        );
+        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), input_state);
         assert!(!state.running);
     }
 
@@ -524,7 +633,7 @@ mod tests {
         let mut state = editor_state::new(80, 24);
 
         // Enter command mode
-        let result = super::handle_key_event(
+        let result = handle_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
@@ -532,18 +641,10 @@ mod tests {
         assert!(matches!(result, super::InputState::Command(_)));
 
         // Type some chars
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('x')),
-            result,
-        );
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), result);
 
         // Escape cancels
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Escape),
-            result,
-        );
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Escape), result);
         assert_eq!(result, super::InputState::Normal);
         assert!(state.running);
         assert_eq!(state.message, None);
@@ -554,31 +655,15 @@ mod tests {
         let mut state = editor_state::new(80, 24);
 
         // :foo Enter
-        let result = super::handle_key_event(
+        let result = handle_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('f')),
-            result,
-        );
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('o')),
-            result,
-        );
-        let result = super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Char('o')),
-            result,
-        );
-        super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Enter),
-            result,
-        );
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('f')), result);
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
+        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
+        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
 
         assert!(state.running); // Did NOT quit
         assert_eq!(state.message, Some("Unknown command: foo".to_string()));
@@ -589,23 +674,15 @@ mod tests {
         let mut state = editor_state::new(80, 24);
 
         // :quit Enter
-        let mut result = super::handle_key_event(
+        let mut result = handle_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
         for c in "quit".chars() {
-            result = super::handle_key_event(
-                &mut state,
-                KeyEvent::plain(KeyCode::Char(c)),
-                result,
-            );
+            result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        super::handle_key_event(
-            &mut state,
-            KeyEvent::plain(KeyCode::Enter),
-            result,
-        );
+        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
         assert!(!state.running);
     }
 
@@ -617,7 +694,11 @@ mod tests {
         let running_before = state.running;
 
         // Press 'a' -- no insert in M1, should be ignored
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Char('a')), super::InputState::Normal);
+        handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('a')),
+            super::InputState::Normal,
+        );
         assert_eq!(state.cursor, cursor_before);
         assert_eq!(state.running, running_before);
     }
@@ -630,9 +711,148 @@ mod tests {
 
         // Move cursor past viewport bottom
         for _ in 0..4 {
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Down), super::InputState::Normal);
+            handle_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Down),
+                super::InputState::Normal,
+            );
         }
         // Viewport should have scrolled
         assert!(state.viewport.top_line > 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (02-04): eval command via :eval prefix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_runtime_with_bridge_when_eval_message_command_then_state_message_changes() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: an editor state wrapped in Rc<RefCell> (for bridge sharing)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+
+        // And: a Lisp runtime with core primitives registered
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+
+        // When: simulate typing `:eval (message "hi")` and pressing Enter
+        let eval_expr = {
+            let mut state = state_rc.borrow_mut();
+            // Type `:` to enter command mode
+            let mut result = handle_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char(':')),
+                super::InputState::Normal,
+            );
+
+            // Type `eval (message "hi")`
+            for c in "eval (message \"hi\")".chars() {
+                result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+            }
+
+            // Press Enter to execute -- use full handle_key_event to get eval expr
+            let (_, eval_expr) =
+                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+            eval_expr
+        }; // borrow dropped
+
+        // And: if handle_key_event returned an eval expression, execute it
+        if let Some(expr) = eval_expr {
+            super::eval_and_display(&state_rc, &runtime, &expr);
+        }
+
+        // Then: the message has been set to "hi" by the Lisp (message ...) primitive
+        let state = state_rc.borrow();
+        assert_eq!(state.message, Some("hi".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (02-04): eval command parsing and error handling
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_editor_when_eval_command_entered_then_returns_eval_expression() {
+        let mut state = editor_state::new(80, 24);
+
+        // Type `:eval (+ 1 2)` and press Enter
+        let mut result = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        for c in "eval (+ 1 2)".chars() {
+            result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+        }
+        let (input_state, eval_expr) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        // Then: returns the expression to eval
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(eval_expr, Some("(+ 1 2)".to_string()));
+    }
+
+    #[test]
+    fn given_editor_when_lisp_eval_error_then_message_shows_error_not_crash() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: runtime with bridge
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+
+        // When: evaluate invalid Lisp expression
+        let eval_expr = {
+            let mut state = state_rc.borrow_mut();
+            let mut result = handle_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char(':')),
+                super::InputState::Normal,
+            );
+            for c in "eval (+ 1".chars() {
+                result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+            }
+            let (_, eval_expr) =
+                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+            eval_expr
+        };
+
+        if let Some(expr) = eval_expr {
+            super::eval_and_display(&state_rc, &runtime, &expr);
+        }
+
+        // Then: message contains an error, editor still running
+        let state = state_rc.borrow();
+        assert!(state.message.is_some());
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("error") || msg.contains("Error"),
+            "Expected error message, got: {}",
+            msg
+        );
+        assert!(state.running); // editor did not crash
+    }
+
+    #[test]
+    fn given_editor_when_q_command_then_still_quits_after_lisp_integration() {
+        let mut state = editor_state::new(80, 24);
+        assert!(state.running);
+
+        // Type `:q` and press Enter (should still work)
+        let mut result = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
+        let (input_state, eval_expr) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        // Then: quit works, no eval expression
+        assert!(!state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(eval_expr, None);
     }
 }

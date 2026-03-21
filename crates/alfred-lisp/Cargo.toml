@@ -8,3 +8,6 @@ description = "Lisp interpreter integration for Alfred (stub)"
 alfred-core = { version = "0.1.0", path = "../alfred-core" }
 rust_lisp = "0.18.0"
 thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
