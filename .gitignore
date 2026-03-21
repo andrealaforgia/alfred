@@ -1,21 +1,4 @@
-# Rust build artifacts
-/target/
-**/*.rs.bk
-
-# Cargo lock for workspace (include for binary projects)
-# Cargo.lock is committed for reproducible builds
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# Agent internal state
-.nwave/
-
-# OS
-.DS_Store
-Thumbs.db
 mutants.out/
+mutants.out.old/
+target/
+.nwave/
