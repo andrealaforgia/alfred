@@ -1,94 +1,75 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-22T10:00:00Z",
-    "total_steps": 5
+    "created_at": "2026-03-22T12:00:00Z",
+    "total_steps": 4
   },
   "phases": [
     {
-      "id": "03",
-      "name": "M3 Plugin System",
+      "id": "04",
+      "name": "M4 Line Numbers Plugin",
       "steps": [
         {
-          "id": "03-01",
-          "name": "Plugin metadata and discovery",
+          "id": "04-01",
+          "name": "Hook system with register and dispatch",
           "criteria": [
-            "Scan plugins directory for subdirs with init.lisp",
-            "Parse plugin metadata from Lisp source comments",
-            "Return list of discovered plugin metadata",
-            "Missing plugins directory returns empty list",
-            "Malformed init.lisp skipped with warning"
+            "HookRegistry stores named hooks with callbacks",
+            "register_hook adds a callback to a named hook",
+            "dispatch_hook calls all callbacks for a hook name",
+            "Callbacks receive arguments and return values",
+            "Unregister removes a specific callback by ID"
           ],
           "files_to_modify": [
-            "crates/alfred-plugin/Cargo.toml",
-            "crates/alfred-plugin/src/lib.rs",
-            "crates/alfred-plugin/src/discovery.rs",
-            "crates/alfred-plugin/src/metadata.rs"
+            "crates/alfred-core/src/hook.rs",
+            "crates/alfred-core/src/lib.rs",
+            "crates/alfred-core/src/editor_state.rs"
           ]
         },
         {
-          "id": "03-02",
-          "name": "Plugin registry and lifecycle",
+          "id": "04-02",
+          "name": "Hook primitives in Lisp bridge",
           "criteria": [
-            "Registry tracks loaded plugins by name",
-            "Load evaluates init.lisp in Lisp runtime",
-            "Plugin init function called during load",
-            "Unload removes plugin from registry",
-            "Duplicate plugin name rejected with error"
+            "add-hook primitive registers a Lisp callback",
+            "Hooks callable from Rust via dispatch",
+            "Hook callbacks receive Lisp value arguments",
+            "Hook errors display as messages not crashes",
+            "define-hook primitive creates a named hook"
           ],
           "files_to_modify": [
-            "crates/alfred-plugin/src/registry.rs",
-            "crates/alfred-plugin/src/lib.rs"
+            "crates/alfred-lisp/src/bridge.rs"
           ],
-          "deps": ["03-01"]
+          "deps": ["04-01"]
         },
         {
-          "id": "03-03",
-          "name": "Plugin command and hook tracking",
+          "id": "04-03",
+          "name": "Gutter rendering area in TUI renderer",
           "criteria": [
-            "Plugin registers commands tracked per plugin",
-            "Plugin registers hooks tracked per plugin",
-            "Unload removes all commands registered by plugin",
-            "Unload removes all hooks registered by plugin",
-            "Commands from other plugins survive unload"
+            "Renderer reserves gutter columns on the left",
+            "Gutter width controlled by viewport gutter_width",
+            "Buffer text shifts right by gutter width",
+            "Gutter area displays content from render-gutter hook",
+            "Zero gutter width renders without gutter"
           ],
           "files_to_modify": [
-            "crates/alfred-plugin/src/registry.rs",
-            "crates/alfred-core/src/command.rs",
-            "crates/alfred-core/src/editor_state.rs"
+            "crates/alfred-tui/src/renderer.rs"
           ],
-          "deps": ["03-02"]
+          "deps": ["04-02"]
         },
         {
-          "id": "03-04",
-          "name": "Dependency ordering via topological sort",
+          "id": "04-04",
+          "name": "Line numbers plugin in Alfred Lisp",
           "criteria": [
-            "Plugins with dependencies loaded after deps",
-            "Circular dependency detected and reported",
-            "Missing dependency reported as error",
-            "Independent plugins load in discovery order",
-            "Plugin with satisfied deps loads successfully"
+            "Plugin in plugins/line-numbers/init.lisp loads",
+            "Line numbers appear in gutter column",
+            "Numbers update correctly when scrolling",
+            "Gutter width adjusts for digit count",
+            "Removing plugin directory causes no errors"
           ],
           "files_to_modify": [
-            "crates/alfred-plugin/src/registry.rs"
+            "plugins/line-numbers/init.lisp",
+            "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["03-03"]
-        },
-        {
-          "id": "03-05",
-          "name": "Wire plugin system into main and test plugin",
-          "criteria": [
-            "Plugin system initialized in main before event loop",
-            "Test plugin in plugins/test-plugin/init.lisp loads",
-            "Test plugin registers a callable command",
-            "Plugin load errors display as messages",
-            "Multiple plugins can coexist independently"
-          ],
-          "files_to_modify": [
-            "crates/alfred-bin/src/main.rs",
-            "plugins/test-plugin/init.lisp"
-          ],
-          "deps": ["03-04"]
+          "deps": ["04-03"]
         }
       ]
     }

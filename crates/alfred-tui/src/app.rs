@@ -315,8 +315,7 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                             }
                         };
                         if let Err(e) = result {
-                            state_rc.borrow_mut().message =
-                                Some(format!("Command error: {}", e));
+                            state_rc.borrow_mut().message = Some(format!("Command error: {}", e));
                         }
                     }
                     DeferredAction::None => {}

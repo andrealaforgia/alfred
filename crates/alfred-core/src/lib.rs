@@ -9,6 +9,7 @@ pub mod command;
 pub mod cursor;
 pub mod editor_state;
 pub mod error;
+pub mod hook;
 pub mod key_event;
 pub mod viewport;
 

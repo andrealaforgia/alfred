@@ -2,19 +2,17 @@
 //!
 //! EditorState is the single mutable container passed through the event loop.
 //! It aggregates buffer, cursor, viewport, command registry, mode, keymaps,
-//! hooks (stub), message, and running flag.
+//! hook registry, message, and running flag.
 //! This module has no I/O dependencies -- EditorState is pure state.
 
 use crate::buffer::Buffer;
 use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
+use crate::hook::HookRegistry;
 use crate::viewport::Viewport;
 
 /// Stub type for keymaps. Full implementation in M6.
 pub type Keymap = String;
-
-/// Stub type for hooks. Full implementation in a future milestone.
-pub type Hook = String;
 
 /// The editor mode, determining how key events are interpreted.
 ///
@@ -37,7 +35,7 @@ impl std::fmt::Display for EditorMode {
 ///
 /// This is the single mutable container passed through the event loop.
 /// It owns the buffer, cursor, viewport, command registry, mode,
-/// active keymaps, hooks, an optional status message, and the running flag.
+/// active keymaps, hook registry, an optional status message, and the running flag.
 pub struct EditorState {
     pub buffer: Buffer,
     pub cursor: Cursor,
@@ -45,7 +43,7 @@ pub struct EditorState {
     pub commands: CommandRegistry,
     pub mode: EditorMode,
     pub active_keymaps: Vec<Keymap>,
-    pub hooks: Vec<Hook>,
+    pub hooks: HookRegistry,
     pub message: Option<String>,
     pub running: bool,
 }
@@ -57,7 +55,7 @@ pub struct EditorState {
 /// - Viewport fits the given terminal width and height.
 /// - Command registry is empty.
 /// - Mode is "normal".
-/// - Active keymaps, hooks are empty.
+/// - Active keymaps are empty, hook registry is empty.
 /// - Message is None.
 /// - Running is true.
 pub fn new(width: u16, height: u16) -> EditorState {
@@ -68,7 +66,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         commands: CommandRegistry::new(),
         mode: EditorMode::Normal,
         active_keymaps: Vec::new(),
-        hooks: Vec::new(),
+        hooks: HookRegistry::new(),
         message: None,
         running: true,
     }
