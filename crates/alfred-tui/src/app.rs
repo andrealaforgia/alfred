@@ -182,7 +182,10 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
         cmd => {
             // Check if it's a registered command — defer execution to avoid borrow conflict
             if alfred_core::command::lookup(&state.commands, cmd).is_some() {
-                (InputState::Normal, DeferredAction::ExecCommand(cmd.to_string()))
+                (
+                    InputState::Normal,
+                    DeferredAction::ExecCommand(cmd.to_string()),
+                )
             } else {
                 state.message = Some(format!("Unknown command: {}", cmd));
                 (InputState::Normal, DeferredAction::None)
@@ -274,8 +277,7 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                 // Handle the key event (borrow state, then drop before deferred action)
                 let deferred = {
                     let mut state = state_rc.borrow_mut();
-                    let (new_input_state, action) =
-                        handle_key_event(&mut state, key, input_state);
+                    let (new_input_state, action) = handle_key_event(&mut state, key, input_state);
                     input_state = new_input_state;
                     action
                 }; // borrow dropped here
@@ -288,13 +290,10 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                     DeferredAction::ExecCommand(cmd_name) => {
                         // Clear command-line text, then execute
                         state_rc.borrow_mut().message = None;
-                        let result = alfred_core::command::execute(
-                            &mut state_rc.borrow_mut(),
-                            &cmd_name,
-                        );
+                        let result =
+                            alfred_core::command::execute(&mut state_rc.borrow_mut(), &cmd_name);
                         if let Err(e) = result {
-                            state_rc.borrow_mut().message =
-                                Some(format!("Command error: {}", e));
+                            state_rc.borrow_mut().message = Some(format!("Command error: {}", e));
                         }
                     }
                     DeferredAction::None => {}

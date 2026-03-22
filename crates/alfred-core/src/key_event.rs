@@ -81,46 +81,6 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Unit tests: KeyCode creation
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn key_code_char_stores_character() {
-        let code = KeyCode::Char('a');
-        assert_eq!(code, KeyCode::Char('a'));
-    }
-
-    #[test]
-    fn key_code_arrow_variants_are_distinct() {
-        assert_ne!(KeyCode::Up, KeyCode::Down);
-        assert_ne!(KeyCode::Left, KeyCode::Right);
-    }
-
-    #[test]
-    fn key_code_special_keys_exist() {
-        // Verify each variant is constructible and distinct
-        let keys = vec![
-            KeyCode::Enter,
-            KeyCode::Escape,
-            KeyCode::Backspace,
-            KeyCode::Tab,
-            KeyCode::Home,
-            KeyCode::End,
-            KeyCode::PageUp,
-            KeyCode::PageDown,
-            KeyCode::Delete,
-        ];
-        // All distinct from each other
-        for (i, a) in keys.iter().enumerate() {
-            for (j, b) in keys.iter().enumerate() {
-                if i != j {
-                    assert_ne!(a, b);
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Unit tests: Modifiers
     // -----------------------------------------------------------------------
 

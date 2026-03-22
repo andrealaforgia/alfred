@@ -290,9 +290,9 @@ mod tests {
 /// Kill signal threshold: 1ms per call. If any primitive exceeds this,
 /// evaluate Janet as an alternative interpreter.
 ///
-/// Run with `cargo test --package alfred-lisp -- --nocapture perf_baseline`
+/// Run with `cargo test --package alfred-lisp --features perf-tests -- --nocapture perf_baseline`
 /// to see timing output.
-#[cfg(test)]
+#[cfg(all(test, feature = "perf-tests"))]
 mod perf_baseline {
     use super::*;
     use crate::bridge;

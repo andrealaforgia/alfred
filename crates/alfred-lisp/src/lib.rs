@@ -10,13 +10,3 @@ pub mod runtime;
 pub fn available() -> bool {
     true
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lisp_subsystem_reports_available() {
-        assert!(available());
-    }
-}

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Lisp interpreter integration for Alfred (stub)"
 
+[features]
+perf-tests = []
+
 [dependencies]
 alfred-core = { version = "0.1.0", path = "../alfred-core" }
 rust_lisp = "0.18.0"
