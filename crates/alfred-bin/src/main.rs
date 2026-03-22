@@ -55,6 +55,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     let runtime = LispRuntime::new();
     bridge::register_core_primitives(&runtime, state.clone());
     bridge::register_define_command(&runtime, state.clone());
+    bridge::register_hook_primitives(&runtime, state.clone());
 
     // Discover and load plugins
     let plugin_errors = load_plugins(&runtime);

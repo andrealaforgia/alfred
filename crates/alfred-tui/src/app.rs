@@ -236,6 +236,63 @@ pub(crate) fn eval_and_display(
 }
 
 // ---------------------------------------------------------------------------
+// Pure function: compute gutter content from hook dispatch
+// ---------------------------------------------------------------------------
+
+/// Computes gutter content by dispatching the "render-gutter" hook.
+///
+/// If no hook is registered (no line-numbers plugin), returns (0, empty vec).
+/// Otherwise, dispatches the hook with visible line range info and returns
+/// (gutter_width, formatted_lines).
+///
+/// The gutter_width is calculated as: number of digits in line_count + 1 (for padding).
+pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) {
+    let top_line = state.viewport.top_line;
+    let height = state.viewport.height as usize;
+    let line_count = alfred_core::buffer::line_count(&state.buffer);
+
+    // Check if any hooks are registered for "render-gutter"
+    let start_line_1indexed = top_line + 1;
+    let end_line_1indexed = (top_line + height).min(line_count);
+
+    let args = vec![
+        start_line_1indexed.to_string(),
+        end_line_1indexed.to_string(),
+        line_count.to_string(),
+    ];
+
+    let results = alfred_core::hook::dispatch_hook(&state.hooks, "render-gutter", &args);
+
+    if results.is_empty() {
+        // No hook registered -- no gutter
+        return (0, Vec::new());
+    }
+
+    // Calculate gutter width: digits in line_count + 1 for padding
+    let digits = if line_count == 0 {
+        1
+    } else {
+        (line_count as f64).log10().floor() as u16 + 1
+    };
+    let gutter_width = digits + 1;
+
+    // Build formatted line numbers for visible rows
+    let gutter_lines: Vec<String> = (0..height)
+        .map(|row| {
+            let buffer_line = top_line + row;
+            if buffer_line < line_count {
+                let line_num = buffer_line + 1; // 1-indexed
+                format!("{:>width$} ", line_num, width = digits as usize)
+            } else {
+                " ".repeat(gutter_width as usize)
+            }
+        })
+        .collect();
+
+    (gutter_width, gutter_lines)
+}
+
+// ---------------------------------------------------------------------------
 // I/O: event loop
 // ---------------------------------------------------------------------------
 
@@ -266,8 +323,18 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             break;
         }
 
-        // Render current frame
-        renderer::render_frame(&mut terminal, &state_rc.borrow(), &[])?;
+        // Compute gutter content by dispatching "render-gutter" hook
+        let (gutter_width, gutter_lines) = {
+            let state = state_rc.borrow();
+            compute_gutter_content(&state)
+        };
+
+        // Update gutter_width on viewport and render
+        {
+            let mut state = state_rc.borrow_mut();
+            state.viewport.gutter_width = gutter_width;
+        }
+        renderer::render_frame(&mut terminal, &state_rc.borrow(), &gutter_lines)?;
 
         if let Event::Key(ct_key) = ct_event::read()? {
             // Only handle key press events (not release/repeat)
@@ -889,5 +956,188 @@ mod tests {
         assert!(!state.running);
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(action, super::DeferredAction::None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (04-04): line-numbers plugin produces gutter content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_numbers_plugin_loaded_when_gutter_computed_then_gutter_contains_formatted_line_numbers_and_width_set(
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: an editor state with a 5-line buffer and viewport height=3
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 3)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Line1\nLine2\nLine3\nLine4\nLine5");
+        }
+
+        // And: a Lisp runtime with core + hook primitives
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // And: the line-numbers plugin is loaded (registers render-gutter hook)
+        runtime
+            .eval(r#"(add-hook "render-gutter" (lambda (start end total) start))"#)
+            .unwrap();
+
+        // When: compute_gutter_content is called with viewport info
+        let (gutter_width, gutter_lines) = {
+            let state = state_rc.borrow();
+            super::compute_gutter_content(&state)
+        };
+
+        // Then: gutter_width is set based on digit count (5 lines -> 1 digit + 1 padding = 2)
+        assert!(
+            gutter_width > 0,
+            "gutter_width should be > 0 when line-numbers plugin is loaded"
+        );
+
+        // And: gutter_lines contains formatted line numbers for visible lines
+        assert!(
+            !gutter_lines.is_empty(),
+            "gutter_lines should not be empty when line-numbers plugin is loaded"
+        );
+        // First visible line should be "1" (right-aligned with padding)
+        assert!(
+            gutter_lines[0].contains("1"),
+            "first gutter line should contain '1', got: '{}'",
+            gutter_lines[0]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (04-04): gutter content computation
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_no_render_gutter_hook_when_gutter_computed_then_empty_gutter_and_zero_width() {
+        // Given: an editor state with buffer but no hooks registered
+        let mut state = editor_state::new(80, 5);
+        state.buffer = Buffer::from_string("Line1\nLine2\nLine3");
+
+        // When: compute_gutter_content is called
+        let (gutter_width, gutter_lines) = super::compute_gutter_content(&state);
+
+        // Then: gutter_width is 0 and gutter_lines is empty
+        assert_eq!(gutter_width, 0, "no hook means gutter_width should be 0");
+        assert!(
+            gutter_lines.is_empty(),
+            "no hook means gutter_lines should be empty"
+        );
+    }
+
+    #[test]
+    fn given_render_gutter_hook_when_gutter_computed_then_gutter_width_matches_digit_count() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: a buffer with 1000+ lines (4 digits) and a registered hook
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 5)));
+        {
+            let mut state = state_rc.borrow_mut();
+            let lines: Vec<&str> = (0..1050).map(|_| "x").collect();
+            state.buffer = Buffer::from_string(&lines.join("\n"));
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // Register a simple hook that returns something
+        runtime
+            .eval(r#"(add-hook "render-gutter" (lambda (start end total) start))"#)
+            .unwrap();
+
+        // When: compute_gutter_content is called
+        let (gutter_width, _gutter_lines) = {
+            let state = state_rc.borrow();
+            super::compute_gutter_content(&state)
+        };
+
+        // Then: gutter_width accommodates 4 digits + 1 padding = 5
+        assert_eq!(
+            gutter_width, 5,
+            "1050 lines need 4 digits + 1 padding = gutter_width 5"
+        );
+    }
+
+    #[test]
+    fn given_render_gutter_hook_when_viewport_scrolled_then_gutter_shows_correct_line_numbers() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: a 10-line buffer with viewport scrolled to top_line=5, height=3
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 3)));
+        {
+            let mut state = state_rc.borrow_mut();
+            let lines: Vec<String> = (0..10).map(|i| format!("Line{}", i)).collect();
+            state.buffer = Buffer::from_string(&lines.join("\n"));
+            state.viewport.top_line = 5;
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // Register hook that returns the start line (simulating awareness of scroll)
+        runtime
+            .eval(r#"(add-hook "render-gutter" (lambda (start end total) start))"#)
+            .unwrap();
+
+        // When: compute_gutter_content is called
+        let (_gutter_width, gutter_lines) = {
+            let state = state_rc.borrow();
+            super::compute_gutter_content(&state)
+        };
+
+        // Then: gutter lines should show line numbers starting from 6 (top_line=5, 1-indexed)
+        assert!(
+            !gutter_lines.is_empty(),
+            "gutter should have lines when hook registered"
+        );
+        assert!(
+            gutter_lines[0].contains("6"),
+            "first visible line should be 6 (0-indexed line 5), got: '{}'",
+            gutter_lines[0]
+        );
+    }
+
+    #[test]
+    fn given_small_buffer_when_gutter_computed_then_gutter_width_is_minimal() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: a buffer with 3 lines (1 digit)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 5)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("A\nB\nC");
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-gutter" (lambda (start end total) start))"#)
+            .unwrap();
+
+        // When: compute_gutter_content is called
+        let (gutter_width, _gutter_lines) = {
+            let state = state_rc.borrow();
+            super::compute_gutter_content(&state)
+        };
+
+        // Then: gutter_width = 1 digit + 1 padding = 2
+        assert_eq!(
+            gutter_width, 2,
+            "3 lines need 1 digit + 1 padding = gutter_width 2"
+        );
     }
 }
