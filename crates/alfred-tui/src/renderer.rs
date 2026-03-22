@@ -23,14 +23,33 @@ use ratatui::Terminal;
 /// 1. Buffer content (visible lines based on viewport scroll position)
 /// 2. Cursor at the correct position relative to the viewport
 /// 3. Message line on the bottom row (if `state.message` is `Some`)
-pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState) -> io::Result<()> {
+pub fn render_frame<B: Backend>(
+    terminal: &mut Terminal<B>,
+    state: &EditorState,
+    gutter_lines: &[String],
+) -> io::Result<()> {
+    let gutter_width = state.viewport.gutter_width;
+
     terminal.draw(|frame| {
         let area = frame.area();
 
-        let text_area = compute_text_area(area, state.message.is_some());
-        let visible_lines = collect_visible_lines(state, text_area.height as usize);
-        let text_widget = Paragraph::new(visible_lines);
-        frame.render_widget(text_widget, text_area);
+        let content_area = compute_text_area(area, state.message.is_some());
+
+        if gutter_width > 0 {
+            let (gutter_area, buffer_area) = split_gutter_and_text(content_area, gutter_width);
+
+            let gutter_content = collect_gutter_lines(gutter_lines, content_area.height as usize);
+            let gutter_widget = Paragraph::new(gutter_content);
+            frame.render_widget(gutter_widget, gutter_area);
+
+            let visible_lines = collect_visible_lines(state, buffer_area.height as usize);
+            let text_widget = Paragraph::new(visible_lines);
+            frame.render_widget(text_widget, buffer_area);
+        } else {
+            let visible_lines = collect_visible_lines(state, content_area.height as usize);
+            let text_widget = Paragraph::new(visible_lines);
+            frame.render_widget(text_widget, content_area);
+        }
 
         if let Some(ref message) = state.message {
             let message_area = compute_message_area(area);
@@ -92,13 +111,52 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
         .collect()
 }
 
+/// Splits a content area into a gutter area (left) and a text area (right).
+///
+/// The gutter area occupies `gutter_width` columns on the left.
+/// The text area occupies the remaining columns on the right.
+fn split_gutter_and_text(content_area: Rect, gutter_width: u16) -> (Rect, Rect) {
+    let gutter_w = gutter_width.min(content_area.width);
+    let text_w = content_area.width.saturating_sub(gutter_w);
+
+    let gutter_area = Rect {
+        x: content_area.x,
+        y: content_area.y,
+        width: gutter_w,
+        height: content_area.height,
+    };
+
+    let text_area = Rect {
+        x: content_area.x + gutter_w,
+        y: content_area.y,
+        width: text_w,
+        height: content_area.height,
+    };
+
+    (gutter_area, text_area)
+}
+
+/// Collects gutter lines for the visible rows.
+///
+/// If `gutter_lines` has fewer entries than `visible_height`, the remaining
+/// rows get empty strings. Each line is converted to a ratatui Line.
+fn collect_gutter_lines(gutter_lines: &[String], visible_height: usize) -> Vec<Line<'static>> {
+    (0..visible_height)
+        .map(|row| {
+            let content = gutter_lines.get(row).map(|s| s.as_str()).unwrap_or("");
+            Line::raw(content.to_string())
+        })
+        .collect()
+}
+
 /// Computes the terminal cursor position from the editor state.
 ///
 /// The cursor position is relative to the viewport: the terminal row is
-/// `cursor.line - viewport.top_line`, and the terminal column is `cursor.column`.
+/// `cursor.line - viewport.top_line`, and the terminal column is
+/// `cursor.column + viewport.gutter_width` (to account for gutter offset).
 fn compute_cursor_position(state: &EditorState) -> Position {
     let terminal_row = state.cursor.line.saturating_sub(state.viewport.top_line) as u16;
-    let terminal_column = state.cursor.column as u16;
+    let terminal_column = state.cursor.column as u16 + state.viewport.gutter_width;
     Position::new(terminal_column, terminal_row)
 }
 
@@ -161,7 +219,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state).unwrap();
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
 
         // Then: the buffer content appears on the correct rows
         let rendered = terminal.backend();
@@ -200,7 +258,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        let result = super::render_frame(&mut terminal, &state);
+        let result = super::render_frame(&mut terminal, &state, &[]);
 
         // Then: rendering succeeds without panic
         assert!(result.is_ok());
@@ -222,7 +280,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state).unwrap();
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
 
         // Then: the cursor position in the backend reflects (column=3, row=1)
         let mut backend = terminal.backend_mut().clone();
@@ -245,7 +303,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state).unwrap();
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
 
         // Then: row 0 shows Line2 (the first visible line after scroll)
         let rendered = terminal.backend();
@@ -269,7 +327,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state).unwrap();
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
 
         // Then: last row (2) shows the message
         let rendered = terminal.backend();
@@ -297,7 +355,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state).unwrap();
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
 
         // Then: last row (2) is blank
         let rendered = terminal.backend();
@@ -306,6 +364,156 @@ mod tests {
             last_row.trim().is_empty(),
             "Last row should be empty but was: '{}'",
             last_row
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: gutter rendering with gutter_width > 0 and gutter content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_gutter_width_and_content_when_rendered_then_gutter_appears_left_and_text_shifts_right()
+    {
+        // Given: an EditorState with gutter_width=4 and buffer content
+        let mut state = editor_state::new(30, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
+        state.viewport.gutter_width = 4;
+
+        // And: gutter content for each visible line
+        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string(), " 3 ".to_string()];
+
+        // And: a TestBackend terminal (30 cols wide)
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with gutter content
+        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+
+        // Then: the gutter content appears on the left side of each row
+        let rendered = terminal.backend();
+        let row0 = extract_row_text(rendered.buffer(), 0);
+        assert!(
+            row0.starts_with(" 1 "),
+            "Row 0 should start with gutter ' 1 ' but was: '{}'",
+            row0
+        );
+
+        // And: buffer text appears shifted right (after gutter columns)
+        let row0_after_gutter = &row0[4..]; // gutter_width=4
+        assert!(
+            row0_after_gutter.starts_with("Hello"),
+            "Row 0 after gutter should start with 'Hello' but was: '{}'",
+            row0_after_gutter
+        );
+
+        // And: row 1 shows gutter and buffer text
+        let row1 = extract_row_text(rendered.buffer(), 1);
+        assert!(
+            row1.starts_with(" 2 "),
+            "Row 1 should start with gutter ' 2 ' but was: '{}'",
+            row1
+        );
+        let row1_after_gutter = &row1[4..];
+        assert!(
+            row1_after_gutter.starts_with("World"),
+            "Row 1 after gutter should start with 'World' but was: '{}'",
+            row1_after_gutter
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: cursor offset accounts for gutter width
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_gutter_width_when_cursor_at_col_3_then_cursor_position_offset_by_gutter() {
+        // Given: an EditorState with gutter_width=4 and cursor at line 1, column 3
+        let mut state = editor_state::new(30, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
+        state.cursor = alfred_core::cursor::new(1, 3);
+        state.viewport.gutter_width = 4;
+
+        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string(), " 3 ".to_string()];
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with gutter
+        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+
+        // Then: cursor column is offset by gutter_width (3 + 4 = 7)
+        let mut backend = terminal.backend_mut().clone();
+        backend.assert_cursor_position(ratatui::layout::Position::new(7, 1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: zero gutter width renders identically (backwards compatible)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_zero_gutter_width_when_rendered_then_text_starts_at_column_zero() {
+        // Given: an EditorState with gutter_width=0 (default)
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with empty gutter lines (backwards compatible)
+        super::render_frame(&mut terminal, &state, &[]).unwrap();
+
+        // Then: text starts at column 0
+        let rendered = terminal.backend();
+        let row0 = extract_row_text(rendered.buffer(), 0);
+        assert!(
+            row0.starts_with("Hello"),
+            "Row 0 should start with 'Hello' but was: '{}'",
+            row0
+        );
+
+        // And: cursor is at column 0 (no offset)
+        let mut backend = terminal.backend_mut().clone();
+        backend.assert_cursor_position(ratatui::layout::Position::new(0, 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: fewer gutter lines than visible lines renders empty gutter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_fewer_gutter_lines_than_visible_when_rendered_then_remaining_gutter_rows_empty() {
+        // Given: an EditorState with 3 buffer lines but only 1 gutter line
+        let mut state = editor_state::new(30, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
+        state.viewport.gutter_width = 4;
+
+        let gutter_lines = vec![" 1 ".to_string()];
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+
+        // Then: row 0 has gutter content
+        let rendered = terminal.backend();
+        let row0 = extract_row_text(rendered.buffer(), 0);
+        assert!(
+            row0.starts_with(" 1 "),
+            "Row 0 should start with gutter but was: '{}'",
+            row0
+        );
+
+        // And: row 1 has buffer text shifted right but empty gutter area
+        let row1 = extract_row_text(rendered.buffer(), 1);
+        let row1_after_gutter = &row1[4..];
+        assert!(
+            row1_after_gutter.starts_with("World"),
+            "Row 1 after gutter should start with 'World' but was: '{}'",
+            row1_after_gutter
         );
     }
 

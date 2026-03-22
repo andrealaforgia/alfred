@@ -267,7 +267,7 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
         }
 
         // Render current frame
-        renderer::render_frame(&mut terminal, &state_rc.borrow())?;
+        renderer::render_frame(&mut terminal, &state_rc.borrow(), &[])?;
 
         if let Event::Key(ct_key) = ct_event::read()? {
             // Only handle key press events (not release/repeat)
