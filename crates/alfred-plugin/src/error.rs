@@ -20,6 +20,10 @@ pub enum PluginError {
     NotFound { name: String },
     /// Plugin init.lisp evaluation failed.
     InitError { name: String, reason: String },
+    /// Circular dependency detected among plugins.
+    CircularDependency { cycle: Vec<String> },
+    /// Plugin declares a dependency that is not available.
+    MissingDependency { plugin: String, dependency: String },
 }
 
 impl std::fmt::Display for PluginError {
@@ -42,6 +46,16 @@ impl std::fmt::Display for PluginError {
             }
             PluginError::InitError { name, reason } => {
                 write!(f, "init error for plugin {}: {}", name, reason)
+            }
+            PluginError::CircularDependency { cycle } => {
+                write!(f, "circular dependency: {}", cycle.join(" -> "))
+            }
+            PluginError::MissingDependency { plugin, dependency } => {
+                write!(
+                    f,
+                    "plugin '{}' depends on '{}' which is not available",
+                    plugin, dependency
+                )
             }
         }
     }

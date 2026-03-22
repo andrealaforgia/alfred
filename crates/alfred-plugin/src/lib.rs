@@ -584,4 +584,83 @@ mod tests {
 
         assert_eq!(names, vec!["alpha", "beta"]);
     }
+
+    // -- Acceptance test: dependency ordering via topological sort --
+
+    /// Helper: create a PluginMetadata without filesystem (pure data).
+    fn meta(name: &str, deps: &[&str]) -> metadata::PluginMetadata {
+        metadata::PluginMetadata {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            description: format!("plugin {name}"),
+            dependencies: deps.iter().map(|d| d.to_string()).collect(),
+            source_path: std::path::PathBuf::from(format!("/fake/{name}/init.lisp")),
+        }
+    }
+
+    #[test]
+    fn resolve_load_order_sorts_dependency_chain_a_before_b_before_c() {
+        // Given: C depends on B, B depends on A (discovery order: C, B, A)
+        let plugins = vec![meta("C", &["B"]), meta("B", &["A"]), meta("A", &[])];
+
+        // When: resolve load order
+        let order = registry::resolve_load_order(&plugins).unwrap();
+
+        // Then: A loads first, then B, then C
+        let names: Vec<&str> = order.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["A", "B", "C"]);
+    }
+
+    // -- Unit tests: dependency ordering --
+
+    #[test]
+    fn resolve_load_order_detects_circular_dependency() {
+        // Direct cycle: A depends on B, B depends on A
+        let plugins = vec![meta("A", &["B"]), meta("B", &["A"])];
+        let err = registry::resolve_load_order(&plugins).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("circular dependency"),
+            "expected 'circular dependency' in: {msg}"
+        );
+
+        // Indirect cycle: A -> B -> C -> A
+        let plugins = vec![meta("A", &["C"]), meta("B", &["A"]), meta("C", &["B"])];
+        let err = registry::resolve_load_order(&plugins).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("circular dependency"),
+            "expected 'circular dependency' in: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_load_order_reports_missing_dependency() {
+        let plugins = vec![meta("A", &["nonexistent"])];
+
+        let err = registry::resolve_load_order(&plugins).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("nonexistent") && msg.contains("not available"),
+            "expected missing dependency error mentioning 'nonexistent', got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_load_order_preserves_discovery_order_for_independent_plugins() {
+        let plugins = vec![meta("zebra", &[]), meta("alpha", &[]), meta("middle", &[])];
+
+        let order = registry::resolve_load_order(&plugins).unwrap();
+        let names: Vec<&str> = order.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["zebra", "alpha", "middle"]);
+    }
+
+    #[test]
+    fn resolve_load_order_returns_single_plugin_with_no_deps() {
+        let plugins = vec![meta("solo", &[])];
+
+        let order = registry::resolve_load_order(&plugins).unwrap();
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0].name, "solo");
+    }
 }

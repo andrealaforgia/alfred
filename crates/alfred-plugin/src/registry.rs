@@ -158,3 +158,72 @@ pub fn plugin_hooks(registry: &PluginRegistry, plugin_name: &str) -> Option<Vec<
 pub fn list_plugins(registry: &PluginRegistry) -> Vec<&PluginMetadata> {
     registry.plugins.values().map(|lp| &lp.metadata).collect()
 }
+
+/// Resolve the load order for a set of plugins via topological sort.
+///
+/// Plugins are sorted so that each plugin's dependencies appear before it.
+/// Independent plugins (no dependencies) maintain their input order.
+/// Returns an error if a circular or missing dependency is detected.
+pub fn resolve_load_order(plugins: &[PluginMetadata]) -> Result<Vec<&PluginMetadata>, PluginError> {
+    use std::collections::{HashMap, VecDeque};
+
+    // Build index: name -> position in input slice
+    let name_to_idx: HashMap<&str, usize> = plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    // Validate all dependencies exist
+    for plugin in plugins {
+        for dep in &plugin.dependencies {
+            if !name_to_idx.contains_key(dep.as_str()) {
+                return Err(PluginError::MissingDependency {
+                    plugin: plugin.name.clone(),
+                    dependency: dep.clone(),
+                });
+            }
+        }
+    }
+
+    // Build in-degree counts and adjacency list (dependency -> dependents)
+    let n = plugins.len();
+    let mut in_degree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+    for (i, plugin) in plugins.iter().enumerate() {
+        in_degree[i] = plugin.dependencies.len();
+        for dep in &plugin.dependencies {
+            let dep_idx = name_to_idx[dep.as_str()];
+            dependents[dep_idx].push(i);
+        }
+    }
+
+    // Kahn's algorithm: start with in-degree 0 nodes, in input order
+    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
+    let mut result: Vec<&PluginMetadata> = Vec::with_capacity(n);
+
+    while let Some(idx) = queue.pop_front() {
+        result.push(&plugins[idx]);
+        // Sort dependents by their original index to maintain discovery order
+        let mut deps = dependents[idx].clone();
+        deps.sort();
+        for dependent_idx in deps {
+            in_degree[dependent_idx] -= 1;
+            if in_degree[dependent_idx] == 0 {
+                queue.push_back(dependent_idx);
+            }
+        }
+    }
+
+    if result.len() != n {
+        // Remaining nodes with in_degree > 0 form the cycle
+        let cycle: Vec<String> = (0..n)
+            .filter(|&i| in_degree[i] > 0)
+            .map(|i| plugins[i].name.clone())
+            .collect();
+        return Err(PluginError::CircularDependency { cycle });
+    }
+
+    Ok(result)
+}
