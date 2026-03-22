@@ -84,65 +84,53 @@ pub(crate) enum InputState {
 
 /// Handles a key event by updating the editor state.
 ///
-/// Returns `(InputState, Option<String>)` where the second element is
-/// a Lisp expression to evaluate when the command starts with `eval `.
-/// The caller is responsible for executing the eval (to avoid borrow
-/// conflicts with `Rc<RefCell<EditorState>>`).
-///
-/// Keybindings:
-/// - Arrow keys: cursor movement (Up, Down, Left, Right)
-/// - `:` enters command mode
-/// - `:q` / `:quit` quits the editor
-/// - `:eval <expr>` returns the expression for Lisp evaluation
-/// - Escape cancels command mode
-/// - All other keys: ignored (read-only in M1)
+/// Returns `(InputState, DeferredAction)` where the DeferredAction tells the
+/// caller what to do after dropping the EditorState borrow (eval Lisp, execute
+/// a registered command, or nothing).
 pub(crate) fn handle_key_event(
     state: &mut EditorState,
     key: KeyEvent,
     input_state: InputState,
-) -> (InputState, Option<String>) {
+) -> (InputState, DeferredAction) {
     // Command-line mode: accumulating input after `:`
     if let InputState::Command(mut cmd) = input_state {
         match key.code {
             KeyCode::Enter => {
-                // Execute the command
                 let trimmed = cmd.trim().to_string();
                 return execute_colon_command(state, &trimmed);
             }
             KeyCode::Escape => {
-                // Cancel command input
                 state.message = None;
-                return (InputState::Normal, None);
+                return (InputState::Normal, DeferredAction::None);
             }
             KeyCode::Backspace => {
                 cmd.pop();
                 if cmd.is_empty() {
                     state.message = None;
-                    return (InputState::Normal, None);
+                    return (InputState::Normal, DeferredAction::None);
                 }
                 state.message = Some(format!(":{}", cmd));
-                return (InputState::Command(cmd), None);
+                return (InputState::Command(cmd), DeferredAction::None);
             }
             KeyCode::Char(c) => {
                 cmd.push(c);
                 state.message = Some(format!(":{}", cmd));
-                return (InputState::Command(cmd), None);
+                return (InputState::Command(cmd), DeferredAction::None);
             }
             _ => {
-                return (InputState::Command(cmd), None);
+                return (InputState::Command(cmd), DeferredAction::None);
             }
         }
     }
 
     // Normal mode
     match key {
-        // `:` enters command mode
         KeyEvent {
             code: KeyCode::Char(':'),
             modifiers: Modifiers { ctrl: false, .. },
         } => {
             state.message = Some(":".to_string());
-            return (InputState::Command(String::new()), None);
+            return (InputState::Command(String::new()), DeferredAction::None);
         }
         KeyEvent {
             code: KeyCode::Up,
@@ -160,42 +148,44 @@ pub(crate) fn handle_key_event(
             code: KeyCode::Right,
             modifiers: Modifiers { ctrl: false, .. },
         } => move_cursor_and_adjust_viewport(state, cursor::move_right),
-        // M1: all other keys are ignored (buffer is read-only)
         _ => {}
     }
-    (InputState::Normal, None)
+    (InputState::Normal, DeferredAction::None)
 }
 
-/// Executes a colon command, returning the new input state and optionally
-/// a Lisp expression to evaluate.
+/// Action to perform after handle_key_event releases the EditorState borrow.
+#[derive(Debug, PartialEq)]
+pub(crate) enum DeferredAction {
+    /// No action needed
+    None,
+    /// Evaluate a Lisp expression (from :eval)
+    Eval(String),
+    /// Execute a registered command by name (from :command-name)
+    ExecCommand(String),
+}
+
+/// Executes a colon command, returning the new input state and a deferred action.
 ///
-/// This is a pure function that separates command parsing from side effects.
-/// When the command starts with `eval `, the expression is returned for the
-/// caller to evaluate via the Lisp runtime (avoiding borrow conflicts).
-fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState, Option<String>) {
+/// Commands that need Lisp evaluation or registered command execution return
+/// a DeferredAction so the caller can execute them after dropping the borrow
+/// on EditorState (avoiding RefCell double-borrow panics).
+fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState, DeferredAction) {
     match command {
         "q" | "quit" => {
             state.running = false;
-            (InputState::Normal, None)
+            (InputState::Normal, DeferredAction::None)
         }
         cmd if cmd.starts_with("eval ") => {
             let expression = cmd.strip_prefix("eval ").unwrap().to_string();
-            (InputState::Normal, Some(expression))
+            (InputState::Normal, DeferredAction::Eval(expression))
         }
         cmd => {
-            // Try executing as a registered command
-            match alfred_core::command::execute(state, cmd) {
-                Ok(()) => {
-                    // Command executed — if it didn't set a message, clear the command line
-                    if state.message.as_ref().map_or(true, |m| m.starts_with(':')) {
-                        state.message = None;
-                    }
-                    (InputState::Normal, None)
-                }
-                Err(_) => {
-                    state.message = Some(format!("Unknown command: {}", cmd));
-                    (InputState::Normal, None)
-                }
+            // Check if it's a registered command — defer execution to avoid borrow conflict
+            if alfred_core::command::lookup(&state.commands, cmd).is_some() {
+                (InputState::Normal, DeferredAction::ExecCommand(cmd.to_string()))
+            } else {
+                state.message = Some(format!("Unknown command: {}", cmd));
+                (InputState::Normal, DeferredAction::None)
             }
         }
     }
@@ -281,18 +271,33 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             if ct_key.kind == KeyEventKind::Press {
                 let key = convert_crossterm_key(ct_key);
 
-                // Handle the key event (borrow state, then drop before eval)
-                let eval_expression = {
+                // Handle the key event (borrow state, then drop before deferred action)
+                let deferred = {
                     let mut state = state_rc.borrow_mut();
-                    let (new_input_state, eval_expr) =
+                    let (new_input_state, action) =
                         handle_key_event(&mut state, key, input_state);
                     input_state = new_input_state;
-                    eval_expr
+                    action
                 }; // borrow dropped here
 
-                // If there's a Lisp expression to evaluate, do it now
-                if let Some(expr) = eval_expression {
-                    eval_and_display(state_rc, runtime, &expr);
+                // Execute deferred actions outside the borrow
+                match deferred {
+                    DeferredAction::Eval(expr) => {
+                        eval_and_display(state_rc, runtime, &expr);
+                    }
+                    DeferredAction::ExecCommand(cmd_name) => {
+                        // Clear command-line text, then execute
+                        state_rc.borrow_mut().message = None;
+                        let result = alfred_core::command::execute(
+                            &mut state_rc.borrow_mut(),
+                            &cmd_name,
+                        );
+                        if let Err(e) = result {
+                            state_rc.borrow_mut().message =
+                                Some(format!("Command error: {}", e));
+                        }
+                    }
+                    DeferredAction::None => {}
                 }
             }
         }
@@ -753,28 +758,22 @@ mod tests {
         alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
 
         // When: simulate typing `:eval (message "hi")` and pressing Enter
-        let eval_expr = {
+        let deferred = {
             let mut state = state_rc.borrow_mut();
-            // Type `:` to enter command mode
             let mut result = handle_key(
                 &mut state,
                 KeyEvent::plain(KeyCode::Char(':')),
                 super::InputState::Normal,
             );
-
-            // Type `eval (message "hi")`
             for c in "eval (message \"hi\")".chars() {
                 result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
             }
-
-            // Press Enter to execute -- use full handle_key_event to get eval expr
-            let (_, eval_expr) =
+            let (_, action) =
                 super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
-            eval_expr
-        }; // borrow dropped
+            action
+        };
 
-        // And: if handle_key_event returned an eval expression, execute it
-        if let Some(expr) = eval_expr {
+        if let super::DeferredAction::Eval(expr) = deferred {
             super::eval_and_display(&state_rc, &runtime, &expr);
         }
 
@@ -800,12 +799,12 @@ mod tests {
         for c in "eval (+ 1 2)".chars() {
             result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        let (input_state, eval_expr) =
+        let (input_state, action) =
             super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
 
         // Then: returns the expression to eval
         assert_eq!(input_state, super::InputState::Normal);
-        assert_eq!(eval_expr, Some("(+ 1 2)".to_string()));
+        assert_eq!(action, super::DeferredAction::Eval("(+ 1 2)".to_string()));
     }
 
     #[test]
@@ -819,7 +818,7 @@ mod tests {
         alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
 
         // When: evaluate invalid Lisp expression
-        let eval_expr = {
+        let deferred = {
             let mut state = state_rc.borrow_mut();
             let mut result = handle_key(
                 &mut state,
@@ -829,12 +828,12 @@ mod tests {
             for c in "eval (+ 1".chars() {
                 result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
             }
-            let (_, eval_expr) =
+            let (_, action) =
                 super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
-            eval_expr
+            action
         };
 
-        if let Some(expr) = eval_expr {
+        if let super::DeferredAction::Eval(expr) = deferred {
             super::eval_and_display(&state_rc, &runtime, &expr);
         }
 
@@ -862,12 +861,12 @@ mod tests {
             super::InputState::Normal,
         );
         result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
-        let (input_state, eval_expr) =
+        let (input_state, action) =
             super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
 
-        // Then: quit works, no eval expression
+        // Then: quit works, no deferred action
         assert!(!state.running);
         assert_eq!(input_state, super::InputState::Normal);
-        assert_eq!(eval_expr, None);
+        assert_eq!(action, super::DeferredAction::None);
     }
 }
