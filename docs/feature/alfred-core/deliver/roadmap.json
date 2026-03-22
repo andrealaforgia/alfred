@@ -1,93 +1,94 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-21T10:00:00Z",
+    "created_at": "2026-03-22T10:00:00Z",
     "total_steps": 5
   },
   "phases": [
     {
-      "id": "02",
-      "name": "M2 Lisp Integration",
+      "id": "03",
+      "name": "M3 Plugin System",
       "steps": [
         {
-          "id": "02-01",
-          "name": "Integrate rust_lisp into alfred-lisp",
+          "id": "03-01",
+          "name": "Plugin metadata and discovery",
           "criteria": [
-            "rust_lisp added as dependency to alfred-lisp",
-            "A runtime can be instantiated and is ready to evaluate Lisp expressions",
-            "eval function parses and evaluates a Lisp string",
-            "Arithmetic expressions evaluate correctly",
-            "Syntax errors return Result Err not panic"
+            "Scan plugins directory for subdirs with init.lisp",
+            "Parse plugin metadata from Lisp source comments",
+            "Return list of discovered plugin metadata",
+            "Missing plugins directory returns empty list",
+            "Malformed init.lisp skipped with warning"
           ],
           "files_to_modify": [
-            "crates/alfred-lisp/Cargo.toml",
-            "crates/alfred-lisp/src/lib.rs",
-            "crates/alfred-lisp/src/runtime.rs"
+            "crates/alfred-plugin/Cargo.toml",
+            "crates/alfred-plugin/src/lib.rs",
+            "crates/alfred-plugin/src/discovery.rs",
+            "crates/alfred-plugin/src/metadata.rs"
           ]
         },
         {
-          "id": "02-02",
-          "name": "Bridge registers buffer primitives",
+          "id": "03-02",
+          "name": "Plugin registry and lifecycle",
           "criteria": [
-            "buffer-insert primitive adds text at cursor position",
-            "buffer-delete primitive removes character at cursor",
-            "buffer-content primitive returns buffer text as string",
-            "cursor-position primitive returns line and column",
-            "Primitives registered at runtime startup"
+            "Registry tracks loaded plugins by name",
+            "Load evaluates init.lisp in Lisp runtime",
+            "Plugin init function called during load",
+            "Unload removes plugin from registry",
+            "Duplicate plugin name rejected with error"
           ],
           "files_to_modify": [
-            "crates/alfred-lisp/src/bridge.rs",
-            "crates/alfred-lisp/src/lib.rs",
-            "crates/alfred-core/src/buffer.rs"
+            "crates/alfred-plugin/src/registry.rs",
+            "crates/alfred-plugin/src/lib.rs"
           ],
-          "deps": ["02-01"]
+          "deps": ["03-01"]
         },
         {
-          "id": "02-03",
-          "name": "Bridge registers cursor and message primitives",
+          "id": "03-03",
+          "name": "Plugin command and hook tracking",
           "criteria": [
-            "cursor-move primitive moves cursor by direction and count",
-            "message primitive sets the editor message line",
-            "current-mode primitive returns the current mode name",
-            "All primitives accessible from Lisp evaluation",
-            "Wrong argument types return error messages"
+            "Plugin registers commands tracked per plugin",
+            "Plugin registers hooks tracked per plugin",
+            "Unload removes all commands registered by plugin",
+            "Unload removes all hooks registered by plugin",
+            "Commands from other plugins survive unload"
           ],
           "files_to_modify": [
-            "crates/alfred-lisp/src/bridge.rs"
+            "crates/alfred-plugin/src/registry.rs",
+            "crates/alfred-core/src/command.rs",
+            "crates/alfred-core/src/editor_state.rs"
           ],
-          "deps": ["02-02"]
+          "deps": ["03-02"]
         },
         {
-          "id": "02-04",
-          "name": "Wire Lisp runtime into event loop",
+          "id": "03-04",
+          "name": "Dependency ordering via topological sort",
           "criteria": [
-            "LispRuntime created and initialized in main",
-            "Colon command mode can evaluate Lisp via :eval prefix",
-            "Lisp errors display as messages not crashes",
-            "Editor state accessible to Lisp primitives during eval",
-            "eval-file function loads and evaluates a Lisp file"
+            "Plugins with dependencies loaded after deps",
+            "Circular dependency detected and reported",
+            "Missing dependency reported as error",
+            "Independent plugins load in discovery order",
+            "Plugin with satisfied deps loads successfully"
           ],
           "files_to_modify": [
-            "crates/alfred-tui/src/app.rs",
+            "crates/alfred-plugin/src/registry.rs"
+          ],
+          "deps": ["03-03"]
+        },
+        {
+          "id": "03-05",
+          "name": "Wire plugin system into main and test plugin",
+          "criteria": [
+            "Plugin system initialized in main before event loop",
+            "Test plugin in plugins/test-plugin/init.lisp loads",
+            "Test plugin registers a callable command",
+            "Plugin load errors display as messages",
+            "Multiple plugins can coexist independently"
+          ],
+          "files_to_modify": [
             "crates/alfred-bin/src/main.rs",
-            "crates/alfred-tui/Cargo.toml"
+            "plugins/test-plugin/init.lisp"
           ],
-          "deps": ["02-03"]
-        },
-        {
-          "id": "02-05",
-          "name": "Performance baseline and kill signal check",
-          "criteria": [
-            "Benchmark test measures single primitive eval latency",
-            "Latency under 1ms for buffer-insert call",
-            "Latency under 1ms for cursor-move call",
-            "Results documented in test output",
-            "Kill signal: if over 1ms evaluate Janet alternative"
-          ],
-          "files_to_modify": [
-            "crates/alfred-lisp/src/runtime.rs"
-          ],
-          "deps": ["02-04"]
+          "deps": ["03-04"]
         }
       ]
     }

@@ -4,179 +4,32 @@
   "feature_id": "alfred-core",
   "events": [
     {
-      "sid": "02-01",
+      "sid": "03-01",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-21T00:22:03Z"
+      "t": "2026-03-22T00:09:44Z"
     },
     {
-      "sid": "02-01",
+      "sid": "03-01",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-21T00:22:49Z"
+      "t": "2026-03-22T00:10:20Z"
     },
     {
-      "sid": "02-01",
+      "sid": "03-01",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-21T00:23:25Z"
+      "t": "2026-03-22T00:10:55Z"
     },
     {
-      "sid": "02-01",
+      "sid": "03-01",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-21T00:24:32Z"
-    },
-    {
-      "sid": "02-01",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:26:16Z"
-    },
-    {
-      "sid": "02-02",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:28:13Z"
-    },
-    {
-      "sid": "02-02",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:29:23Z"
-    },
-    {
-      "sid": "02-02",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:29:23Z"
-    },
-    {
-      "sid": "02-02",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:30:25Z"
-    },
-    {
-      "sid": "02-02",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:30:57Z"
-    },
-    {
-      "sid": "02-03",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:34:03Z"
-    },
-    {
-      "sid": "02-03",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:34:56Z"
-    },
-    {
-      "sid": "02-03",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:34:56Z"
-    },
-    {
-      "sid": "02-03",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:37:00Z"
-    },
-    {
-      "sid": "02-03",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:37:34Z"
-    },
-    {
-      "sid": "02-04",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:39:38Z"
-    },
-    {
-      "sid": "02-04",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:42:09Z"
-    },
-    {
-      "sid": "02-04",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:42:13Z"
-    },
-    {
-      "sid": "02-04",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:48:22Z"
-    },
-    {
-      "sid": "02-04",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:49:02Z"
-    },
-    {
-      "sid": "02-05",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:50:24Z"
-    },
-    {
-      "sid": "02-05",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:51:23Z"
-    },
-    {
-      "sid": "02-05",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:51:28Z"
-    },
-    {
-      "sid": "02-05",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:51:54Z"
-    },
-    {
-      "sid": "02-05",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-21T00:52:17Z"
+      "t": "2026-03-22T00:11:49Z"
     }
   ]
 }

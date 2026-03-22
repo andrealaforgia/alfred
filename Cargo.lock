@@ -35,6 +35,9 @@ dependencies = [
 [[package]]
 name = "alfred-plugin"
 version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "alfred-tui"
