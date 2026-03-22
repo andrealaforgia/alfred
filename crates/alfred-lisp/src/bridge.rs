@@ -14,6 +14,7 @@ use alfred_core::buffer;
 use alfred_core::command;
 use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
+use alfred_core::hook;
 use alfred_core::viewport;
 
 use crate::runtime::LispRuntime;
@@ -109,6 +110,183 @@ pub fn register_define_command(runtime: &LispRuntime, state: Rc<RefCell<EditorSt
         }));
 
         command::register(&mut state.borrow_mut().commands, name, handler);
+
+        Ok(Value::NIL)
+    });
+}
+
+/// Shared error buffer for hook callbacks to report errors without
+/// needing to borrow EditorState during dispatch.
+type HookErrorBuffer = Rc<RefCell<Vec<String>>>;
+
+/// Registers hook primitives (`add-hook`, `dispatch-hook`, `remove-hook`) into the runtime.
+///
+/// These primitives bridge the Lisp runtime to the Rust HookRegistry,
+/// allowing plugins to register Lisp callbacks as hooks and dispatch them.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(add-hook "name" callback-fn)` -- register a Lisp callback for a named hook
+/// - `(dispatch-hook "name" arg1 arg2 ...)` -- dispatch a hook, returning results as a list
+/// - `(remove-hook "name" hook-id)` -- unregister a hook callback by its ID
+pub fn register_hook_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+    let hook_errors: HookErrorBuffer = Rc::new(RefCell::new(Vec::new()));
+
+    register_add_hook(
+        env.clone(),
+        runtime.env(),
+        state.clone(),
+        hook_errors.clone(),
+    );
+    register_dispatch_hook(env.clone(), state.clone(), hook_errors);
+    register_remove_hook(env, state);
+}
+
+/// Registers `add-hook`: registers a Lisp callback for a named hook.
+///
+/// Usage: `(add-hook "hook-name" callback-fn)`
+///
+/// Returns the HookId (as integer) for potential unregistration.
+fn register_add_hook(
+    env: Rc<RefCell<Env>>,
+    lisp_env: Rc<RefCell<Env>>,
+    state: Rc<RefCell<EditorState>>,
+    hook_errors: HookErrorBuffer,
+) {
+    define_native_closure(&env, "add-hook", move |_env, args| {
+        let hook_name = extract_string_arg(&args, "add-hook")?;
+
+        let callback = args.get(1).ok_or_else(|| RuntimeError {
+            msg: "add-hook: expected 2 arguments (name, callback), got 1".to_string(),
+        })?;
+
+        // Verify the callback is callable
+        match callback {
+            Value::Lambda(_) | Value::NativeFunc(_) | Value::NativeClosure(_) => {}
+            other => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "add-hook: expected callable as second argument, got {}",
+                        other
+                    ),
+                });
+            }
+        }
+
+        let callback_value = callback.clone();
+        let call_env = lisp_env.clone();
+        let error_buf = hook_errors.clone();
+
+        // Wrap the Lisp callback in a Rust closure compatible with HookRegistry
+        let wrapper: Rc<dyn Fn(&[String]) -> Vec<String>> =
+            Rc::new(move |string_args: &[String]| {
+                // Convert &[String] args to Lisp values and build call expression
+                let mut call_values: Vec<Value> = Vec::with_capacity(string_args.len() + 1);
+                call_values.push(callback_value.clone());
+                for arg in string_args {
+                    call_values.push(Value::String(arg.clone()));
+                }
+                let call_list: List = call_values.into_iter().collect();
+                let call_expr = Value::List(call_list);
+
+                match rust_lisp::interpreter::eval(call_env.clone(), &call_expr) {
+                    Ok(result) => {
+                        // Convert Lisp result to Vec<String>, extracting raw string value
+                        let s = match &result {
+                            Value::String(s) => s.clone(),
+                            other => format!("{}", other),
+                        };
+                        vec![s]
+                    }
+                    Err(e) => {
+                        // Store error in shared buffer (avoids borrowing EditorState during dispatch)
+                        error_buf
+                            .borrow_mut()
+                            .push(format!("Hook error: {}", e.msg));
+                        vec![]
+                    }
+                }
+            });
+
+        let hook_id = hook::register_hook(&mut state.borrow_mut().hooks, &hook_name, wrapper);
+
+        Ok(Value::Int(hook_id.0 as i32))
+    });
+}
+
+/// Registers `dispatch-hook`: dispatches all callbacks for a named hook.
+///
+/// Usage: `(dispatch-hook "hook-name" arg1 arg2 ...)`
+///
+/// Returns results as a Lisp list of strings. If any callback errors,
+/// the error is displayed as an editor message (not a crash).
+fn register_dispatch_hook(
+    env: Rc<RefCell<Env>>,
+    state: Rc<RefCell<EditorState>>,
+    hook_errors: HookErrorBuffer,
+) {
+    define_native_closure(&env, "dispatch-hook", move |_env, args| {
+        let hook_name = extract_string_arg(&args, "dispatch-hook")?;
+
+        // Collect remaining args as strings (extract raw string values)
+        let string_args: Vec<String> = args[1..]
+            .iter()
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => format!("{}", other),
+            })
+            .collect();
+
+        // Clear any previous hook errors
+        hook_errors.borrow_mut().clear();
+
+        // Borrow state briefly to dispatch hooks, then release.
+        // Callbacks may accumulate errors in the shared error buffer.
+        let results = {
+            let editor = state.borrow();
+            hook::dispatch_hook(&editor.hooks, &hook_name, &string_args)
+        };
+
+        // After dispatch (borrow released), propagate any errors as editor messages
+        let errors = hook_errors.borrow().clone();
+        if !errors.is_empty() {
+            let mut editor = state.borrow_mut();
+            editor.message = Some(errors.join("; "));
+        }
+
+        // Flatten results: each callback returns Vec<String>, collect all into one list
+        let list_values: Vec<Value> = results
+            .into_iter()
+            .flat_map(|callback_results| callback_results.into_iter())
+            .map(Value::String)
+            .collect();
+
+        let list: List = list_values.into_iter().collect();
+        Ok(Value::List(list))
+    });
+}
+
+/// Registers `remove-hook`: unregisters a hook callback by its ID.
+///
+/// Usage: `(remove-hook "hook-name" hook-id)`
+fn register_remove_hook(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "remove-hook", move |_env, args| {
+        let hook_name = extract_string_arg(&args, "remove-hook")?;
+
+        let id_value = args.get(1).ok_or_else(|| RuntimeError {
+            msg: "remove-hook: expected 2 arguments (name, hook-id), got 1".to_string(),
+        })?;
+
+        let id = match id_value {
+            Value::Int(n) => hook::HookId(*n as usize),
+            other => {
+                return Err(RuntimeError {
+                    msg: format!("remove-hook: expected integer hook-id, got {}", other),
+                });
+            }
+        };
+
+        hook::unregister_hook(&mut state.borrow_mut().hooks, &hook_name, id);
 
         Ok(Value::NIL)
     });
@@ -644,6 +822,212 @@ mod tests {
         assert!(
             result.is_err(),
             "define-command with non-string name should fail"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: add-hook + dispatch-hook round-trip through Lisp bridge
+    // (step 04-02)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_lisp_lambda_when_add_hook_and_dispatch_hook_then_callback_called_with_args_and_results_returned(
+    ) {
+        // Given: an editor state and a runtime with hook primitives registered
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        // And: a Lisp lambda registered as a hook via add-hook
+        runtime
+            .eval("(add-hook \"on-save\" (lambda (arg) (+ \"saved:\" arg)))")
+            .unwrap();
+
+        // When: dispatch-hook is called with arguments
+        let result = runtime
+            .eval("(dispatch-hook \"on-save\" \"myfile.txt\")")
+            .unwrap();
+
+        // Then: the result is a list containing the callback's return values
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(
+                    items.len(),
+                    1,
+                    "one callback registered, one result expected"
+                );
+                // The callback concatenates "saved:" + arg
+                assert_eq!(items[0], Value::String("saved:myfile.txt".to_string()));
+            }
+            _ => panic!("dispatch-hook should return a list, got {:?}", inner),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: hook primitives (step 04-02)
+    // Test Budget: 6 behaviors x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_add_hook_when_evaluated_then_returns_hook_id_as_integer() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(add-hook \"test-hook\" (lambda () \"ok\"))")
+            .unwrap();
+
+        assert!(
+            result.as_integer().is_some(),
+            "add-hook should return a HookId as integer, got: {}",
+            result
+        );
+    }
+
+    #[test]
+    fn given_dispatch_hook_on_unknown_hook_when_evaluated_then_returns_empty_list() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(dispatch-hook \"nonexistent\")").unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert!(
+                    items.is_empty(),
+                    "dispatch-hook on unknown hook should return empty list"
+                );
+            }
+            other if format!("{}", other) == "NIL" => {} // NIL is acceptable for empty
+            _ => panic!(
+                "dispatch-hook on unknown hook should return empty list or NIL, got {:?}",
+                inner
+            ),
+        }
+    }
+
+    #[test]
+    fn given_multiple_hooks_when_dispatched_then_all_callback_results_returned() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(add-hook \"multi\" (lambda () \"first\"))")
+            .unwrap();
+        runtime
+            .eval("(add-hook \"multi\" (lambda () \"second\"))")
+            .unwrap();
+
+        let result = runtime.eval("(dispatch-hook \"multi\")").unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(
+                    items.len(),
+                    2,
+                    "two callbacks registered, two results expected"
+                );
+                assert_eq!(items[0], Value::String("first".to_string()));
+                assert_eq!(items[1], Value::String("second".to_string()));
+            }
+            _ => panic!("dispatch-hook should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_hook_callback_that_errors_when_dispatched_then_error_shown_as_message_not_crash() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        // Register a callback that will error (calling undefined function)
+        runtime
+            .eval("(add-hook \"err-hook\" (lambda () (undefined-fn)))")
+            .unwrap();
+
+        // dispatch-hook should NOT crash -- it should succeed and set a message
+        let result = runtime.eval("(dispatch-hook \"err-hook\")");
+        assert!(
+            result.is_ok(),
+            "dispatch-hook should not crash on callback error"
+        );
+
+        // The error should be captured as a message in editor state
+        let editor = state.borrow();
+        assert!(
+            editor.message.is_some(),
+            "hook error should be displayed as a message"
+        );
+    }
+
+    #[test]
+    fn given_remove_hook_when_evaluated_then_callback_no_longer_dispatched() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        // Register and capture the hook-id
+        runtime
+            .eval("(define hook-id (add-hook \"removable\" (lambda () \"should-not-appear\")))")
+            .unwrap();
+
+        // Remove the hook
+        runtime.eval("(remove-hook \"removable\" hook-id)").unwrap();
+
+        // Dispatch should return empty
+        let result = runtime.eval("(dispatch-hook \"removable\")").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert!(
+                    items.is_empty(),
+                    "removed hook should no longer produce results"
+                );
+            }
+            other if format!("{}", other) == "NIL" => {} // NIL is acceptable for empty
+            _ => panic!(
+                "dispatch after remove-hook should return empty list or NIL, got {:?}",
+                inner
+            ),
+        }
+    }
+
+    #[test]
+    fn given_add_hook_with_wrong_args_when_evaluated_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_hook_primitives(&runtime, state.clone());
+
+        // No args
+        let result = runtime.eval("(add-hook)");
+        assert!(result.is_err(), "add-hook with no args should fail");
+
+        // First arg not a string
+        let result = runtime.eval("(add-hook 42 (lambda () #t))");
+        assert!(result.is_err(), "add-hook with non-string name should fail");
+
+        // Second arg not callable
+        let result = runtime.eval("(add-hook \"test\" 42)");
+        assert!(
+            result.is_err(),
+            "add-hook with non-callable callback should fail"
         );
     }
 }
