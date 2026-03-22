@@ -63,6 +63,13 @@ pub fn lookup<'a>(registry: &'a CommandRegistry, name: &str) -> Option<&'a Comma
     registry.commands.get(name)
 }
 
+/// Removes a command handler by name.
+///
+/// If no command with the given name exists, this is a no-op.
+pub fn remove(registry: &mut CommandRegistry, name: &str) {
+    registry.commands.remove(name);
+}
+
 /// Executes a named command against the given editor state.
 ///
 /// Looks up the command by name in the state's command registry,
@@ -133,6 +140,24 @@ mod tests {
         let result = execute(&mut state, "set-msg");
         assert!(result.is_ok());
         assert_eq!(state.message, Some("executed".to_string()));
+    }
+
+    #[test]
+    fn given_registered_command_when_removed_then_lookup_returns_none() {
+        let mut registry = CommandRegistry::new();
+        register(
+            &mut registry,
+            "ephemeral".to_string(),
+            CommandHandler::Native(|_state| Ok(())),
+        );
+        assert!(lookup(&registry, "ephemeral").is_some());
+
+        remove(&mut registry, "ephemeral");
+
+        assert!(
+            lookup(&registry, "ephemeral").is_none(),
+            "command should be gone after remove"
+        );
     }
 
     #[test]

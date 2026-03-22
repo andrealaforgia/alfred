@@ -308,6 +308,256 @@ mod tests {
         assert!(registry::list_plugins(&reg).is_empty());
     }
 
+    // -- Acceptance test: command and hook tracking per plugin --
+
+    #[test]
+    fn unload_removes_plugin_commands_and_hooks_while_other_plugin_survives() {
+        // Given: two plugins loaded with commands and hooks tracked per plugin
+        let tmp = TempDir::new().unwrap();
+        let meta_a = create_test_plugin(
+            &tmp,
+            "plugin-a",
+            ";;; name: plugin-a\n;;; version: 1.0.0\n;;; description: first\n(+ 1 1)\n",
+        );
+        let meta_b = create_test_plugin(
+            &tmp,
+            "plugin-b",
+            ";;; name: plugin-b\n;;; version: 1.0.0\n;;; description: second\n(+ 2 2)\n",
+        );
+        let (runtime, state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+
+        // Load plugin-a and register commands/hooks for it
+        registry::load_plugin(&mut reg, meta_a, &runtime).unwrap();
+        {
+            let mut editor = state.borrow_mut();
+            alfred_core::command::register(
+                &mut editor.commands,
+                "cmd-a1".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+            alfred_core::command::register(
+                &mut editor.commands,
+                "cmd-a2".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+        }
+        registry::track_command(&mut reg, "plugin-a", "cmd-a1");
+        registry::track_command(&mut reg, "plugin-a", "cmd-a2");
+        registry::track_hook(&mut reg, "plugin-a", "on-save-a");
+
+        // Load plugin-b and register commands/hooks for it
+        registry::load_plugin(&mut reg, meta_b, &runtime).unwrap();
+        {
+            let mut editor = state.borrow_mut();
+            alfred_core::command::register(
+                &mut editor.commands,
+                "cmd-b1".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+        }
+        registry::track_command(&mut reg, "plugin-b", "cmd-b1");
+        registry::track_hook(&mut reg, "plugin-b", "on-save-b");
+
+        // When: unload plugin-a, passing the editor state for cleanup
+        {
+            let mut editor = state.borrow_mut();
+            registry::unload_plugin_with_cleanup(&mut reg, "plugin-a", &mut editor.commands)
+                .unwrap();
+        }
+
+        // Then: plugin-a's commands are removed from CommandRegistry
+        {
+            let editor = state.borrow();
+            assert!(
+                alfred_core::command::lookup(&editor.commands, "cmd-a1").is_none(),
+                "cmd-a1 should be removed after unloading plugin-a"
+            );
+            assert!(
+                alfred_core::command::lookup(&editor.commands, "cmd-a2").is_none(),
+                "cmd-a2 should be removed after unloading plugin-a"
+            );
+        }
+
+        // And: plugin-b's commands survive
+        {
+            let editor = state.borrow();
+            assert!(
+                alfred_core::command::lookup(&editor.commands, "cmd-b1").is_some(),
+                "cmd-b1 should survive after unloading plugin-a"
+            );
+        }
+
+        // And: plugin-a's hooks are removed from registry tracking
+        assert!(
+            registry::plugin_hooks(&reg, "plugin-a").is_none(),
+            "plugin-a hooks should be gone after unload"
+        );
+
+        // And: plugin-b's hooks survive
+        assert_eq!(
+            registry::plugin_hooks(&reg, "plugin-b"),
+            Some(vec!["on-save-b".to_string()]),
+            "plugin-b hooks should survive after unloading plugin-a"
+        );
+    }
+
+    // -- Unit tests: command and hook tracking --
+
+    #[test]
+    fn track_command_associates_command_with_plugin() {
+        let tmp = TempDir::new().unwrap();
+        let meta = create_test_plugin(
+            &tmp,
+            "tracker",
+            ";;; name: tracker\n;;; version: 1.0.0\n;;; description: tracks\n(+ 1 1)\n",
+        );
+        let (runtime, _state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+        registry::load_plugin(&mut reg, meta, &runtime).unwrap();
+
+        registry::track_command(&mut reg, "tracker", "my-cmd");
+
+        assert_eq!(
+            registry::plugin_commands(&reg, "tracker"),
+            Some(vec!["my-cmd".to_string()]),
+        );
+    }
+
+    #[test]
+    fn track_hook_associates_hook_with_plugin() {
+        let tmp = TempDir::new().unwrap();
+        let meta = create_test_plugin(
+            &tmp,
+            "hooker",
+            ";;; name: hooker\n;;; version: 1.0.0\n;;; description: hooks\n(+ 1 1)\n",
+        );
+        let (runtime, _state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+        registry::load_plugin(&mut reg, meta, &runtime).unwrap();
+
+        registry::track_hook(&mut reg, "hooker", "on-save");
+
+        assert_eq!(
+            registry::plugin_hooks(&reg, "hooker"),
+            Some(vec!["on-save".to_string()]),
+        );
+    }
+
+    #[test]
+    fn unload_with_cleanup_removes_tracked_commands_from_command_registry() {
+        let tmp = TempDir::new().unwrap();
+        let meta = create_test_plugin(
+            &tmp,
+            "removable",
+            ";;; name: removable\n;;; version: 1.0.0\n;;; description: temp\n(+ 1 1)\n",
+        );
+        let (runtime, state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+        registry::load_plugin(&mut reg, meta, &runtime).unwrap();
+
+        // Register a command in CommandRegistry and track it
+        {
+            let mut editor = state.borrow_mut();
+            alfred_core::command::register(
+                &mut editor.commands,
+                "doomed-cmd".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+        }
+        registry::track_command(&mut reg, "removable", "doomed-cmd");
+
+        // Unload with cleanup
+        {
+            let mut editor = state.borrow_mut();
+            registry::unload_plugin_with_cleanup(&mut reg, "removable", &mut editor.commands)
+                .unwrap();
+        }
+
+        // Command should be gone
+        let editor = state.borrow();
+        assert!(alfred_core::command::lookup(&editor.commands, "doomed-cmd").is_none());
+    }
+
+    #[test]
+    fn unload_with_cleanup_removes_tracked_hooks_from_registry() {
+        let tmp = TempDir::new().unwrap();
+        let meta = create_test_plugin(
+            &tmp,
+            "hook-plugin",
+            ";;; name: hook-plugin\n;;; version: 1.0.0\n;;; description: hooks\n(+ 1 1)\n",
+        );
+        let (runtime, _state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+        registry::load_plugin(&mut reg, meta, &runtime).unwrap();
+        registry::track_hook(&mut reg, "hook-plugin", "on-open");
+
+        // Unload with cleanup (no command registry needed for hook-only test)
+        {
+            let mut cmd_reg = alfred_core::command::CommandRegistry::new();
+            registry::unload_plugin_with_cleanup(&mut reg, "hook-plugin", &mut cmd_reg).unwrap();
+        }
+
+        assert!(
+            registry::plugin_hooks(&reg, "hook-plugin").is_none(),
+            "hooks should be gone after unload"
+        );
+    }
+
+    #[test]
+    fn unload_preserves_other_plugin_commands_in_command_registry() {
+        let tmp = TempDir::new().unwrap();
+        let meta_a = create_test_plugin(
+            &tmp,
+            "keeper",
+            ";;; name: keeper\n;;; version: 1.0.0\n;;; description: stays\n(+ 1 1)\n",
+        );
+        let meta_b = create_test_plugin(
+            &tmp,
+            "removed",
+            ";;; name: removed\n;;; version: 1.0.0\n;;; description: goes\n(+ 2 2)\n",
+        );
+        let (runtime, state) = setup_runtime();
+        let mut reg = registry::PluginRegistry::new();
+        registry::load_plugin(&mut reg, meta_a, &runtime).unwrap();
+        registry::load_plugin(&mut reg, meta_b, &runtime).unwrap();
+
+        // Register commands for both
+        {
+            let mut editor = state.borrow_mut();
+            alfred_core::command::register(
+                &mut editor.commands,
+                "keep-cmd".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+            alfred_core::command::register(
+                &mut editor.commands,
+                "remove-cmd".to_string(),
+                alfred_core::command::CommandHandler::Native(|_s| Ok(())),
+            );
+        }
+        registry::track_command(&mut reg, "keeper", "keep-cmd");
+        registry::track_command(&mut reg, "removed", "remove-cmd");
+
+        // Unload "removed"
+        {
+            let mut editor = state.borrow_mut();
+            registry::unload_plugin_with_cleanup(&mut reg, "removed", &mut editor.commands)
+                .unwrap();
+        }
+
+        // "keeper" command survives
+        let editor = state.borrow();
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "keep-cmd").is_some(),
+            "keep-cmd should survive unloading 'removed' plugin"
+        );
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "remove-cmd").is_none(),
+            "remove-cmd should be gone after unloading 'removed' plugin"
+        );
+    }
+
     #[test]
     fn list_plugins_returns_all_loaded_plugins() {
         let tmp = TempDir::new().unwrap();
