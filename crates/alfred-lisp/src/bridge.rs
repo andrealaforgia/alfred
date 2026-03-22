@@ -11,6 +11,7 @@ use std::rc::Rc;
 use rust_lisp::model::{Env, List, RuntimeError, Symbol, Value};
 
 use alfred_core::buffer;
+use alfred_core::command;
 use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::viewport;
@@ -61,6 +62,56 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_cursor_move(env.clone(), state.clone());
     register_message(env.clone(), state.clone());
     register_current_mode(env, state);
+}
+
+/// Registers the `define-command` Lisp primitive.
+///
+/// Usage: `(define-command "name" callback-fn)`
+///
+/// Registers a Lisp function as a named command in the editor's CommandRegistry.
+/// When the command is later executed, the callback is invoked via the Lisp runtime.
+pub fn register_define_command(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+    let lisp_env = runtime.env();
+
+    define_native_closure(&env, "define-command", move |_env, args| {
+        let name = extract_string_arg(&args, "define-command")?;
+
+        let callback = args.get(1).ok_or_else(|| RuntimeError {
+            msg: "define-command: expected 2 arguments (name, callback), got 1".to_string(),
+        })?;
+
+        // Verify the callback is callable (lambda, native func, or native closure)
+        match callback {
+            Value::Lambda(_) | Value::NativeFunc(_) | Value::NativeClosure(_) => {}
+            other => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "define-command: expected callable as second argument, got {}",
+                        other
+                    ),
+                });
+            }
+        }
+
+        let callback_value = callback.clone();
+        let call_env = lisp_env.clone();
+
+        let handler = command::CommandHandler::Dynamic(Rc::new(move |_editor_state| {
+            // Build a call expression: (callback)
+            let call_list: List = vec![callback_value.clone()].into_iter().collect();
+            let call_expr = Value::List(call_list);
+            rust_lisp::interpreter::eval(call_env.clone(), &call_expr)
+                .map(|_| ())
+                .map_err(|e| alfred_core::error::AlfredError::CommandNotFound {
+                    name: format!("lisp callback error: {}", e.msg),
+                })
+        }));
+
+        command::register(&mut state.borrow_mut().commands, name, handler);
+
+        Ok(Value::NIL)
+    });
 }
 
 /// Registers `buffer-insert`: inserts text at the current cursor position.
@@ -553,5 +604,46 @@ mod tests {
 
         let result = runtime.eval("(current-mode)").unwrap();
         assert_eq!(result.as_string(), Some("normal".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: define-command primitive (step 03-05)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_runtime_when_define_command_with_lambda_then_command_registered_in_editor() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+
+        runtime
+            .eval("(define-command \"test-cmd\" (lambda () (message \"invoked\")))")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "test-cmd").is_some(),
+            "define-command should register the command in the editor's CommandRegistry"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_define_command_with_wrong_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+
+        // No args
+        let result = runtime.eval("(define-command)");
+        assert!(result.is_err(), "define-command with no args should fail");
+
+        // First arg not a string
+        let result = runtime.eval("(define-command 42 (lambda () #t))");
+        assert!(
+            result.is_err(),
+            "define-command with non-string name should fail"
+        );
     }
 }

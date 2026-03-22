@@ -663,4 +663,101 @@ mod tests {
         assert_eq!(order.len(), 1);
         assert_eq!(order[0].name, "solo");
     }
+
+    // -- Step 03-05: Acceptance test -- Plugin system wiring --
+
+    #[test]
+    fn plugin_with_define_command_registers_callable_command_and_errors_become_messages() {
+        // Given: a plugins directory with a valid plugin using define-command
+        // and a broken plugin that will fail to load
+        let tmp = TempDir::new().unwrap();
+
+        // Valid test-plugin that defines a command
+        let good_dir = tmp.path().join("test-plugin");
+        fs::create_dir(&good_dir).unwrap();
+        fs::write(
+            good_dir.join("init.lisp"),
+            ";;; name: test-plugin\n\
+             ;;; version: 0.1.0\n\
+             ;;; description: A test plugin that registers a hello command\n\
+             \n\
+             (define-command \"hello\" (lambda () (message \"Hello from test-plugin!\")))\n",
+        )
+        .unwrap();
+
+        // Another valid plugin to verify coexistence
+        let other_dir = tmp.path().join("other-plugin");
+        fs::create_dir(&other_dir).unwrap();
+        fs::write(
+            other_dir.join("init.lisp"),
+            ";;; name: other-plugin\n\
+             ;;; version: 0.2.0\n\
+             ;;; description: Another plugin\n\
+             \n\
+             (define-command \"greet\" (lambda () (message \"Greetings!\")))\n",
+        )
+        .unwrap();
+
+        // Broken plugin (valid metadata, invalid Lisp)
+        let bad_dir = tmp.path().join("broken-plugin");
+        fs::create_dir(&bad_dir).unwrap();
+        fs::write(
+            bad_dir.join("init.lisp"),
+            ";;; name: broken-plugin\n\
+             ;;; version: 0.0.1\n\
+             ;;; description: Will fail\n\
+             \n\
+             (undefined-function-that-does-not-exist)\n",
+        )
+        .unwrap();
+
+        // And: a runtime with bridge primitives including define-command
+        let state = Rc::new(RefCell::new(alfred_core::editor_state::new(80, 24)));
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state.clone());
+        alfred_lisp::bridge::register_define_command(&runtime, state.clone());
+
+        // When: discover, resolve, and load all plugins (collecting errors)
+        let (discovered, discovery_errors) = discovery::scan(tmp.path());
+        let ordered = registry::resolve_load_order(&discovered).unwrap();
+
+        let mut reg = registry::PluginRegistry::new();
+        let mut load_errors: Vec<String> = discovery_errors.iter().map(|e| e.to_string()).collect();
+
+        for plugin_meta in ordered {
+            if let Err(e) = registry::load_plugin(&mut reg, plugin_meta.clone(), &runtime) {
+                load_errors.push(e.to_string());
+            }
+        }
+
+        // Then: the valid plugins' commands are registered
+        let editor = state.borrow();
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "hello").is_some(),
+            "test-plugin's 'hello' command should be registered"
+        );
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "greet").is_some(),
+            "other-plugin's 'greet' command should be registered"
+        );
+
+        // And: the broken plugin produced an error (not a crash)
+        assert!(
+            load_errors.iter().any(|e| e.contains("broken-plugin")),
+            "broken-plugin should have produced a load error, got: {:?}",
+            load_errors
+        );
+
+        // And: both valid plugins are tracked in the registry
+        let loaded_names: Vec<String> = registry::list_plugins(&reg)
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        assert!(loaded_names.contains(&"test-plugin".to_string()));
+        assert!(loaded_names.contains(&"other-plugin".to_string()));
+        assert!(
+            !loaded_names.contains(&"broken-plugin".to_string()),
+            "broken-plugin should NOT be in registry"
+        );
+    }
 }
