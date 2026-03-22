@@ -5,6 +5,8 @@ edition = "2021"
 description = "Plugin system for Alfred (stub)"
 
 [dependencies]
+alfred-lisp = { version = "0.1.0", path = "../alfred-lisp" }
+alfred-core = { version = "0.1.0", path = "../alfred-core" }
 
 [dev-dependencies]
 tempfile = "3"

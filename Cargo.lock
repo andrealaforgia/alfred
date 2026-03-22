@@ -36,6 +36,8 @@ dependencies = [
 name = "alfred-plugin"
 version = "0.1.0"
 dependencies = [
+ "alfred-core",
+ "alfred-lisp",
  "tempfile",
 ]
 

@@ -14,6 +14,12 @@ pub enum PluginError {
     },
     /// Failed to parse metadata from init.lisp.
     ParseError { path: PathBuf, reason: String },
+    /// Plugin with this name is already loaded.
+    AlreadyLoaded { name: String },
+    /// Plugin not found in registry.
+    NotFound { name: String },
+    /// Plugin init.lisp evaluation failed.
+    InitError { name: String, reason: String },
 }
 
 impl std::fmt::Display for PluginError {
@@ -27,6 +33,15 @@ impl std::fmt::Display for PluginError {
             }
             PluginError::ParseError { path, reason } => {
                 write!(f, "parse error in {}: {}", path.display(), reason)
+            }
+            PluginError::AlreadyLoaded { name } => {
+                write!(f, "plugin already loaded: {}", name)
+            }
+            PluginError::NotFound { name } => {
+                write!(f, "plugin not found: {}", name)
+            }
+            PluginError::InitError { name, reason } => {
+                write!(f, "init error for plugin {}: {}", name, reason)
             }
         }
     }
