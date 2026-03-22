@@ -36,6 +36,33 @@ impl CommandRegistry {
             commands: HashMap::new(),
         }
     }
+
+    /// Looks up a command and returns a cloned handle that can be called
+    /// after the registry borrow is dropped. This avoids holding a borrow
+    /// on the registry (and thus EditorState) during command execution.
+    pub fn extract_handler(&self, name: &str) -> Option<ClonedHandler> {
+        self.commands.get(name).map(|h| match h {
+            CommandHandler::Native(f) => ClonedHandler::Native(*f),
+            CommandHandler::Dynamic(f) => ClonedHandler::Dynamic(Rc::clone(f)),
+        })
+    }
+}
+
+/// A cloned command handler that can be called independently of the registry.
+pub enum ClonedHandler {
+    Native(fn(&mut EditorState) -> Result<()>),
+    Dynamic(Rc<DynCommandFn>),
+}
+
+impl ClonedHandler {
+    /// Execute this handler. For Dynamic handlers used with Rc<RefCell<EditorState>>,
+    /// the caller must ensure no other borrow is held on EditorState.
+    pub fn call(self, state: &mut EditorState) -> Result<()> {
+        match self {
+            ClonedHandler::Native(f) => f(state),
+            ClonedHandler::Dynamic(f) => f(state),
+        }
+    }
 }
 
 impl Default for CommandRegistry {

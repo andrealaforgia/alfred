@@ -288,12 +288,35 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                         eval_and_display(state_rc, runtime, &expr);
                     }
                     DeferredAction::ExecCommand(cmd_name) => {
-                        // Clear command-line text, then execute
+                        // Extract handler from registry, dropping the borrow BEFORE calling.
+                        let handler = {
+                            let state = state_rc.borrow();
+                            state.commands.extract_handler(&cmd_name)
+                        }; // borrow dropped
+
                         state_rc.borrow_mut().message = None;
-                        let result =
-                            alfred_core::command::execute(&mut state_rc.borrow_mut(), &cmd_name);
+
+                        let result = match handler {
+                            Some(alfred_core::command::ClonedHandler::Native(f)) => {
+                                // Native handlers are plain fn pointers — safe to call with borrow
+                                f(&mut state_rc.borrow_mut())
+                            }
+                            Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
+                                // Dynamic (Lisp) handlers capture their own Rc<RefCell<EditorState>>
+                                // and call borrow_mut() internally. We must NOT hold a borrow here.
+                                // Pass a temporary EditorState that the closure ignores.
+                                let mut dummy = alfred_core::editor_state::new(1, 1);
+                                f(&mut dummy)
+                            }
+                            None => {
+                                state_rc.borrow_mut().message =
+                                    Some(format!("Unknown command: {}", cmd_name));
+                                Ok(())
+                            }
+                        };
                         if let Err(e) = result {
-                            state_rc.borrow_mut().message = Some(format!("Command error: {}", e));
+                            state_rc.borrow_mut().message =
+                                Some(format!("Command error: {}", e));
                         }
                     }
                     DeferredAction::None => {}
