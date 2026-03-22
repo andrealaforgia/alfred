@@ -1,0 +1,205 @@
+{
+  "overall_score": 82,
+  "summary": "Alfred is a well-architected, well-documented Rust editor at M2 of 7 milestones. Clean crate separation with compile-time boundary enforcement, thorough ADR documentation, and solid test coverage for implemented scope. Main gaps: stub crates not yet implemented, no property-based testing, and one hotspot file (app.rs) accumulating complexity.",
+  "documentation_coverage": {
+    "readme_present": false,
+    "adrs_count": 6,
+    "inline_doc_ratio": 0.92,
+    "api_doc_present": true,
+    "notes": "Every public function and type has doc comments. 6 ADRs cover all major decisions. 5 design documents with C4 diagrams, data models, and component boundaries. No README.md at repository root. CLAUDE.md serves as project-level documentation."
+  },
+  "architecture_clarity": {
+    "layers_detected": 3,
+    "layer_names": ["pure-core (alfred-core)", "bridge (alfred-lisp)", "shell (alfred-tui, alfred-bin)"],
+    "circular_dependencies": 0,
+    "entry_points_identified": 1,
+    "entry_point_files": ["crates/alfred-bin/src/main.rs"],
+    "naming_consistency_score": 95,
+    "notes": "Crate boundaries enforce layer separation at compile time. No circular dependencies. Consistent module-level free function style throughout alfred-core. Naming follows Rust conventions with clear Given/When/Then test names."
+  },
+  "crate_metrics": {
+    "alfred-core": {
+      "source_files": 7,
+      "lines_of_code": 1256,
+      "test_count": 55,
+      "assertion_count": 95,
+      "external_dependencies": ["ropey", "thiserror"],
+      "alfred_dependencies": [],
+      "status": "implemented"
+    },
+    "alfred-lisp": {
+      "source_files": 3,
+      "lines_of_code": 1066,
+      "test_count": 37,
+      "assertion_count": 65,
+      "external_dependencies": ["rust_lisp", "thiserror"],
+      "alfred_dependencies": ["alfred-core"],
+      "status": "implemented"
+    },
+    "alfred-tui": {
+      "source_files": 3,
+      "lines_of_code": 1206,
+      "test_count": 38,
+      "assertion_count": 60,
+      "external_dependencies": ["crossterm", "ratatui"],
+      "alfred_dependencies": ["alfred-core", "alfred-lisp"],
+      "status": "implemented"
+    },
+    "alfred-plugin": {
+      "source_files": 1,
+      "lines_of_code": 18,
+      "test_count": 1,
+      "assertion_count": 1,
+      "external_dependencies": [],
+      "alfred_dependencies": [],
+      "status": "stub"
+    },
+    "alfred-bin": {
+      "source_files": 1,
+      "lines_of_code": 56,
+      "test_count": 0,
+      "assertion_count": 0,
+      "external_dependencies": ["crossterm"],
+      "alfred_dependencies": ["alfred-core", "alfred-lisp", "alfred-plugin", "alfred-tui"],
+      "status": "implemented"
+    }
+  },
+  "totals": {
+    "source_files": 16,
+    "lines_of_code": 3726,
+    "test_count": 131,
+    "assertion_count": 225,
+    "assertions_per_test": 1.72
+  },
+  "hotspot_count": 5,
+  "top_hotspots": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "complexity_score": 861,
+      "change_frequency": 5,
+      "hotspot_score": 4305,
+      "notes": "Largest file. Accumulated event loop, key conversion, key dispatch, command-line mode, and Lisp eval wiring across M1 and M2. Three distinct responsibilities mixed together."
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "complexity_score": 557,
+      "change_frequency": 3,
+      "hotspot_score": 1671,
+      "notes": "All 7 bridge primitives. Already refactored once (commit 992ac0d) to extract helper functions. Well-structured after refactor."
+    },
+    {
+      "file": "crates/alfred-lisp/src/runtime.rs",
+      "complexity_score": 487,
+      "change_frequency": 2,
+      "hotspot_score": 974,
+      "notes": "Lisp runtime wrapper + performance baseline tests (large test module). Stable after M2."
+    },
+    {
+      "file": "crates/alfred-tui/src/renderer.rs",
+      "complexity_score": 322,
+      "change_frequency": 2,
+      "hotspot_score": 644,
+      "notes": "Clean rendering code. Generic over Backend for testability. Will need extension for M4 (gutter) and M5 (status bar)."
+    },
+    {
+      "file": "crates/alfred-core/src/cursor.rs",
+      "complexity_score": 318,
+      "change_frequency": 2,
+      "hotspot_score": 636,
+      "notes": "Pure movement functions with thorough tests. Stable and well-tested."
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 1,
+    "medium": 3,
+    "low": 2
+  },
+  "risks": [
+    {
+      "severity": "high",
+      "title": "Plugin API sufficiency for modal editing",
+      "description": "The walking skeleton's thesis depends on M7 (Vim modal editing as a Lisp plugin). If the primitive API is insufficient, the architecture claim fails. M6 and M7 will be the definitive tests.",
+      "mitigation": "Kill signals defined in roadmap. ADR-004 provides fallback to Janet if performance is the bottleneck."
+    },
+    {
+      "severity": "medium",
+      "title": "app.rs complexity growth",
+      "description": "At 861 lines with 3 distinct responsibilities, app.rs is the top hotspot. Each milestone adds to it. M6 will require replacing hardcoded key dispatch with keymap resolution.",
+      "mitigation": "Extract key_conversion.rs and key_dispatch.rs before M6."
+    },
+    {
+      "severity": "medium",
+      "title": "rust_lisp maintenance trajectory",
+      "description": "rust_lisp has ~300 GitHub stars and fewer contributors than Janet. If the project becomes inactive, Alfred depends on it.",
+      "mitigation": "rust_lisp is simple enough to fork. Migration to Janet is isolated to alfred-lisp crate."
+    },
+    {
+      "severity": "medium",
+      "title": "Design docs diverge from implementation",
+      "description": "component-boundaries.md states 'no Rc<RefCell>' but M2 implementation uses it for Lisp bridge sharing.",
+      "mitigation": "Update design docs to reflect M2 reality."
+    },
+    {
+      "severity": "low",
+      "title": "Rc<RefCell> runtime borrow panics",
+      "description": "RefCell provides runtime borrow checking. Violating borrow rules panics instead of compile error.",
+      "mitigation": "Confined to event loop boundary. Careful borrow scoping in app.rs (drop before eval). Well-tested paths."
+    },
+    {
+      "severity": "low",
+      "title": "Property-based testing not adopted",
+      "description": "CLAUDE.md prescribes property-based testing as default strategy, but no proptest/quickcheck usage found.",
+      "mitigation": "Low immediate risk. Can be adopted incrementally for cursor and buffer operations."
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Extract app.rs into focused modules before M6",
+      "description": "Split alfred-tui/src/app.rs into three files: key_conversion.rs (pure crossterm-to-domain mapping), key_dispatch.rs (pure key event handling and command-line mode), and app.rs (event loop I/O only). This will make the M6 keybinding refactor significantly cleaner.",
+      "effort": "medium"
+    },
+    {
+      "priority": 2,
+      "title": "Update design docs to reflect Rc<RefCell> reality",
+      "description": "component-boundaries.md section 5 states the design avoids Rc<RefCell>. Update to document the M2 decision to use it for Lisp bridge sharing, with rationale (single-threaded execution makes RefCell safe).",
+      "effort": "low"
+    },
+    {
+      "priority": 3,
+      "title": "Add property-based tests for cursor and buffer modules",
+      "description": "CLAUDE.md prescribes property-based testing as the default strategy. Buffer operations (insert/delete roundtrip) and cursor movements (ensure_within_bounds is idempotent) are natural candidates for proptest.",
+      "effort": "medium"
+    },
+    {
+      "priority": 4,
+      "title": "Add README.md to repository root",
+      "description": "The repository has CLAUDE.md but no README.md. A brief README with project description, build instructions, and architecture overview would help new contributors.",
+      "effort": "low"
+    },
+    {
+      "priority": 5,
+      "title": "Implement acceptance tests in tests/acceptance/",
+      "description": "The acceptance test files for M1 and M2 exist but all tests are #[ignore] with todo!() bodies. These should be enabled and implemented to serve as regression guards across milestones.",
+      "effort": "medium"
+    }
+  ],
+  "git_analysis": {
+    "total_commits": 25,
+    "commits_to_rust_files": 16,
+    "date_range": "2026-03-19 to 2026-03-21",
+    "commit_style": "conventional commits (feat/fix/refactor/chore/test)",
+    "single_author": true,
+    "notes": "All commits in a 3-day window. M1 and M2 implemented sequentially with clear commit boundaries per feature. Commit messages follow conventional commit format with scope."
+  },
+  "score_breakdown": {
+    "documentation_coverage_raw": 90,
+    "documentation_coverage_weighted": 27.0,
+    "architecture_clarity_raw": 92,
+    "architecture_clarity_weighted": 36.8,
+    "hotspot_severity_raw": 60,
+    "hotspot_severity_weighted": 18.0,
+    "notes": "Documentation score: high due to 6 ADRs, inline docs, design docs; small deduction for missing README. Architecture score: high due to clean layers, zero circular deps, consistent naming; small deduction for app.rs accumulation. Hotspot score: moderate due to app.rs being a clear complexity hotspot with growth trajectory."
+  }
+}
