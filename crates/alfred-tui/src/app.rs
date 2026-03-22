@@ -182,9 +182,21 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
             let expression = cmd.strip_prefix("eval ").unwrap().to_string();
             (InputState::Normal, Some(expression))
         }
-        unknown => {
-            state.message = Some(format!("Unknown command: {}", unknown));
-            (InputState::Normal, None)
+        cmd => {
+            // Try executing as a registered command
+            match alfred_core::command::execute(state, cmd) {
+                Ok(()) => {
+                    // Command executed — if it didn't set a message, clear the command line
+                    if state.message.as_ref().map_or(true, |m| m.starts_with(':')) {
+                        state.message = None;
+                    }
+                    (InputState::Normal, None)
+                }
+                Err(_) => {
+                    state.message = Some(format!("Unknown command: {}", cmd));
+                    (InputState::Normal, None)
+                }
+            }
         }
     }
 }
