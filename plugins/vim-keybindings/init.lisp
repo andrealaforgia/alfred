@@ -53,6 +53,7 @@
 (define-key "normal-mode" "Char:%" "match-bracket")
 (define-key "normal-mode" "Char:>" "indent-line")
 (define-key "normal-mode" "Char:<" "unindent-line")
+(define-key "normal-mode" "Char:~" "toggle-case")
 (define-key "normal-mode" "Up" "cursor-up")
 (define-key "normal-mode" "Down" "cursor-down")
 (define-key "normal-mode" "Left" "cursor-left")

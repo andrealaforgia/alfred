@@ -576,6 +576,57 @@ pub fn get_text_range(
     buffer.rope.slice(start..clamped_end).to_string()
 }
 
+/// Toggles the case of the character at the given line and column, returning a new Buffer.
+///
+/// If the character is lowercase, it becomes uppercase and vice versa.
+/// Non-letter characters (digits, punctuation, whitespace) are left unchanged,
+/// but the buffer is still marked as modified and its version incremented.
+/// If the position is at or past the end of the buffer, the buffer is returned unchanged.
+pub fn toggle_case_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
+    let mut rope = buffer.rope.clone();
+    let char_index = line_column_to_char_index(&rope, line, column);
+
+    if char_index >= rope.len_chars() {
+        return buffer.clone();
+    }
+
+    let ch = rope.char(char_index);
+
+    // Skip newline characters -- they are not visible text
+    if ch == '\n' {
+        return buffer.clone();
+    }
+
+    let toggled: String = if ch.is_uppercase() {
+        ch.to_lowercase().collect()
+    } else if ch.is_lowercase() {
+        ch.to_uppercase().collect()
+    } else {
+        // Non-letter character: still produce a new buffer to match vim behavior
+        // where ~ always advances the cursor even on non-letters
+        return Buffer {
+            id: buffer.id,
+            rope,
+            filename: buffer.filename.clone(),
+            file_path: buffer.file_path.clone(),
+            modified: true,
+            version: buffer.version + 1,
+        };
+    };
+
+    rope.remove(char_index..char_index + 1);
+    rope.insert(char_index, &toggled);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -1060,5 +1111,52 @@ mod tests {
         let buffer = super::Buffer::from_string("hello");
         let result = super::delete_char_range(&buffer, 0, 5, 0, 3);
         assert_eq!(super::content(&result), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: toggle_case_at
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_lowercase_char_when_toggle_case_at_then_becomes_uppercase() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::toggle_case_at(&buffer, 0, 0);
+        assert_eq!(super::content(&result), "Hello");
+        assert!(result.is_modified());
+    }
+
+    #[test]
+    fn given_uppercase_char_when_toggle_case_at_then_becomes_lowercase() {
+        let buffer = super::Buffer::from_string("Hello");
+        let result = super::toggle_case_at(&buffer, 0, 0);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_non_letter_char_when_toggle_case_at_then_content_unchanged_but_version_incremented() {
+        let buffer = super::Buffer::from_string("a1b");
+        let version_before = buffer.version();
+        let result = super::toggle_case_at(&buffer, 0, 1); // '1' is not a letter
+        assert_eq!(super::content(&result), "a1b");
+        assert_eq!(result.version(), version_before + 1);
+    }
+
+    #[test]
+    fn given_position_past_end_when_toggle_case_at_then_buffer_unchanged() {
+        let buffer = super::Buffer::from_string("hi");
+        let version_before = buffer.version();
+        let result = super::toggle_case_at(&buffer, 0, 99);
+        assert_eq!(super::content(&result), "hi");
+        assert_eq!(result.version(), version_before);
+    }
+
+    #[test]
+    fn given_empty_buffer_when_toggle_case_at_then_buffer_unchanged() {
+        let buffer = super::Buffer::from_string("");
+        let version_before = buffer.version();
+        let result = super::toggle_case_at(&buffer, 0, 0);
+        assert_eq!(super::content(&result), "");
+        assert_eq!(result.version(), version_before);
     }
 }

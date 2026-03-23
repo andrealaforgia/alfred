@@ -707,6 +707,30 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Toggle case (vim ~): toggle char case and advance cursor ---
+    crate::command::register(
+        &mut state.commands,
+        "toggle-case".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
+            if line_content.is_empty() {
+                return Ok(());
+            }
+            if s.cursor.column >= line_content.len() {
+                return Ok(());
+            }
+            push_undo(s);
+            s.buffer = crate::buffer::toggle_case_at(&s.buffer, s.cursor.line, s.cursor.column);
+            // Advance cursor right (within line, like vim ~)
+            let new_line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
+            let max_col = new_line_content.len().saturating_sub(1);
+            if s.cursor.column < max_col {
+                s.cursor = crate::cursor::new(s.cursor.line, s.cursor.column + 1);
+            }
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
     // --- Visual mode commands ---
     crate::command::register(
         &mut state.commands,
@@ -2116,5 +2140,106 @@ mod tests {
     fn given_new_editor_when_created_then_marks_empty() {
         let state = editor_state::new(80, 24);
         assert!(state.marks.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: toggle-case command (vim ~)
+    // Test Budget: 6 behaviors x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_lowercase_char_when_toggle_case_then_uppercased_and_cursor_advances() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "toggle-case");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello");
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_uppercase_char_when_toggle_case_then_lowercased_and_cursor_advances() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("HELLO");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "toggle-case");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "hELLO");
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_non_letter_when_toggle_case_then_unchanged_and_cursor_advances() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("1abc");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "toggle-case");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "1abc");
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_cursor_at_last_char_when_toggle_case_then_toggled_and_cursor_stays() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("ab");
+        state.cursor = crate::cursor::new(0, 1); // cursor on 'b', last char
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "toggle-case");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "aB");
+        // Cursor stays at last char position (cannot advance further on line)
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_empty_buffer_when_toggle_case_then_noop() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "toggle-case");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "");
+        assert_eq!(state.cursor.column, 0);
+        // No undo snapshot pushed for empty buffer
+        assert!(state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn given_toggle_case_when_undo_then_original_restored() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Toggle case: h -> H
+        command::execute(&mut state, "toggle-case").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "Hello");
+
+        // Undo: should restore to "hello"
+        command::execute(&mut state, "undo").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hello");
     }
 }
