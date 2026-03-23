@@ -293,6 +293,35 @@ pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) 
 }
 
 // ---------------------------------------------------------------------------
+// Pure function: compute status bar content from hook dispatch
+// ---------------------------------------------------------------------------
+
+/// Computes status bar content by dispatching the "render-status" hook.
+///
+/// If no hook is registered, returns None (no status bar rendered).
+/// Otherwise, joins all hook results into a single status string.
+pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
+    let results = alfred_core::hook::dispatch_hook(&state.hooks, "render-status", &[]);
+
+    if results.is_empty() {
+        return None;
+    }
+
+    // Concatenate all hook results into a single status string
+    let status: String = results
+        .into_iter()
+        .flat_map(|r| r.into_iter())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if status.is_empty() {
+        None
+    } else {
+        Some(status)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // I/O: event loop
 // ---------------------------------------------------------------------------
 
@@ -329,12 +358,23 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             compute_gutter_content(&state)
         };
 
+        // Compute status bar content by dispatching "render-status" hook
+        let status_content = {
+            let state = state_rc.borrow();
+            compute_status_content(&state)
+        };
+
         // Update gutter_width on viewport and render
         {
             let mut state = state_rc.borrow_mut();
             state.viewport.gutter_width = gutter_width;
         }
-        renderer::render_frame(&mut terminal, &state_rc.borrow(), &gutter_lines)?;
+        renderer::render_frame(
+            &mut terminal,
+            &state_rc.borrow(),
+            &gutter_lines,
+            status_content.as_deref(),
+        )?;
 
         if let Event::Key(ct_key) = ct_event::read()? {
             // Only handle key press events (not release/repeat)

@@ -13,6 +13,7 @@ use alfred_core::buffer;
 use alfred_core::editor_state::EditorState;
 use ratatui::backend::Backend;
 use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
@@ -27,13 +28,15 @@ pub fn render_frame<B: Backend>(
     terminal: &mut Terminal<B>,
     state: &EditorState,
     gutter_lines: &[String],
+    status_line: Option<&str>,
 ) -> io::Result<()> {
     let gutter_width = state.viewport.gutter_width;
 
     terminal.draw(|frame| {
         let area = frame.area();
+        let has_status = status_line.is_some();
 
-        let content_area = compute_text_area(area, state.message.is_some());
+        let content_area = compute_text_area(area, state.message.is_some(), has_status);
 
         if gutter_width > 0 {
             let (gutter_area, buffer_area) = split_gutter_and_text(content_area, gutter_width);
@@ -51,6 +54,13 @@ pub fn render_frame<B: Backend>(
             frame.render_widget(text_widget, content_area);
         }
 
+        if let Some(status) = status_line {
+            let status_area = compute_status_area(area, state.message.is_some());
+            let status_style = Style::default().bg(Color::DarkGray).fg(Color::White);
+            let status_widget = Paragraph::new(status).style(status_style);
+            frame.render_widget(status_widget, status_area);
+        }
+
         if let Some(ref message) = state.message {
             let message_area = compute_message_area(area);
             let message_widget = Paragraph::new(message.as_str());
@@ -65,16 +75,35 @@ pub fn render_frame<B: Backend>(
 
 /// Computes the area available for buffer text content.
 ///
-/// When a message is present, the last row is reserved for the message line,
-/// so the text area height is reduced by one.
-fn compute_text_area(total_area: Rect, has_message: bool) -> Rect {
+/// When a message is present, the last row is reserved for the message line.
+/// When a status bar is present, one additional row is reserved above the message.
+/// The text area height is reduced accordingly.
+fn compute_text_area(total_area: Rect, has_message: bool, has_status: bool) -> Rect {
     let message_rows = if has_message { 1 } else { 0 };
-    let text_height = total_area.height.saturating_sub(message_rows);
+    let status_rows = if has_status { 1 } else { 0 };
+    let reserved = message_rows + status_rows;
+    let text_height = total_area.height.saturating_sub(reserved);
     Rect {
         x: total_area.x,
         y: total_area.y,
         width: total_area.width,
         height: text_height,
+    }
+}
+
+/// Computes the area for the status bar.
+///
+/// The status bar occupies one row between the text area and the message line.
+/// When a message is present, the status bar is on the second-to-last row.
+/// When no message, the status bar is on the last row.
+fn compute_status_area(total_area: Rect, has_message: bool) -> Rect {
+    let message_rows = if has_message { 1 } else { 0 };
+    let status_row = total_area.height.saturating_sub(1 + message_rows);
+    Rect {
+        x: total_area.x,
+        y: total_area.y + status_row,
+        width: total_area.width,
+        height: 1,
     }
 }
 
@@ -219,7 +248,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: the buffer content appears on the correct rows
         let rendered = terminal.backend();
@@ -258,7 +287,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        let result = super::render_frame(&mut terminal, &state, &[]);
+        let result = super::render_frame(&mut terminal, &state, &[], None);
 
         // Then: rendering succeeds without panic
         assert!(result.is_ok());
@@ -280,7 +309,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: the cursor position in the backend reflects (column=3, row=1)
         let mut backend = terminal.backend_mut().clone();
@@ -303,7 +332,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: row 0 shows Line2 (the first visible line after scroll)
         let rendered = terminal.backend();
@@ -327,7 +356,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: last row (2) shows the message
         let rendered = terminal.backend();
@@ -355,7 +384,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: last row (2) is blank
         let rendered = terminal.backend();
@@ -387,7 +416,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with gutter content
-        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
 
         // Then: the gutter content appears on the left side of each row
         let rendered = terminal.backend();
@@ -440,7 +469,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with gutter
-        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
 
         // Then: cursor column is offset by gutter_width (3 + 4 = 7)
         let mut backend = terminal.backend_mut().clone();
@@ -462,7 +491,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with empty gutter lines (backwards compatible)
-        super::render_frame(&mut terminal, &state, &[]).unwrap();
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
 
         // Then: text starts at column 0
         let rendered = terminal.backend();
@@ -496,7 +525,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &gutter_lines).unwrap();
+        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
 
         // Then: row 0 has gutter content
         let rendered = terminal.backend();
@@ -526,5 +555,154 @@ mod tests {
         (0..width)
             .map(|col| buffer[(col, row)].symbol().to_string())
             .collect::<String>()
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (05-01): status bar rendering
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_no_status_line_when_rendered_then_text_area_uses_full_height() {
+        // Given: 5-row terminal, no message, no status
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("A\nB\nC\nD\nE");
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: render with no status line
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+
+        // Then: all 5 rows show buffer content (full height)
+        let rendered = terminal.backend();
+        let row4 = extract_row_text(rendered.buffer(), 4);
+        assert!(
+            row4.starts_with("E"),
+            "Row 4 should show 'E' but was: '{}'",
+            row4
+        );
+    }
+
+    #[test]
+    fn given_status_line_without_message_when_rendered_then_status_on_last_row_and_text_reduced() {
+        // Given: 5-row terminal, no message, status present
+        // Layout: rows 0-3 text, row 4 status
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("A\nB\nC\nD\nE");
+        state.message = None;
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: render with status line, no message
+        super::render_frame(&mut terminal, &state, &[], Some("status text")).unwrap();
+
+        // Then: status appears on last row (4)
+        let rendered = terminal.backend();
+        let status_row = extract_row_text(rendered.buffer(), 4);
+        assert!(
+            status_row.starts_with("status text"),
+            "Status row (4) should start with 'status text' but was: '{}'",
+            status_row
+        );
+
+        // And: text area reduced -- row 3 should show "D" (only 4 text rows)
+        let row3 = extract_row_text(rendered.buffer(), 3);
+        assert!(
+            row3.starts_with("D"),
+            "Row 3 should show 'D' but was: '{}'",
+            row3
+        );
+    }
+
+    #[test]
+    fn given_status_line_with_message_when_rendered_then_text_height_reduced_by_two() {
+        // Given: 5-row terminal, message + status present
+        // Layout: rows 0-2 text (3 rows), row 3 status, row 4 message
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("A\nB\nC\nD\nE");
+        state.message = Some("msg".to_string());
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: render with status + message
+        super::render_frame(&mut terminal, &state, &[], Some("bar")).unwrap();
+
+        // Then: text rows 0-2 contain "A", "B", "C"
+        let rendered = terminal.backend();
+        let row2 = extract_row_text(rendered.buffer(), 2);
+        assert!(
+            row2.starts_with("C"),
+            "Row 2 should show 'C' but was: '{}'",
+            row2
+        );
+
+        // And: row 3 is status bar
+        let row3 = extract_row_text(rendered.buffer(), 3);
+        assert!(
+            row3.starts_with("bar"),
+            "Row 3 (status) should start with 'bar' but was: '{}'",
+            row3
+        );
+
+        // And: row 4 is message
+        let row4 = extract_row_text(rendered.buffer(), 4);
+        assert!(
+            row4.starts_with("msg"),
+            "Row 4 (message) should start with 'msg' but was: '{}'",
+            row4
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (05-01): status bar rendering between text area and
+    // message line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_status_line_and_message_when_rendered_then_status_appears_between_text_and_message() {
+        // Given: an EditorState with buffer content and a message
+        // Terminal: 20 cols x 6 rows
+        // Expected layout:
+        //   Row 0: "Hello"   (text)
+        //   Row 1: "World"   (text)
+        //   Row 2: (empty)   (text)
+        //   Row 3: (empty)   (text)
+        //   Row 4: "-- INSERT --" (status bar)
+        //   Row 5: "Saved"   (message)
+        let mut state = editor_state::new(20, 6);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.message = Some("Saved".to_string());
+
+        let backend = TestBackend::new(20, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with a status line
+        super::render_frame(&mut terminal, &state, &[], Some("-- INSERT --")).unwrap();
+
+        // Then: status bar appears on row 4 (second-to-last)
+        let rendered = terminal.backend();
+        let status_row = extract_row_text(rendered.buffer(), 4);
+        assert!(
+            status_row.starts_with("-- INSERT --"),
+            "Status row (4) should start with '-- INSERT --' but was: '{}'",
+            status_row
+        );
+
+        // And: message appears on last row (5)
+        let message_row = extract_row_text(rendered.buffer(), 5);
+        assert!(
+            message_row.starts_with("Saved"),
+            "Message row (5) should start with 'Saved' but was: '{}'",
+            message_row
+        );
+
+        // And: text area occupies rows 0-3 (4 rows, reduced from 5 by status bar)
+        let row0 = extract_row_text(rendered.buffer(), 0);
+        assert!(row0.starts_with("Hello"), "Row 0 was: '{}'", row0);
+        let row1 = extract_row_text(rendered.buffer(), 1);
+        assert!(row1.starts_with("World"), "Row 1 was: '{}'", row1);
     }
 }
