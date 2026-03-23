@@ -277,6 +277,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             s.cursor = crate::cursor::move_to_first_non_blank(s.cursor, &s.buffer);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -287,6 +288,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             s.cursor = crate::cursor::move_right_on_line(s.cursor, &s.buffer);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -297,6 +299,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             s.cursor = crate::cursor::move_to_line_end_for_insert(s.cursor, &s.buffer);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -305,6 +308,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "open-line-below".to_string(),
         crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
             let current_line = s.cursor.line;
             let line_len = crate::buffer::get_line(&s.buffer, current_line)
                 .map(|l| l.trim_end_matches('\n').len())
@@ -312,6 +316,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
             s.cursor = crate::cursor::new(current_line + 1, 0);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -320,10 +325,12 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "open-line-above".to_string(),
         crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
             let current_line = s.cursor.line;
             s.buffer = crate::buffer::insert_at(&s.buffer, current_line, 0, "\n");
             s.cursor = crate::cursor::new(current_line, 0);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -376,6 +383,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             s.buffer = crate::buffer::replace_line(&s.buffer, s.cursor.line, "");
             s.cursor = crate::cursor::new(s.cursor.line, 0);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),
@@ -387,6 +395,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             push_undo(s);
             s.buffer = crate::buffer::delete_to_line_end(&s.buffer, s.cursor.line, s.cursor.column);
             s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             Ok(())
         }),

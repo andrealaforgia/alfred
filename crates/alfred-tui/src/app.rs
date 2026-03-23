@@ -129,18 +129,38 @@ pub(crate) fn handle_key_event(
         }
         Some(cmd) => (InputState::Normal, DeferredAction::ExecCommand(cmd)),
         None => {
-            // Self-insert: only in insert mode with active keymaps, when key
-            // is an unbound printable character, insert it at cursor and advance.
+            // Self-insert: only in insert mode with active keymaps.
+            // Handles printable characters and Enter (newline).
             if state.mode == alfred_core::editor_state::MODE_INSERT
                 && !state.active_keymaps.is_empty()
             {
-                if let KeyCode::Char(c) = key.code {
-                    let line = state.cursor.line;
-                    let col = state.cursor.column;
-                    state.buffer =
-                        alfred_core::buffer::insert_at(&state.buffer, line, col, &c.to_string());
-                    state.cursor = alfred_core::cursor::move_right(state.cursor, &state.buffer);
-                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                match key.code {
+                    KeyCode::Char(c) => {
+                        alfred_core::editor_state::push_undo(state);
+                        let line = state.cursor.line;
+                        let col = state.cursor.column;
+                        state.buffer = alfred_core::buffer::insert_at(
+                            &state.buffer,
+                            line,
+                            col,
+                            &c.to_string(),
+                        );
+                        state.cursor = alfred_core::cursor::move_right(state.cursor, &state.buffer);
+                        state.viewport =
+                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    }
+                    KeyCode::Enter => {
+                        alfred_core::editor_state::push_undo(state);
+                        let line = state.cursor.line;
+                        let col = state.cursor.column;
+                        state.buffer =
+                            alfred_core::buffer::insert_at(&state.buffer, line, col, "\n");
+                        // Move cursor to beginning of new line
+                        state.cursor = alfred_core::cursor::new(line + 1, 0);
+                        state.viewport =
+                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    }
+                    _ => {}
                 }
             }
             (InputState::Normal, DeferredAction::None)
