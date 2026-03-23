@@ -519,6 +519,40 @@ pub fn unindent_line(buffer: &Buffer, line: usize, indent_width: usize) -> Buffe
     replace_line(buffer, line, unindented)
 }
 
+/// Deletes a range of text from (from_line, from_col) to (to_line, to_col) exclusive.
+///
+/// The range is character-based: all characters from the start position up to
+/// (but not including) the end position are removed. If the start position is
+/// at or past the end position, the buffer is returned unchanged.
+/// Positions are clamped to valid buffer boundaries.
+pub fn delete_char_range(
+    buffer: &Buffer,
+    from_line: usize,
+    from_col: usize,
+    to_line: usize,
+    to_col: usize,
+) -> Buffer {
+    let mut rope = buffer.rope.clone();
+    let start = line_column_to_char_index(&rope, from_line, from_col);
+    let end = line_column_to_char_index(&rope, to_line, to_col);
+
+    if start >= end || start >= rope.len_chars() {
+        return buffer.clone();
+    }
+
+    let clamped_end = end.min(rope.len_chars());
+    rope.remove(start..clamped_end);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -960,6 +994,48 @@ mod tests {
     fn given_line_with_tab_when_unindent_then_tab_removed() {
         let buffer = super::Buffer::from_string("\thello");
         let result = super::unindent_line(&buffer, 0, 4);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // delete_char_range tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_single_line_when_delete_char_range_within_line_then_chars_removed() {
+        let buffer = super::Buffer::from_string("hello world");
+        // Delete "hello " (cols 0..6)
+        let result = super::delete_char_range(&buffer, 0, 0, 0, 6);
+        assert_eq!(super::content(&result), "world");
+    }
+
+    #[test]
+    fn given_single_line_when_delete_char_range_from_middle_to_end_then_tail_removed() {
+        let buffer = super::Buffer::from_string("hello world");
+        // Delete " world" (cols 5..11)
+        let result = super::delete_char_range(&buffer, 0, 5, 0, 11);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_multiline_when_delete_char_range_across_lines_then_range_removed() {
+        let buffer = super::Buffer::from_string("hello\nworld\nbye");
+        // Delete from (0,3) to (1,3): "lo\nwor"
+        let result = super::delete_char_range(&buffer, 0, 3, 1, 3);
+        assert_eq!(super::content(&result), "helld\nbye");
+    }
+
+    #[test]
+    fn given_buffer_when_delete_char_range_same_position_then_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::delete_char_range(&buffer, 0, 3, 0, 3);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_buffer_when_delete_char_range_start_past_end_then_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::delete_char_range(&buffer, 0, 5, 0, 3);
         assert_eq!(super::content(&result), "hello");
     }
 }

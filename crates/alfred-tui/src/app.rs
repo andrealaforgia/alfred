@@ -71,6 +71,17 @@ fn convert_modifiers(ct_mods: CtKeyModifiers) -> Modifiers {
 // Pure function: handle a key event by updating EditorState
 // ---------------------------------------------------------------------------
 
+/// Vim operator that waits for a motion to define a range.
+///
+/// Operators are the first half of the operator-motion composition:
+/// pressing `d` enters `OperatorPending(Delete)`, then the next key
+/// is resolved as a motion that defines the range to act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Operator {
+    /// Delete text in the motion range
+    Delete,
+}
+
 /// Tracks multi-key input state (e.g., command-line after `:`)
 #[derive(Debug, PartialEq)]
 pub(crate) enum InputState {
@@ -82,6 +93,129 @@ pub(crate) enum InputState {
     Search(String),
     /// Waiting for a character key to complete a find/til command (f/F/t/T)
     PendingChar(alfred_core::editor_state::CharFindKind),
+    /// Waiting for a motion key to complete an operator (d, c, y)
+    OperatorPending(Operator),
+}
+
+/// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
+///
+/// Line-wise motions operate on entire lines (the current line plus the motion target line).
+/// Character-wise motions operate on the character range between the cursor and the motion endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionKind {
+    CharWise,
+    LineWise,
+}
+
+/// Resolves a command name to a cursor motion, returning the new cursor position and motion kind.
+///
+/// This is a pure function: given the current editor state and a command name,
+/// it computes where the cursor would move to, and whether the motion is
+/// character-wise or line-wise. Returns None if the command is not a recognized motion.
+fn execute_motion(
+    state: &EditorState,
+    motion_cmd: &str,
+) -> Option<(alfred_core::cursor::Cursor, MotionKind)> {
+    match motion_cmd {
+        "cursor-word-forward" => Some((
+            alfred_core::cursor::move_word_forward(state.cursor, &state.buffer),
+            MotionKind::CharWise,
+        )),
+        "cursor-word-end" => {
+            let end_cursor = alfred_core::cursor::move_word_end(state.cursor, &state.buffer);
+            // word-end motion is inclusive: advance one past the endpoint so the last char is included
+            Some((
+                alfred_core::cursor::Cursor {
+                    line: end_cursor.line,
+                    column: end_cursor.column + 1,
+                },
+                MotionKind::CharWise,
+            ))
+        }
+        "cursor-line-end" => {
+            let line_len = alfred_core::buffer::get_line(&state.buffer, state.cursor.line)
+                .map(|l| l.trim_end_matches('\n').len())
+                .unwrap_or(0);
+            // $ motion is inclusive of the last character on the line
+            Some((
+                alfred_core::cursor::Cursor {
+                    line: state.cursor.line,
+                    column: line_len,
+                },
+                MotionKind::CharWise,
+            ))
+        }
+        "cursor-line-start" => Some((
+            alfred_core::cursor::move_to_line_start(state.cursor, &state.buffer),
+            MotionKind::CharWise,
+        )),
+        "cursor-word-backward" => Some((
+            alfred_core::cursor::move_word_backward(state.cursor, &state.buffer),
+            MotionKind::CharWise,
+        )),
+        "cursor-right" => Some((
+            alfred_core::cursor::move_right(state.cursor, &state.buffer),
+            MotionKind::CharWise,
+        )),
+        "cursor-left" => Some((
+            alfred_core::cursor::move_left(state.cursor, &state.buffer),
+            MotionKind::CharWise,
+        )),
+        "cursor-down" => Some((
+            alfred_core::cursor::move_down(state.cursor, &state.buffer),
+            MotionKind::LineWise,
+        )),
+        "cursor-up" => Some((
+            alfred_core::cursor::move_up(state.cursor, &state.buffer),
+            MotionKind::LineWise,
+        )),
+        _ => None,
+    }
+}
+
+/// Executes a delete operator with the given motion, modifying editor state.
+///
+/// For character-wise motions, deletes text from min(cursor, motion) to max(cursor, motion).
+/// For line-wise motions, deletes entire lines from the current line to the motion target line.
+/// Pushes undo state before any mutation.
+fn execute_delete_with_motion(
+    state: &mut EditorState,
+    motion_cursor: alfred_core::cursor::Cursor,
+    motion_kind: MotionKind,
+) {
+    alfred_core::editor_state::push_undo(state);
+
+    match motion_kind {
+        MotionKind::CharWise => {
+            let (from, to) = if (state.cursor.line, state.cursor.column)
+                <= (motion_cursor.line, motion_cursor.column)
+            {
+                (state.cursor, motion_cursor)
+            } else {
+                (motion_cursor, state.cursor)
+            };
+            state.buffer = alfred_core::buffer::delete_char_range(
+                &state.buffer,
+                from.line,
+                from.column,
+                to.line,
+                to.column,
+            );
+            state.cursor = alfred_core::cursor::ensure_within_bounds(from, &state.buffer);
+        }
+        MotionKind::LineWise => {
+            let min_line = state.cursor.line.min(motion_cursor.line);
+            let max_line = state.cursor.line.max(motion_cursor.line);
+            // Delete lines from max to min (reverse order to preserve indices)
+            for line in (min_line..=max_line).rev() {
+                state.buffer = alfred_core::buffer::delete_line(&state.buffer, line);
+            }
+            state.cursor = alfred_core::cursor::new(min_line, 0);
+            state.cursor = alfred_core::cursor::ensure_within_bounds(state.cursor, &state.buffer);
+        }
+    }
+
+    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
 }
 
 /// Handles a key event by updating the editor state.
@@ -204,6 +338,41 @@ pub(crate) fn handle_key_event(
         return (InputState::Normal, DeferredAction::None, None);
     }
 
+    // OperatorPending mode: waiting for a motion key after an operator (d).
+    // Resolve the next key as a motion, compute the range, execute the operator.
+    if let InputState::OperatorPending(operator) = input_state {
+        // Escape cancels the operator
+        if key.code == KeyCode::Escape {
+            return (InputState::Normal, DeferredAction::None, None);
+        }
+
+        match operator {
+            Operator::Delete => {
+                // Check if same operator key pressed again (dd = delete line)
+                if key.code == KeyCode::Char('d') {
+                    alfred_core::editor_state::push_undo(state);
+                    state.buffer =
+                        alfred_core::buffer::delete_line(&state.buffer, state.cursor.line);
+                    state.cursor =
+                        alfred_core::cursor::ensure_within_bounds(state.cursor, &state.buffer);
+                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    return (InputState::Normal, DeferredAction::None, None);
+                }
+
+                // Look up the key in the keymap to get a command name
+                if let Some(cmd_name) = alfred_core::editor_state::resolve_key(state, key) {
+                    if let Some((motion_cursor, motion_kind)) = execute_motion(state, &cmd_name) {
+                        execute_delete_with_motion(state, motion_cursor, motion_kind);
+                        return (InputState::Normal, DeferredAction::None, None);
+                    }
+                }
+
+                // Unrecognized motion key: cancel operator
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+        }
+    }
+
     // Normal mode only: accumulate digit keys into a count prefix.
     // 1-9 starts a new count; 0-9 appends when a count is already pending.
     // 0 alone (no pending count) falls through to keymap resolution (cursor-line-start).
@@ -260,6 +429,11 @@ pub(crate) fn handle_key_event(
         ),
         Some(ref cmd) if cmd == "enter-char-til-backward" => (
             InputState::PendingChar(alfred_core::editor_state::CharFindKind::TilBackward),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-operator-delete" => (
+            InputState::OperatorPending(Operator::Delete),
             DeferredAction::None,
             None,
         ),
@@ -2993,17 +3167,19 @@ mod tests {
             );
         }
 
-        dispatch_key_rc(
+        // dd = operator-pending delete + repeat key to delete entire line
+        let mut is = dispatch_key_rc(
             &state_rc,
             KeyEvent::plain(KeyCode::Char('d')),
             super::InputState::Normal,
         );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
         {
             let state = state_rc.borrow();
             let content = alfred_core::buffer::content(&state.buffer);
             assert!(
                 !content.contains("Second line"),
-                "d should delete 'Second line', got: '{}'",
+                "dd should delete 'Second line', got: '{}'",
                 content
             );
             assert!(

@@ -1921,8 +1921,8 @@ mod tests {
         );
         assert_eq!(
             normal_keymap.get(&KeyEvent::plain(KeyCode::Char('d'))),
-            Some(&"delete-line".to_string()),
-            "d should be bound to delete-line"
+            Some(&"enter-operator-delete".to_string()),
+            "d should be bound to enter-operator-delete"
         );
 
         // And: insert-mode keymap exists with Escape bound to enter-normal-mode
