@@ -1006,3 +1006,141 @@ class TestIndent:
         content = read_file(path).rstrip("\n")
         assert content == "hello", f"Expected 'hello', got: {repr(content)}"
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Operator-pending mode (dw, cw, yy+p, text objects)
+# -------------------------------------------------------------------------
+
+class TestOperatorPending:
+    """Verify d/c/y operators compose with motions and text objects."""
+
+    def test_dw_deletes_word(self):
+        """dw on 'hello world' at col 0 deletes 'hello '."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "world", f"Expected 'world' after dw, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_d_dollar_deletes_to_end(self):
+        """d$ on 'hello world' at col 5 deletes ' world'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to col 5
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "$")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "hello", f"Expected 'hello' after d$, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dd_deletes_line(self):
+        """dd on two-line file deletes the first line."""
+        path = create_temp_file("first\nsecond")
+        child = spawn_alfred(path)
+
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "d")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "second" in content, f"Expected 'second' after dd, got: {repr(content)}"
+        assert "first" not in content, f"'first' should be deleted, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_cw_changes_word(self):
+        """cw on 'hello world' deletes word, enters insert, type 'goodbye', :wq."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        send_keys(child, "c")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        # Now in insert mode — type replacement
+        send_keys(child, "goodbye ")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "goodbye" in content, f"Expected 'goodbye' after cw, got: {repr(content)}"
+        assert "world" in content, f"Expected 'world' preserved, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_yy_p_duplicates_line(self):
+        """yy then p duplicates the current line."""
+        path = create_temp_file("only line")
+        child = spawn_alfred(path)
+
+        # yy = yank line
+        send_keys(child, "y")
+        time.sleep(0.1)
+        send_keys(child, "y")
+        time.sleep(0.3)
+
+        # p = paste below
+        send_keys(child, "p")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        lines = [l for l in content.split("\n") if l.strip()]
+        assert len(lines) >= 2, f"Expected 2 lines after yy+p, got: {repr(content)}"
+        assert lines[0].strip() == "only line", f"First line: {repr(lines[0])}"
+        os.unlink(path)
+
+    def test_diw_deletes_inner_word(self):
+        """diw on 'hello world' with cursor on 'world' deletes 'world'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to 'world' (w jumps to next word start)
+        send_keys(child, "w")
+        time.sleep(0.2)
+
+        # diw = delete inner word
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "i")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "world" not in content, f"'world' should be deleted, got: {repr(content)}"
+        os.unlink(path)
