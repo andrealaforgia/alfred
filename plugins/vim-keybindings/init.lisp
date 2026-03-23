@@ -38,10 +38,14 @@
 (define-key "normal-mode" "Ctrl:u" "scroll-half-page-up")
 (define-key "normal-mode" "Char::" "enter-command-mode")
 
-;; Create insert-mode keymap with Escape to return to normal mode and Backspace
+;; Create insert-mode keymap with Escape, Backspace, and arrow keys
 (make-keymap "insert-mode")
 (define-key "insert-mode" "Escape" "enter-normal-mode")
 (define-key "insert-mode" "Backspace" "delete-backward")
+(define-key "insert-mode" "Up" "cursor-up")
+(define-key "insert-mode" "Down" "cursor-down")
+(define-key "insert-mode" "Left" "cursor-left")
+(define-key "insert-mode" "Right" "cursor-right")
 
 ;; Define mode-switching commands
 (define-command "enter-insert-mode" (lambda () (set-mode "insert")))
