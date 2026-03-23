@@ -58,6 +58,8 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(buffer-filename)` -- return the buffer's filename or empty string if unnamed
 /// - `(buffer-modified?)` -- return T if buffer modified, F otherwise
 /// - `(save-buffer)` -- save buffer to its file path; `(save-buffer "path")` saves to explicit path
+/// - `(set-cursor-shape "mode" "shape")` -- set cursor shape for a mode
+/// - `(get-cursor-shape "mode")` -- get cursor shape name for a mode
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -71,6 +73,8 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_buffer_filename(env.clone(), state.clone());
     register_buffer_modified(env.clone(), state.clone());
     register_save_buffer(env.clone(), state.clone());
+    register_set_cursor_shape(env.clone(), state.clone());
+    register_get_cursor_shape(env.clone(), state.clone());
     register_set_mode(env, state);
 }
 
@@ -643,6 +647,56 @@ fn register_current_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>)
     define_native_closure(&env, "current-mode", move |_env, _args| {
         let editor = state.borrow();
         Ok(Value::String(editor.mode.clone()))
+    });
+}
+
+/// Registers `set-cursor-shape`: sets the cursor shape for a given mode.
+///
+/// Usage: `(set-cursor-shape "mode-name" "shape-name")`
+///
+/// Valid shape names: "default", "block", "steady-block", "blinking-block",
+/// "bar", "steady-bar", "blinking-bar", "underline", "steady-underline",
+/// "blinking-underline".
+///
+/// Returns NIL on success. Returns error for invalid shape names.
+fn register_set_cursor_shape(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-cursor-shape", move |_env, args| {
+        let mode_name = extract_string_arg_at(&args, 0, "set-cursor-shape", "mode-name")?;
+        let shape_name = extract_string_arg_at(&args, 1, "set-cursor-shape", "shape-name")?;
+
+        if !alfred_core::editor_state::is_valid_cursor_shape(&shape_name) {
+            return Err(RuntimeError {
+                msg: format!(
+                    "set-cursor-shape: invalid shape \"{}\". Valid shapes: {}",
+                    shape_name,
+                    alfred_core::editor_state::VALID_CURSOR_SHAPES.join(", ")
+                ),
+            });
+        }
+
+        state
+            .borrow_mut()
+            .cursor_shapes
+            .insert(mode_name, shape_name);
+
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `get-cursor-shape`: returns the cursor shape name for a given mode.
+///
+/// Usage: `(get-cursor-shape "mode-name")`
+///
+/// Returns the shape name as a string, or NIL if no shape is configured for the mode.
+fn register_get_cursor_shape(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "get-cursor-shape", move |_env, args| {
+        let mode_name = extract_string_arg(&args, "get-cursor-shape")?;
+
+        let editor = state.borrow();
+        match editor.cursor_shapes.get(&mode_name) {
+            Some(shape) => Ok(Value::String(shape.clone())),
+            None => Ok(Value::NIL),
+        }
     });
 }
 
@@ -2281,5 +2335,136 @@ mod tests {
             "Theme should be empty without plugin, but has {} entries",
             editor.theme.len()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: set-cursor-shape + get-cursor-shape round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_and_get_cursor_shape_then_round_trips() {
+        // Given: an editor state with core primitives registered
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // When: set-cursor-shape is called for insert mode with "blinking-bar"
+        runtime
+            .eval("(set-cursor-shape \"insert\" \"blinking-bar\")")
+            .unwrap();
+
+        // Then: get-cursor-shape returns "blinking-bar" for insert mode
+        let result = runtime.eval("(get-cursor-shape \"insert\")").unwrap();
+        assert_eq!(result.as_string(), Some("blinking-bar".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: set-cursor-shape primitive
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_with_valid_shape_then_updates_state() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(set-cursor-shape \"normal\" \"blinking-block\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(
+            editor.cursor_shapes.get("normal"),
+            Some(&"blinking-block".to_string())
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_with_invalid_shape_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-cursor-shape \"normal\" \"triangle\")");
+        assert!(result.is_err(), "Invalid shape name should return error");
+    }
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_with_no_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-cursor-shape)");
+        assert!(result.is_err(), "No args should return error");
+    }
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_with_one_arg_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-cursor-shape \"normal\")");
+        assert!(result.is_err(), "One arg should return error");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: get-cursor-shape primitive
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_default_state_when_get_cursor_shape_for_normal_then_returns_block() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-cursor-shape \"normal\")").unwrap();
+        assert_eq!(result.as_string(), Some("block".to_string()));
+    }
+
+    #[test]
+    fn given_default_state_when_get_cursor_shape_for_insert_then_returns_bar() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-cursor-shape \"insert\")").unwrap();
+        assert_eq!(result.as_string(), Some("bar".to_string()));
+    }
+
+    #[test]
+    fn given_runtime_when_get_cursor_shape_for_unknown_mode_then_returns_nil() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-cursor-shape \"visual\")").unwrap();
+        assert_eq!(result.inner().clone(), Value::NIL);
+    }
+
+    #[test]
+    fn given_runtime_when_get_cursor_shape_no_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-cursor-shape)");
+        assert!(result.is_err(), "No args should return error");
+    }
+
+    #[test]
+    fn given_runtime_when_set_cursor_shape_for_custom_mode_then_get_returns_it() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(set-cursor-shape \"visual\" \"underline\")")
+            .unwrap();
+
+        let result = runtime.eval("(get-cursor-shape \"visual\")").unwrap();
+        assert_eq!(result.as_string(), Some("underline".to_string()));
     }
 }

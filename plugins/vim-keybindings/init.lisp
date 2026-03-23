@@ -51,6 +51,10 @@
 (define-command "enter-insert-mode" (lambda () (set-mode "insert")))
 (define-command "enter-normal-mode" (lambda () (set-mode "normal")))
 
+;; Set mode-aware cursor shapes
+(set-cursor-shape "normal" "block")
+(set-cursor-shape "insert" "bar")
+
 ;; Start in normal mode
 (set-active-keymap "normal-mode")
 (set-mode "normal")

@@ -10,7 +10,8 @@
 use std::io;
 
 use alfred_core::buffer;
-use alfred_core::editor_state::EditorState;
+use alfred_core::editor_state::{self, EditorState};
+use crossterm::cursor::SetCursorStyle;
 use ratatui::backend::Backend;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
@@ -233,6 +234,36 @@ fn compute_cursor_position(state: &EditorState) -> Position {
     Position::new(terminal_column, terminal_row)
 }
 
+/// Converts a cursor shape name string to a crossterm `SetCursorStyle`.
+///
+/// Returns `None` for "default" (which requires `DefaultUserShape`), or
+/// `Some(style)` for all other recognized shape names. Unrecognized names
+/// return `None` as a safe fallback.
+fn shape_name_to_cursor_style(shape_name: &str) -> Option<SetCursorStyle> {
+    match shape_name {
+        "block" | "steady-block" => Some(SetCursorStyle::SteadyBlock),
+        "blinking-block" => Some(SetCursorStyle::BlinkingBlock),
+        "bar" | "steady-bar" => Some(SetCursorStyle::SteadyBar),
+        "blinking-bar" => Some(SetCursorStyle::BlinkingBar),
+        "underline" | "steady-underline" => Some(SetCursorStyle::SteadyUnderScore),
+        "blinking-underline" => Some(SetCursorStyle::BlinkingUnderScore),
+        "default" => Some(SetCursorStyle::DefaultUserShape),
+        _ => None,
+    }
+}
+
+/// Sets the terminal cursor shape based on the current editor mode.
+///
+/// Looks up the cursor shape name configured for the current mode in
+/// `state.cursor_shapes`, converts it to a crossterm cursor style, and
+/// emits the escape sequence to the terminal. If no shape is configured
+/// or the shape name is unrecognized, defaults to `DefaultUserShape`.
+pub fn apply_cursor_shape(state: &EditorState) -> io::Result<()> {
+    let shape_name = editor_state::cursor_shape_for_mode(state);
+    let style = shape_name_to_cursor_style(shape_name).unwrap_or(SetCursorStyle::DefaultUserShape);
+    crossterm::execute!(io::stdout(), style)
+}
+
 /// Enters raw mode for terminal input handling.
 ///
 /// Raw mode disables line buffering, echo, and special key processing,
@@ -291,6 +322,8 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Reset cursor to default shape before leaving
+        let _ = crossterm::execute!(io::stdout(), SetCursorStyle::DefaultUserShape);
         // Reverse order: leave alternate screen first, then disable raw mode
         let _ = leave_alternate_screen();
         let _ = exit_raw_mode();

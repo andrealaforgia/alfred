@@ -53,6 +53,8 @@ pub struct EditorState {
     pub redo_stack: Vec<UndoSnapshot>,
     pub theme: Theme,
     pub named_themes: HashMap<String, Theme>,
+    /// Maps mode name to cursor shape name (e.g., "normal" -> "block", "insert" -> "bar").
+    pub cursor_shapes: HashMap<String, String>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -80,6 +82,42 @@ pub fn resolve_key(state: &EditorState, key: KeyEvent) -> Option<String> {
         }
     }
     None
+}
+
+/// All recognized cursor shape names.
+///
+/// These names can be used with `set-cursor-shape` to configure the terminal
+/// cursor appearance per mode.
+pub const VALID_CURSOR_SHAPES: &[&str] = &[
+    "default",
+    "block",
+    "steady-block",
+    "blinking-block",
+    "bar",
+    "steady-bar",
+    "blinking-bar",
+    "underline",
+    "steady-underline",
+    "blinking-underline",
+];
+
+/// Returns true if the given shape name is a recognized cursor shape.
+///
+/// This is a pure validation function with no side effects.
+pub fn is_valid_cursor_shape(shape_name: &str) -> bool {
+    VALID_CURSOR_SHAPES.contains(&shape_name)
+}
+
+/// Looks up the cursor shape name for the current mode.
+///
+/// Returns the configured shape name for the given mode, or "default" if
+/// no shape has been configured for that mode.
+pub fn cursor_shape_for_mode(state: &EditorState) -> &str {
+    state
+        .cursor_shapes
+        .get(&state.mode)
+        .map(|s| s.as_str())
+        .unwrap_or("default")
 }
 
 /// Registers built-in native commands for cursor movement and mode switching.
@@ -478,6 +516,10 @@ pub fn redo(state: &mut EditorState) {
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {
+    let mut cursor_shapes = HashMap::new();
+    cursor_shapes.insert(MODE_NORMAL.to_string(), "block".to_string());
+    cursor_shapes.insert(MODE_INSERT.to_string(), "bar".to_string());
+
     EditorState {
         buffer: Buffer::from_string(""),
         cursor: crate::cursor::new(0, 0),
@@ -494,6 +536,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         redo_stack: Vec::new(),
         theme: crate::theme::new_theme(),
         named_themes: HashMap::new(),
+        cursor_shapes,
     }
 }
 
@@ -1201,5 +1244,79 @@ mod tests {
                 label
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: cursor_shapes on EditorState
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_new_editor_state_then_default_cursor_shapes_are_block_and_bar() {
+        let state = editor_state::new(80, 24);
+        assert_eq!(
+            state.cursor_shapes.get("normal"),
+            Some(&"block".to_string())
+        );
+        assert_eq!(state.cursor_shapes.get("insert"), Some(&"bar".to_string()));
+    }
+
+    #[test]
+    fn given_editor_in_normal_mode_when_cursor_shape_for_mode_then_returns_block() {
+        let state = editor_state::new(80, 24);
+        assert_eq!(editor_state::cursor_shape_for_mode(&state), "block");
+    }
+
+    #[test]
+    fn given_editor_in_insert_mode_when_cursor_shape_for_mode_then_returns_bar() {
+        let mut state = editor_state::new(80, 24);
+        state.mode = "insert".to_string();
+        assert_eq!(editor_state::cursor_shape_for_mode(&state), "bar");
+    }
+
+    #[test]
+    fn given_editor_in_unknown_mode_when_cursor_shape_for_mode_then_returns_default() {
+        let mut state = editor_state::new(80, 24);
+        state.mode = "visual".to_string();
+        assert_eq!(editor_state::cursor_shape_for_mode(&state), "default");
+    }
+
+    #[test]
+    fn given_custom_cursor_shape_when_cursor_shape_for_mode_then_returns_custom_shape() {
+        let mut state = editor_state::new(80, 24);
+        state
+            .cursor_shapes
+            .insert("normal".to_string(), "blinking-bar".to_string());
+        assert_eq!(editor_state::cursor_shape_for_mode(&state), "blinking-bar");
+    }
+
+    #[test]
+    fn given_valid_shape_names_when_is_valid_cursor_shape_then_returns_true() {
+        let valid_names = [
+            "default",
+            "block",
+            "steady-block",
+            "blinking-block",
+            "bar",
+            "steady-bar",
+            "blinking-bar",
+            "underline",
+            "steady-underline",
+            "blinking-underline",
+        ];
+        for name in &valid_names {
+            assert!(
+                editor_state::is_valid_cursor_shape(name),
+                "'{}' should be valid",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn given_invalid_shape_name_when_is_valid_cursor_shape_then_returns_false() {
+        assert!(!editor_state::is_valid_cursor_shape("triangle"));
+        assert!(!editor_state::is_valid_cursor_shape(""));
+        assert!(!editor_state::is_valid_cursor_shape("BLOCK"));
     }
 }
