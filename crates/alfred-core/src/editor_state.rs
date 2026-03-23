@@ -55,6 +55,10 @@ pub struct EditorState {
     pub named_themes: HashMap<String, Theme>,
     /// Maps mode name to cursor shape name (e.g., "normal" -> "block", "insert" -> "bar").
     pub cursor_shapes: HashMap<String, String>,
+    /// The most recent search pattern (stored for `n`/`N` repeat).
+    pub search_pattern: Option<String>,
+    /// True means last search was forward (`/`), false means backward (`?`).
+    pub search_forward: bool,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -478,6 +482,60 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Search repeat commands: n (next) and N (prev) ---
+    crate::command::register(
+        &mut state.commands,
+        "search-next".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(ref pattern) = s.search_pattern.clone() {
+                let found = if s.search_forward {
+                    crate::buffer::find_forward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
+                } else {
+                    crate::buffer::find_backward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
+                };
+                match found {
+                    Some((line, col)) => {
+                        s.cursor = crate::cursor::new(line, col);
+                        s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+                        s.message = None;
+                    }
+                    None => {
+                        s.message = Some(format!("Pattern not found: {}", pattern));
+                    }
+                }
+            } else {
+                s.message = Some("No previous search pattern".to_string());
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "search-prev".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(ref pattern) = s.search_pattern.clone() {
+                // search-prev is the opposite direction of the last search
+                let found = if s.search_forward {
+                    crate::buffer::find_backward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
+                } else {
+                    crate::buffer::find_forward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
+                };
+                match found {
+                    Some((line, col)) => {
+                        s.cursor = crate::cursor::new(line, col);
+                        s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+                        s.message = None;
+                    }
+                    None => {
+                        s.message = Some(format!("Pattern not found: {}", pattern));
+                    }
+                }
+            } else {
+                s.message = Some("No previous search pattern".to_string());
+            }
+            Ok(())
+        }),
+    );
 }
 
 /// Saves a snapshot of the current buffer and cursor onto the undo stack.
@@ -546,6 +604,8 @@ pub fn new(width: u16, height: u16) -> EditorState {
         theme: crate::theme::new_theme(),
         named_themes: HashMap::new(),
         cursor_shapes,
+        search_pattern: None,
+        search_forward: true,
     }
 }
 

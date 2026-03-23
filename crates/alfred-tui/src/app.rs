@@ -78,6 +78,8 @@ pub(crate) enum InputState {
     Normal,
     /// Accumulating a command-line string (entered via `:`)
     Command(String),
+    /// Accumulating a search pattern (entered via `/`)
+    Search(String),
 }
 
 /// Handles a key event by updating the editor state.
@@ -129,6 +131,61 @@ pub(crate) fn handle_key_event(
         }
     }
 
+    // Search mode: accumulating a search pattern after `/`
+    // Count prefix is discarded when entering search mode.
+    if let InputState::Search(mut pattern) = input_state {
+        match key.code {
+            KeyCode::Enter => {
+                if !pattern.is_empty() {
+                    state.search_pattern = Some(pattern.clone());
+                    state.search_forward = true;
+                    // Execute the forward search
+                    let found = alfred_core::buffer::find_forward(
+                        &state.buffer,
+                        state.cursor.line,
+                        state.cursor.column,
+                        &pattern,
+                    );
+                    match found {
+                        Some((line, col)) => {
+                            state.cursor = alfred_core::cursor::new(line, col);
+                            state.viewport =
+                                alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                            state.message = None;
+                        }
+                        None => {
+                            state.message = Some(format!("Pattern not found: {}", pattern));
+                        }
+                    }
+                } else {
+                    state.message = None;
+                }
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+            KeyCode::Escape => {
+                state.message = None;
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+            KeyCode::Backspace => {
+                pattern.pop();
+                if pattern.is_empty() {
+                    state.message = None;
+                    return (InputState::Normal, DeferredAction::None, None);
+                }
+                state.message = Some(format!("/{}", pattern));
+                return (InputState::Search(pattern), DeferredAction::None, None);
+            }
+            KeyCode::Char(c) => {
+                pattern.push(c);
+                state.message = Some(format!("/{}", pattern));
+                return (InputState::Search(pattern), DeferredAction::None, None);
+            }
+            _ => {
+                return (InputState::Search(pattern), DeferredAction::None, None);
+            }
+        }
+    }
+
     // Normal mode: accumulate digit keys into a count prefix.
     // 1-9 starts a new count; 0-9 appends when a count is already pending.
     // 0 alone (no pending count) falls through to keymap resolution (cursor-line-start).
@@ -152,6 +209,15 @@ pub(crate) fn handle_key_event(
             // Discard count when entering command mode
             (
                 InputState::Command(String::new()),
+                DeferredAction::None,
+                None,
+            )
+        }
+        Some(ref cmd) if cmd == "enter-search-mode" => {
+            state.message = Some("/".to_string());
+            // Discard count when entering search mode
+            (
+                InputState::Search(String::new()),
                 DeferredAction::None,
                 None,
             )
@@ -3643,5 +3709,185 @@ mod tests {
             state.cursor.line, 20,
             "Cursor should be at line 20 after 20j"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: set up keymaps with search bindings (/, n, N)
+    // -----------------------------------------------------------------------
+
+    fn setup_search_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        setup_standard_keymaps(state);
+        // Add search keybindings to the existing keymap
+        let keymap = state.keymaps.get_mut("global").unwrap();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('/')),
+            "enter-search-mode".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('n')),
+            "search-next".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('N')),
+            "search-prev".to_string(),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: forward search (/ pattern Enter)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_slash_typed_then_enters_search_mode() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello World");
+        setup_search_keymaps(&mut state);
+
+        let is = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+
+        assert_eq!(is, super::InputState::Search(String::new()));
+        assert_eq!(state.message, Some("/".to_string()));
+    }
+
+    #[test]
+    fn given_search_mode_when_pattern_typed_and_enter_pressed_then_cursor_moves_to_match() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello World\nfoo bar\nbaz World end");
+        setup_search_keymaps(&mut state);
+
+        // Enter search mode
+        let is = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+
+        // Type "World"
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('W')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('r')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('l')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        assert_eq!(state.message, Some("/World".to_string()));
+
+        // Press Enter to execute search
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), is);
+
+        // Should be back to Normal mode
+        assert_eq!(is, super::InputState::Normal);
+        // Cursor should move to first "World" match after (0,0): at (0, 6)
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 6);
+        // Pattern should be stored
+        assert_eq!(state.search_pattern, Some("World".to_string()));
+    }
+
+    #[test]
+    fn given_search_mode_when_escape_pressed_then_cancels_search() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello World");
+        setup_search_keymaps(&mut state);
+
+        let is = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('t')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.message, None);
+        // Cursor should not have moved
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_search_pattern_not_found_when_enter_pressed_then_shows_error_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello World");
+        setup_search_keymaps(&mut state);
+
+        let is = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+        let _is = handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), is);
+
+        assert_eq!(state.message, Some("Pattern not found: zz".to_string()));
+        // Cursor should not have moved
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: n (search-next) and N (search-prev)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_stored_pattern_when_n_pressed_then_repeats_search_forward() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("aaa\nbbb\naaa\nbbb");
+        setup_search_keymaps(&mut state);
+
+        // Search for "bbb" first
+        let is = handle_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        let is = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        let _is = handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), is);
+
+        // Should be at first "bbb" on line 1
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+
+        // Press n to find next "bbb"
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('n')),
+            super::InputState::Normal,
+        );
+
+        // Should move to second "bbb" on line 3
+        assert_eq!(state.cursor.line, 3);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_stored_pattern_when_shift_n_pressed_then_searches_backward() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("aaa\nbbb\naaa\nbbb");
+        setup_search_keymaps(&mut state);
+
+        // Move cursor to line 3 first
+        state.cursor = cursor::new(3, 0);
+
+        // Set a search pattern
+        state.search_pattern = Some("bbb".to_string());
+        state.search_forward = true;
+
+        // Press N (search-prev) to search backward
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('N')),
+            super::InputState::Normal,
+        );
+
+        // Should find "bbb" on line 1 (searching backward)
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
     }
 }

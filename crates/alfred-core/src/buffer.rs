@@ -369,6 +369,115 @@ pub fn delete_to_line_end(buffer: &Buffer, line: usize, column: usize) -> Buffer
     replace_line(buffer, line, new_content)
 }
 
+/// Searches forward in the buffer for a literal substring, starting after the given position.
+///
+/// Searches from the character after `(start_line, start_col)` to the end of the buffer,
+/// then wraps around from the beginning. Returns the `(line, column)` of the first match,
+/// or `None` if the pattern is not found anywhere in the buffer.
+///
+/// This is a pure function with no side effects.
+pub fn find_forward(
+    buffer: &Buffer,
+    start_line: usize,
+    start_col: usize,
+    pattern: &str,
+) -> Option<(usize, usize)> {
+    if pattern.is_empty() {
+        return None;
+    }
+
+    let total_lines = buffer.rope.len_lines();
+    if total_lines == 0 {
+        return None;
+    }
+
+    // Search from the current line (after start_col) through end of buffer
+    for line_idx in start_line..total_lines {
+        let line_str = buffer.rope.line(line_idx);
+        let line_text = line_str.as_str()?;
+        let search_from = if line_idx == start_line {
+            // Skip past current position so we don't re-find the same match
+            (start_col + 1).min(line_text.len())
+        } else {
+            0
+        };
+        if let Some(col) = line_text[search_from..].find(pattern) {
+            return Some((line_idx, search_from + col));
+        }
+    }
+
+    // Wrap around: search from beginning up to (and including) the start position
+    for line_idx in 0..=start_line.min(total_lines - 1) {
+        let line_str = buffer.rope.line(line_idx);
+        let line_text = line_str.as_str()?;
+        let search_to = if line_idx == start_line {
+            (start_col + pattern.len()).min(line_text.len())
+        } else {
+            line_text.len()
+        };
+        if let Some(col) = line_text[..search_to].find(pattern) {
+            return Some((line_idx, col));
+        }
+    }
+
+    None
+}
+
+/// Searches backward in the buffer for a literal substring, starting before the given position.
+///
+/// Searches from just before `(start_line, start_col)` toward the beginning of the buffer,
+/// then wraps around from the end. Returns the `(line, column)` of the first match found
+/// in reverse order, or `None` if the pattern is not found anywhere.
+///
+/// This is a pure function with no side effects.
+pub fn find_backward(
+    buffer: &Buffer,
+    start_line: usize,
+    start_col: usize,
+    pattern: &str,
+) -> Option<(usize, usize)> {
+    if pattern.is_empty() {
+        return None;
+    }
+
+    let total_lines = buffer.rope.len_lines();
+    if total_lines == 0 {
+        return None;
+    }
+
+    // Search from current line (before start_col) backward to beginning
+    for line_idx in (0..=start_line.min(total_lines - 1)).rev() {
+        let line_str = buffer.rope.line(line_idx);
+        let line_text = line_str.as_str()?;
+        let search_to = if line_idx == start_line {
+            start_col.min(line_text.len())
+        } else {
+            line_text.len()
+        };
+        if let Some(col) = line_text[..search_to].rfind(pattern) {
+            return Some((line_idx, col));
+        }
+    }
+
+    // Wrap around: search from end of buffer back to the start position
+    for line_idx in (start_line.min(total_lines - 1)..total_lines).rev() {
+        let line_str = buffer.rope.line(line_idx);
+        let line_text = line_str.as_str()?;
+        let search_from = if line_idx == start_line {
+            (start_col + 1).min(line_text.len())
+        } else {
+            0
+        };
+        if search_from < line_text.len() {
+            if let Some(col) = line_text[search_from..].rfind(pattern) {
+                return Some((line_idx, search_from + col));
+            }
+        }
+    }
+
+    None
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -668,5 +777,84 @@ mod tests {
         let buffer = super::Buffer::from_string("Hello\nWorld");
         let result = super::delete_to_line_end(&buffer, 0, 0);
         assert_eq!(super::content(&result), "\nWorld");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: find_forward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_find_forward_on_same_line_then_returns_match_position() {
+        let buffer = super::Buffer::from_string("Hello World");
+        let result = super::find_forward(&buffer, 0, 0, "World");
+        assert_eq!(result, Some((0, 6)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_forward_on_next_line_then_returns_match_on_next_line() {
+        let buffer = super::Buffer::from_string("Hello\nWorld here");
+        let result = super::find_forward(&buffer, 0, 0, "World");
+        assert_eq!(result, Some((1, 0)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_forward_wraps_around_then_returns_match_before_start() {
+        let buffer = super::Buffer::from_string("Target line\nSecond line");
+        // Start searching from line 1, col 0 — "Target" is before our position
+        let result = super::find_forward(&buffer, 1, 0, "Target");
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_forward_no_match_then_returns_none() {
+        let buffer = super::Buffer::from_string("Hello\nWorld");
+        let result = super::find_forward(&buffer, 0, 0, "Missing");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_buffer_when_find_forward_starts_after_current_position_then_skips_current() {
+        // Cursor is at the start of "Hello", searching for "Hello" should
+        // start searching from col+1, so it wraps and finds the same "Hello"
+        // only if it wraps around. With one occurrence, it should still find it
+        // by wrapping.
+        let buffer = super::Buffer::from_string("Hello World\nHello Again");
+        // Start at (0, 0) — should find the next "Hello" at (1, 0)
+        let result = super::find_forward(&buffer, 0, 0, "Hello");
+        assert_eq!(result, Some((1, 0)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: find_backward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_find_backward_on_same_line_then_returns_earlier_match() {
+        let buffer = super::Buffer::from_string("Hello World Hello");
+        // Start from col 12, searching backward should find "Hello" at col 0
+        let result = super::find_backward(&buffer, 0, 12, "Hello");
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_backward_on_previous_line_then_returns_match() {
+        let buffer = super::Buffer::from_string("First line\nSecond line");
+        let result = super::find_backward(&buffer, 1, 5, "First");
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_backward_wraps_around_then_returns_match_after_start() {
+        let buffer = super::Buffer::from_string("First line\nTarget here");
+        // Start at (0, 5), searching backward for "Target" — wraps to end of buffer
+        let result = super::find_backward(&buffer, 0, 5, "Target");
+        assert_eq!(result, Some((1, 0)));
+    }
+
+    #[test]
+    fn given_buffer_when_find_backward_no_match_then_returns_none() {
+        let buffer = super::Buffer::from_string("Hello\nWorld");
+        let result = super::find_backward(&buffer, 1, 5, "Missing");
+        assert_eq!(result, None);
     }
 }
