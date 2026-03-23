@@ -1,0 +1,182 @@
+{
+  "overall_score": 88,
+  "summary": "Alfred is a highly comprehensible codebase with strong documentation (6 ADRs), clean architecture (5-crate workspace with zero circular dependencies), and thorough testing (209 tests). The primary comprehensibility risks are the large app.rs hotspot (2721 lines) and the bridge.rs complexity (1675 lines with 15+ registered primitives).",
+  "documentation_coverage": {
+    "readme_present": false,
+    "adrs_count": 6,
+    "inline_doc_ratio": 0.85,
+    "api_doc_present": true,
+    "notes": "Every module has //! doc comments. Every public function has /// doc comments. CLAUDE.md serves as project README. No standalone README.md file."
+  },
+  "architecture_clarity": {
+    "layers_detected": 4,
+    "layer_names": ["pure-domain (alfred-core)", "interpreter-bridge (alfred-lisp)", "plugin-system (alfred-plugin)", "imperative-shell (alfred-tui + alfred-bin)"],
+    "circular_dependencies": 0,
+    "entry_points_identified": 1,
+    "entry_point_files": ["crates/alfred-bin/src/main.rs"],
+    "naming_consistency_score": 92,
+    "naming_notes": "Consistent module-level free function style (e.g., cursor::move_down, buffer::insert_at, viewport::adjust). EditorState uses struct with methods only for new(). All domain operations are free functions taking &state or &mut state."
+  },
+  "crate_structure": {
+    "crate_count": 5,
+    "crates": [
+      {
+        "name": "alfred-core",
+        "lines": 2044,
+        "files": 8,
+        "dependencies_internal": [],
+        "dependencies_external": ["ropey", "thiserror"],
+        "test_count": 67,
+        "purpose": "Pure domain layer: buffer, cursor, viewport, commands, hooks, keymaps, key events, error types"
+      },
+      {
+        "name": "alfred-lisp",
+        "lines": 2162,
+        "files": 3,
+        "dependencies_internal": ["alfred-core"],
+        "dependencies_external": ["rust_lisp", "thiserror"],
+        "test_count": 25,
+        "purpose": "Lisp interpreter integration: LispRuntime wrapper, bridge primitives connecting Lisp to EditorState"
+      },
+      {
+        "name": "alfred-plugin",
+        "lines": 1153,
+        "files": 5,
+        "dependencies_internal": ["alfred-core", "alfred-lisp"],
+        "dependencies_external": [],
+        "test_count": 56,
+        "purpose": "Plugin system: discovery (scan plugins/ dir), metadata parsing, registry, lifecycle, topological sort"
+      },
+      {
+        "name": "alfred-tui",
+        "lines": 3442,
+        "files": 3,
+        "dependencies_internal": ["alfred-core", "alfred-lisp"],
+        "dependencies_external": ["crossterm", "ratatui"],
+        "test_count": 61,
+        "purpose": "Imperative shell: event loop, terminal rendering, key conversion, gutter/status computation"
+      },
+      {
+        "name": "alfred-bin",
+        "lines": 109,
+        "files": 1,
+        "dependencies_internal": ["alfred-core", "alfred-lisp", "alfred-plugin", "alfred-tui"],
+        "dependencies_external": ["crossterm"],
+        "test_count": 0,
+        "purpose": "Binary entry point: CLI parsing, composition root, plugin loading"
+      }
+    ]
+  },
+  "plugin_system": {
+    "plugin_count": 5,
+    "plugins": [
+      {"name": "basic-keybindings", "lines": 22, "description": "Arrow keys, colon, backspace"},
+      {"name": "vim-keybindings", "lines": 27, "description": "Vim-style modal editing (hjkl, modes, x, d, i)"},
+      {"name": "line-numbers", "lines": 9, "description": "Gutter line numbers via render-gutter hook"},
+      {"name": "status-bar", "lines": 9, "description": "Status bar via render-status hook"},
+      {"name": "test-plugin", "lines": 5, "description": "Demo: registers hello command"}
+    ],
+    "total_lisp_lines": 72,
+    "lisp_primitives_registered": 15
+  },
+  "hotspot_count": 5,
+  "top_hotspots": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "complexity_score": 2721,
+      "change_frequency": 22,
+      "risk": "Largest file, most changed. Contains event loop, key dispatch, gutter/status computation, and 61 tests. Candidate for decomposition."
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "complexity_score": 1675,
+      "change_frequency": 11,
+      "risk": "Grows linearly with each new primitive. 15 primitives registered. Consider grouping by domain."
+    },
+    {
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "complexity_score": 383,
+      "change_frequency": 8,
+      "risk": "Aggregate root with builtin commands. Moderate but stable."
+    },
+    {
+      "file": "crates/alfred-plugin/src/lib.rs",
+      "complexity_score": 763,
+      "change_frequency": 7,
+      "risk": "Test-heavy (acceptance + unit tests for full plugin lifecycle). Mostly test code."
+    },
+    {
+      "file": "crates/alfred-tui/src/renderer.rs",
+      "complexity_score": 708,
+      "change_frequency": 4,
+      "risk": "Moderate size but low change frequency. Stable rendering layer."
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 1,
+    "medium": 3,
+    "low": 2
+  },
+  "test_quality": {
+    "total_tests": 209,
+    "test_annotations": 214,
+    "farley_index": 8.3,
+    "tautology_theatre": 0,
+    "test_style": "Acceptance tests first (Given/When/Then), unit tests for behaviors. Test budget: behaviors x 2.",
+    "performance_tests": true,
+    "performance_threshold": "1ms per Lisp primitive eval",
+    "mutation_testing": true,
+    "mutation_strategy": "per-feature"
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Decompose app.rs",
+      "description": "Split the 2721-line app.rs into focused modules: event_loop.rs (run function), key_dispatch.rs (handle_key_event, DeferredAction), gutter.rs (compute_gutter_content), status.rs (compute_status_content). Tests can remain co-located or move to a tests/ subdirectory.",
+      "effort": "medium"
+    },
+    {
+      "priority": 2,
+      "title": "Group bridge primitives by domain",
+      "description": "Reorganize bridge.rs (1675 lines) into sub-modules: bridge/buffer.rs, bridge/cursor.rs, bridge/keymap.rs, bridge/hook.rs. Each module registers its own primitives.",
+      "effort": "medium"
+    },
+    {
+      "priority": 3,
+      "title": "Add a README.md",
+      "description": "The project has CLAUDE.md but no traditional README.md. Add a README with project description, build instructions, architecture overview, and plugin development guide.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Store PluginRegistry on EditorState",
+      "description": "Currently the PluginRegistry is consumed in main.rs and not stored. For runtime plugin reload/unload, it needs to be persisted on EditorState.",
+      "effort": "low"
+    },
+    {
+      "priority": 5,
+      "title": "Document the DeferredAction pattern",
+      "description": "The DeferredAction pattern (and the ClonedHandler pattern) solved real RefCell double-borrow bugs. Document these as an ADR or architecture note for future contributors.",
+      "effort": "low"
+    }
+  ],
+  "score_breakdown": {
+    "documentation_coverage_score": 82,
+    "documentation_weight": 0.3,
+    "documentation_notes": "6 ADRs (excellent), strong inline docs, but no README.md. API docs present via module-level and function-level comments.",
+    "architecture_clarity_score": 95,
+    "architecture_weight": 0.4,
+    "architecture_notes": "Clean 4-layer architecture, zero circular dependencies, compile-time enforcement via Cargo crates, consistent naming, single clear entry point.",
+    "hotspot_severity_score": 84,
+    "hotspot_weight": 0.3,
+    "hotspot_notes": "One significant hotspot (app.rs at 2721 lines, 22 changes). Bridge.rs is secondary. Rest of codebase is well-decomposed."
+  },
+  "git_history": {
+    "total_commits": 50,
+    "date_range": "2026-03-20 to 2026-03-23",
+    "milestone_count": 7,
+    "authors": 1,
+    "conventional_commits": true
+  }
+}
