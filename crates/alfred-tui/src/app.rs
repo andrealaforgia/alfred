@@ -296,10 +296,16 @@ pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) 
 // Pure function: compute status bar content from hook dispatch
 // ---------------------------------------------------------------------------
 
-/// Computes status bar content by dispatching the "render-status" hook.
+/// Computes status bar content by checking if the "render-status" hook has callbacks.
 ///
 /// If no hook is registered, returns None (no status bar rendered).
-/// Otherwise, joins all hook results into a single status string.
+/// Otherwise, builds a formatted status string from EditorState fields:
+/// ` filename.txt  Ln 1, Col 0  [+]  NORMAL `
+///
+/// - Filename: buffer filename or "[No Name]" if unnamed
+/// - Position: 1-indexed line, 0-indexed column
+/// - Modified: "[+]" if buffer modified, omitted if clean
+/// - Mode: current mode name uppercased
 pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
     let results = alfred_core::hook::dispatch_hook(&state.hooks, "render-status", &[]);
 
@@ -307,18 +313,23 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
         return None;
     }
 
-    // Concatenate all hook results into a single status string
-    let status: String = results
-        .into_iter()
-        .flat_map(|r| r.into_iter())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let filename = state.buffer.filename().unwrap_or("[No Name]");
 
-    if status.is_empty() {
-        None
+    let line = state.cursor.line + 1; // 1-indexed for display
+    let col = state.cursor.column;
+
+    let modified = if state.buffer.is_modified() {
+        "  [+]"
     } else {
-        Some(status)
-    }
+        ""
+    };
+
+    let mode = state.mode.to_string().to_uppercase();
+
+    Some(format!(
+        " {}  Ln {}, Col {}{}  {} ",
+        filename, line, col, modified, mode
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1178,6 +1189,257 @@ mod tests {
         assert_eq!(
             gutter_width, 2,
             "3 lines need 1 digit + 1 padding = gutter_width 2"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (05-03): status-bar plugin produces status content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_status_bar_plugin_loaded_when_status_computed_then_status_contains_filename_and_cursor_position(
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: an editor state with a buffer loaded from a file
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let dir = std::env::temp_dir();
+            let file_path = dir.join("test_status.txt");
+            std::fs::write(&file_path, "Hello\nWorld").unwrap();
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_file(&file_path).unwrap();
+            // Move cursor to line 1, col 3
+            state.cursor = cursor::new(1, 3);
+        }
+
+        // And: a Lisp runtime with core + hook primitives
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // And: the status-bar plugin is loaded (registers render-status hook)
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "status-bar-active"))"#)
+            .unwrap();
+
+        // When: compute_status_content is called
+        let status = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state)
+        };
+
+        // Then: status is Some and contains filename and cursor position
+        assert!(status.is_some(), "status should be Some when plugin loaded");
+        let status_str = status.unwrap();
+        assert!(
+            status_str.contains("test_status.txt"),
+            "status should contain filename, got: '{}'",
+            status_str
+        );
+        assert!(
+            status_str.contains("Ln 2") && status_str.contains("Col 3"),
+            "status should contain cursor position (1-indexed line), got: '{}'",
+            status_str
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (05-03): status bar content computation
+    // Test Budget: 6 behaviors x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_no_render_status_hook_when_status_computed_then_returns_none() {
+        // Given: an editor state with no hooks registered
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+
+        // When: compute_status_content is called
+        let status = super::compute_status_content(&state);
+
+        // Then: returns None (no status bar)
+        assert!(status.is_none(), "no hook means no status bar");
+    }
+
+    #[test]
+    fn given_status_hook_and_no_filename_when_status_computed_then_shows_no_name() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: buffer with no filename and render-status hook registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        // When: compute_status_content is called
+        let status = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state)
+        };
+
+        // Then: status contains "[No Name]"
+        let status_str = status.unwrap();
+        assert!(
+            status_str.contains("[No Name]"),
+            "unnamed buffer should show [No Name], got: '{}'",
+            status_str
+        );
+    }
+
+    #[test]
+    fn given_status_hook_and_modified_buffer_when_status_computed_then_shows_modified_indicator() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: a modified buffer with render-status hook registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            // insert_at marks the buffer as modified
+            state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 0, "x");
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        // When: compute_status_content is called
+        let status = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state)
+        };
+
+        // Then: status contains "[+]"
+        let status_str = status.unwrap();
+        assert!(
+            status_str.contains("[+]"),
+            "modified buffer should show [+], got: '{}'",
+            status_str
+        );
+    }
+
+    #[test]
+    fn given_status_hook_and_unmodified_buffer_when_status_computed_then_no_modified_indicator() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: an unmodified buffer with render-status hook registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        // When: compute_status_content is called
+        let status = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state)
+        };
+
+        // Then: status does not contain "[+]"
+        let status_str = status.unwrap();
+        assert!(
+            !status_str.contains("[+]"),
+            "unmodified buffer should not show [+], got: '{}'",
+            status_str
+        );
+    }
+
+    #[test]
+    fn given_status_hook_when_status_computed_then_shows_mode_name() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor in normal mode with render-status hook registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        // When: compute_status_content is called
+        let status = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state)
+        };
+
+        // Then: status contains mode name "NORMAL" (uppercased for display)
+        let status_str = status.unwrap();
+        assert!(
+            status_str.contains("NORMAL"),
+            "status should contain mode name, got: '{}'",
+            status_str
+        );
+    }
+
+    #[test]
+    fn given_status_hook_when_cursor_moved_then_status_reflects_new_position() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with multiline buffer and render-status hook
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello\nWorld\nBye");
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        // When: cursor is at (0, 0)
+        let status_at_origin = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state).unwrap()
+        };
+
+        // Then: shows Ln 1, Col 0
+        assert!(
+            status_at_origin.contains("Ln 1") && status_at_origin.contains("Col 0"),
+            "cursor at origin should show Ln 1, Col 0, got: '{}'",
+            status_at_origin
+        );
+
+        // When: cursor moves to (2, 1)
+        {
+            let mut state = state_rc.borrow_mut();
+            state.cursor = cursor::new(2, 1);
+        }
+        let status_after_move = {
+            let state = state_rc.borrow();
+            super::compute_status_content(&state).unwrap()
+        };
+
+        // Then: shows Ln 3, Col 1
+        assert!(
+            status_after_move.contains("Ln 3") && status_after_move.contains("Col 1"),
+            "cursor at (2,1) should show Ln 3, Col 1, got: '{}'",
+            status_after_move
         );
     }
 }
