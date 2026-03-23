@@ -715,14 +715,24 @@ fn register_set_theme_color(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
         let key = extract_string_arg_at(&args, 0, "set-theme-color", "key")?;
         let color_str = extract_string_arg_at(&args, 1, "set-theme-color", "color-value")?;
 
-        let color = theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
-            msg: format!(
-                "set-theme-color: invalid color \"{}\". Expected #rrggbb or named color",
-                color_str
-            ),
-        })?;
+        match theme::parse_color(&color_str) {
+            Some(color) => {
+                state.borrow_mut().theme.insert(key, color);
+            }
+            None if color_str.trim().eq_ignore_ascii_case("default") => {
+                // "default" means use terminal default -- remove from theme
+                state.borrow_mut().theme.remove(&key);
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-theme-color: invalid color \"{}\". Expected #rrggbb, named color, or \"default\"",
+                        color_str
+                    ),
+                });
+            }
+        }
 
-        state.borrow_mut().theme.insert(key, color);
         Ok(Value::NIL)
     });
 }
@@ -2168,6 +2178,108 @@ mod tests {
         assert_eq!(
             editor.theme.get("text-fg"),
             Some(&alfred_core::theme::ThemeColor::Rgb(255, 255, 255))
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (10-04): loading default-theme plugin sets all standard
+    // color slots on EditorState
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_default_theme_plugin_when_loaded_then_all_standard_color_slots_are_set() {
+        // Given: an editor state with theme primitives registered
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // When: the default-theme plugin source is evaluated
+        let plugin_source = std::fs::read_to_string("../../plugins/default-theme/init.lisp")
+            .expect("default-theme plugin should exist at plugins/default-theme/init.lisp");
+
+        // Filter out comment lines to only eval Lisp forms
+        let lisp_forms: String = plugin_source
+            .lines()
+            .filter(|line| !line.starts_with(";;;"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for line in lisp_forms.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                runtime.eval(trimmed).unwrap();
+            }
+        }
+
+        // Then: color slots with explicit values are set on the theme
+        let editor = state.borrow();
+
+        // Status bar has distinct background color (RGB, not "default")
+        assert!(
+            editor.theme.contains_key("status-bar-bg"),
+            "status-bar-bg should be set to an explicit color"
+        );
+        assert!(
+            editor.theme.contains_key("status-bar-fg"),
+            "status-bar-fg should be set to an explicit color"
+        );
+
+        // Gutter has distinct foreground color
+        assert!(
+            editor.theme.contains_key("gutter-fg"),
+            "gutter-fg should be set to an explicit color"
+        );
+
+        // "default" color values are removed from theme (terminal defaults)
+        // text-fg, text-bg, gutter-bg, message-fg, message-bg are all "default"
+        assert!(
+            !editor.theme.contains_key("text-fg"),
+            "text-fg with 'default' value should not be in theme"
+        );
+        assert!(
+            !editor.theme.contains_key("message-fg"),
+            "message-fg with 'default' value should not be in theme"
+        );
+
+        // Verify status-bar-bg is an RGB color for a distinct background
+        let status_bg = editor.theme.get("status-bar-bg").unwrap();
+        assert!(
+            matches!(status_bg, alfred_core::theme::ThemeColor::Rgb(_, _, _)),
+            "status-bar-bg should be an RGB color for a distinct background, got: {:?}",
+            status_bg
+        );
+
+        // Verify gutter-fg is a specific color
+        let gutter_fg = editor.theme.get("gutter-fg").unwrap();
+        assert!(
+            matches!(
+                gutter_fg,
+                alfred_core::theme::ThemeColor::Rgb(_, _, _)
+                    | alfred_core::theme::ThemeColor::Named(_)
+            ),
+            "gutter-fg should be a specific color, got: {:?}",
+            gutter_fg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test (10-04): empty theme falls back to terminal defaults when no
+    // plugin loaded
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_no_theme_plugin_loaded_when_theme_queried_then_all_slots_empty() {
+        // Given: an editor state with theme primitives but no plugin loaded
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // Then: the theme is empty (no color slots set)
+        let editor = state.borrow();
+        assert!(
+            editor.theme.is_empty(),
+            "Theme should be empty without plugin, but has {} entries",
+            editor.theme.len()
         );
     }
 }

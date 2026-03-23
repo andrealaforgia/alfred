@@ -60,6 +60,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     bridge::register_define_command(&runtime, state.clone());
     bridge::register_hook_primitives(&runtime, state.clone());
     bridge::register_keymap_primitives(&runtime, state.clone());
+    bridge::register_theme_primitives(&runtime, state.clone());
 
     // Discover and load plugins
     let plugin_errors = load_plugins(&runtime);

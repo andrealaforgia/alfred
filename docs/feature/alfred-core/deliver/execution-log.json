@@ -4,109 +4,137 @@
   "feature_id": "alfred-core",
   "events": [
     {
-      "sid": "09-01",
+      "sid": "10-01",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:21:59Z"
+      "t": "2026-03-23T14:41:10Z"
     },
     {
-      "sid": "09-01",
+      "sid": "10-01",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:23:58Z"
+      "t": "2026-03-23T14:41:14Z"
     },
     {
-      "sid": "09-01",
+      "sid": "10-01",
       "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:23:59Z"
+      "s": "SKIPPED",
+      "d": "NOT_APPLICABLE: TerminalGuard is at IO boundary; compile-time type contract test in RED_ACCEPTANCE covers the structural contract. Terminal state verification requires real terminal (integration test).",
+      "t": "2026-03-23T14:41:20Z"
     },
     {
-      "sid": "09-01",
+      "sid": "10-01",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:24:00Z"
+      "t": "2026-03-23T14:41:24Z"
     },
     {
-      "sid": "09-01",
+      "sid": "10-01",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:24:30Z"
+      "t": "2026-03-23T14:41:27Z"
     },
     {
-      "sid": "09-02",
+      "sid": "10-02",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:26:21Z"
+      "t": "2026-03-23T14:43:24Z"
     },
     {
-      "sid": "09-02",
+      "sid": "10-02",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:27:09Z"
+      "t": "2026-03-23T14:45:21Z"
     },
     {
-      "sid": "09-02",
+      "sid": "10-02",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:27:10Z"
+      "t": "2026-03-23T14:45:51Z"
     },
     {
-      "sid": "09-02",
+      "sid": "10-02",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:28:45Z"
+      "t": "2026-03-23T14:46:31Z"
     },
     {
-      "sid": "09-02",
+      "sid": "10-02",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:29:15Z"
+      "t": "2026-03-23T14:47:06Z"
     },
     {
-      "sid": "09-03",
+      "sid": "10-03",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:34:26Z"
+      "t": "2026-03-23T14:52:34Z"
     },
     {
-      "sid": "09-03",
+      "sid": "10-03",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:34:27Z"
+      "t": "2026-03-23T14:52:38Z"
     },
     {
-      "sid": "09-03",
+      "sid": "10-03",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:34:28Z"
+      "t": "2026-03-23T14:52:42Z"
     },
     {
-      "sid": "09-03",
+      "sid": "10-03",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:34:29Z"
+      "t": "2026-03-23T14:52:46Z"
     },
     {
-      "sid": "09-03",
+      "sid": "10-03",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:34:30Z"
+      "t": "2026-03-23T14:52:50Z"
+    },
+    {
+      "sid": "10-04",
+      "p": "PREPARE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-23T14:56:12Z"
+    },
+    {
+      "sid": "10-04",
+      "p": "RED_ACCEPTANCE",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-23T14:56:13Z"
+    },
+    {
+      "sid": "10-04",
+      "p": "RED_UNIT",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-23T14:56:13Z"
+    },
+    {
+      "sid": "10-04",
+      "p": "GREEN",
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-23T14:58:06Z"
     }
   ]
 }

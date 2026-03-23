@@ -42,7 +42,10 @@ pub fn render_frame<B: Backend>(
             let (gutter_area, buffer_area) = split_gutter_and_text(content_area, gutter_width);
 
             let gutter_content = collect_gutter_lines(gutter_lines, content_area.height as usize);
-            let gutter_widget = Paragraph::new(gutter_content);
+            let gutter_fg = resolve_theme_color(state, "gutter-fg", Color::Reset);
+            let gutter_bg = resolve_theme_color(state, "gutter-bg", Color::Reset);
+            let gutter_style = Style::default().fg(gutter_fg).bg(gutter_bg);
+            let gutter_widget = Paragraph::new(gutter_content).style(gutter_style);
             frame.render_widget(gutter_widget, gutter_area);
 
             let visible_lines = collect_visible_lines(state, buffer_area.height as usize);
@@ -65,7 +68,10 @@ pub fn render_frame<B: Backend>(
 
         if let Some(ref message) = state.message {
             let message_area = compute_message_area(area);
-            let message_widget = Paragraph::new(message.as_str());
+            let message_fg = resolve_theme_color(state, "message-fg", Color::Reset);
+            let message_bg = resolve_theme_color(state, "message-bg", Color::Reset);
+            let message_style = Style::default().fg(message_fg).bg(message_bg);
+            let message_widget = Paragraph::new(message.as_str()).style(message_style);
             frame.render_widget(message_widget, message_area);
         }
 
@@ -891,5 +897,76 @@ mod tests {
 
         let result = super::resolve_theme_color(&state, "gutter-fg", Color::Reset);
         assert_eq!(result, Color::Cyan);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (10-04): gutter uses theme color when set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_gutter_theme_color_when_rendered_then_gutter_uses_themed_foreground() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with gutter_width=4, gutter content, and gutter-fg themed
+        let mut state = editor_state::new(30, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.viewport.gutter_width = 4;
+        state
+            .theme
+            .insert("gutter-fg".to_string(), ThemeColor::Rgb(108, 112, 134));
+
+        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string()];
+
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with gutter
+        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
+
+        // Then: the gutter cells use the themed foreground color
+        let rendered = terminal.backend();
+        let gutter_cell = &rendered.buffer()[(1, 0)]; // column 1 of row 0 (in gutter)
+        assert_eq!(
+            gutter_cell.fg,
+            Color::Rgb(108, 112, 134),
+            "Gutter fg should be themed RGB(108,112,134) but was: {:?}",
+            gutter_cell.fg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test (10-04): message uses theme color when set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_message_theme_color_when_rendered_then_message_uses_themed_foreground() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with message and themed message-fg
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello");
+        state.message = Some("Test message".to_string());
+        state
+            .theme
+            .insert("message-fg".to_string(), ThemeColor::Rgb(200, 100, 50));
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with message
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+
+        // Then: the message row uses the themed foreground color
+        let rendered = terminal.backend();
+        let msg_row = 4u16; // last row
+        let cell = &rendered.buffer()[(0, msg_row)];
+        assert_eq!(
+            cell.fg,
+            Color::Rgb(200, 100, 50),
+            "Message fg should be themed RGB(200,100,50) but was: {:?}",
+            cell.fg
+        );
     }
 }

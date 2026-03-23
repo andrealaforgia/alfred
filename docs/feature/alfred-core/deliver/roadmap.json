@@ -1,81 +1,75 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-23T15:00:00Z",
+    "created_at": "2026-03-23T18:00:00Z",
     "total_steps": 4
   },
   "phases": [
     {
-      "id": "09",
-      "name": "M9 Extended Vim Keybindings",
+      "id": "10",
+      "name": "M10 UI Rendering and Lisp-Driven Themes",
       "steps": [
         {
-          "id": "09-01",
-          "name": "Cursor movement commands: w b e 0 $ ^ gg G",
+          "id": "10-01",
+          "name": "Alternate screen in terminal guard",
           "criteria": [
-            "w moves to next word start",
-            "b moves to previous word start",
-            "e moves to next word end",
-            "0 moves to line start and $ to line end",
-            "gg moves to document start and G to end"
+            "Editor enters alternate screen buffer on startup",
+            "Shell history hidden while editor is running",
+            "Terminal restored to original state on exit",
+            "Alternate screen restored even on panic",
+            "Guard handles both raw mode and alternate screen"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/cursor.rs",
-            "crates/alfred-core/src/editor_state.rs",
-            "plugins/vim-keybindings/init.lisp"
+            "crates/alfred-tui/src/renderer.rs",
+            "crates/alfred-tui/src/app.rs"
           ]
         },
         {
-          "id": "09-02",
-          "name": "Insert mode variants: I a A o O",
+          "id": "10-02",
+          "name": "Theme color store on EditorState",
           "criteria": [
-            "I inserts at first non-blank of line",
-            "a inserts after cursor",
-            "A inserts at end of line",
-            "o opens new line below and enters insert",
-            "O opens new line above and enters insert"
+            "EditorState has a flexible key-value color map",
+            "Renderer reads theme colors by name",
+            "Default colors match current behavior",
+            "Missing theme keys fall back to defaults",
+            "Color values support RGB hex and named colors"
           ],
           "files_to_modify": [
             "crates/alfred-core/src/editor_state.rs",
-            "crates/alfred-core/src/buffer.rs",
-            "plugins/vim-keybindings/init.lisp"
+            "crates/alfred-tui/src/renderer.rs"
           ],
-          "deps": ["09-01"]
+          "deps": ["10-01"]
         },
         {
-          "id": "09-03",
-          "name": "Editing: J r cc C yy p dd dw undo redo",
+          "id": "10-03",
+          "name": "Theme Lisp primitives",
           "criteria": [
-            "J joins current line with next line",
-            "yy yanks current line and p pastes it",
-            "cc replaces entire line entering insert",
-            "C replaces from cursor to line end",
-            "u undoes last change and Ctrl-r redoes"
+            "set-theme-color primitive sets a named color",
+            "get-theme-color primitive reads a named color",
+            "define-theme primitive creates a named theme map",
+            "load-theme primitive activates a named theme",
+            "Invalid color values return error messages"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/buffer.rs",
-            "crates/alfred-core/src/editor_state.rs",
-            "crates/alfred-lisp/src/bridge.rs",
-            "plugins/vim-keybindings/init.lisp"
+            "crates/alfred-lisp/src/bridge.rs"
           ],
-          "deps": ["09-02"]
+          "deps": ["10-02"]
         },
         {
-          "id": "09-04",
-          "name": "Scroll and screen: H M L Ctrl-d Ctrl-u zz",
+          "id": "10-04",
+          "name": "Default theme plugin in Alfred Lisp",
           "criteria": [
-            "H moves cursor to screen top",
-            "M moves cursor to screen middle",
-            "L moves cursor to screen bottom",
-            "Ctrl-d scrolls down half page",
-            "Ctrl-u scrolls up half page"
+            "Plugin in plugins/default-theme/init.lisp loads",
+            "Sets all standard color slots via Lisp",
+            "Status bar has distinct background color",
+            "Gutter has distinct foreground color",
+            "Removing plugin falls back to terminal defaults"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/cursor.rs",
-            "crates/alfred-core/src/editor_state.rs",
-            "plugins/vim-keybindings/init.lisp"
+            "plugins/default-theme/init.lisp",
+            "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["09-03"]
+          "deps": ["10-03"]
         }
       ]
     }
