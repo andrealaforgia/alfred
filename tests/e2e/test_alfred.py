@@ -296,6 +296,109 @@ class TestNavigation:
 
 
 # ---------------------------------------------------------------------------
+# Arrow keys (3 tests)
+# ---------------------------------------------------------------------------
+
+class TestArrowKeys:
+    """Verify arrow keys work for navigation in insert mode."""
+
+    def test_arrow_right_in_insert_mode(self):
+        """Open 'abc', i to insert, arrow right twice, type 'X', :wq -- file is 'abXc'."""
+        path = create_temp_file("abc")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+
+        # Arrow right twice (cursor moves from col 0 to col 2)
+        child.send("\x1b[C")  # Arrow Right escape sequence
+        time.sleep(0.1)
+        child.send("\x1b[C")  # Arrow Right again
+        time.sleep(0.1)
+
+        send_keys(child, "X")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        content = read_file(path)
+        assert exit_code == 0
+        assert "abXc" in content, f"Expected 'abXc', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_arrow_down_in_insert_mode(self):
+        """Open two-line file, i to insert, arrow down, type 'X', :wq -- X on second line."""
+        path = create_temp_file("line1\nline2")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+
+        # Arrow down to second line
+        child.send("\x1b[B")  # Arrow Down escape sequence
+        time.sleep(0.1)
+
+        send_keys(child, "X")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        content = read_file(path)
+        assert exit_code == 0
+        lines = content.split("\n")
+        assert len(lines) >= 2
+        assert "X" in lines[1], f"Expected 'X' on second line, got: {repr(lines[1])}"
+        os.unlink(path)
+
+    def test_arrow_up_and_left_in_insert_mode(self):
+        """Navigate with all four arrow keys in insert mode."""
+        path = create_temp_file("ab\ncd")
+        child = spawn_alfred(path)
+
+        # Enter insert mode
+        send_keys(child, "i")
+        time.sleep(0.3)
+
+        # Arrow down to second line
+        child.send("\x1b[B")  # Down
+        time.sleep(0.1)
+
+        # Arrow right to col 1
+        child.send("\x1b[C")  # Right
+        time.sleep(0.1)
+
+        # Arrow up back to first line
+        child.send("\x1b[A")  # Up
+        time.sleep(0.1)
+
+        # Arrow left to col 0
+        child.send("\x1b[D")  # Left
+        time.sleep(0.1)
+
+        # Type X at position (0, 0) — should be at start of first line
+        send_keys(child, "X")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        content = read_file(path)
+        assert exit_code == 0
+        lines = content.split("\n")
+        assert lines[0].startswith("X"), \
+            f"Expected first line to start with 'X', got: {repr(lines[0])}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
 # Delete (2 tests)
 # ---------------------------------------------------------------------------
 
