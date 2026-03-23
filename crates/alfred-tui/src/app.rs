@@ -5315,4 +5315,255 @@ mod tests {
         let state = state_rc.borrow();
         assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
     }
+
+    // -----------------------------------------------------------------------
+    // Visual mode tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_normal_mode_when_v_pressed_then_enters_visual_mode_with_selection_start() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'v' to enter visual mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+
+        // Then: mode is "visual", selection_start is set to cursor position
+        let state = state_rc.borrow();
+        assert_eq!(state.mode, "visual");
+        assert_eq!(state.selection_start, Some(cursor::new(0, 0)));
+        assert_eq!(state.active_keymaps, vec!["visual-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_visual_mode_when_escape_pressed_then_exits_visual_mode_no_change() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v then Escape
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Escape), is);
+
+        // Then: mode is normal, selection_start is None, buffer unchanged
+        let state = state_rc.borrow();
+        assert_eq!(state.mode, "normal");
+        assert_eq!(state.selection_start, None);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello world");
+    }
+
+    #[test]
+    fn given_visual_mode_when_l_then_d_then_deletes_two_chars() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v, l, d (select "he", then delete)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('l')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        // Then: "he" deleted, buffer is "llo world", mode is normal
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "llo world");
+        assert_eq!(state.mode, "normal");
+        assert_eq!(state.selection_start, None);
+        // Deleted text should be in yank register
+        assert_eq!(state.yank_register, Some("he".to_string()));
+    }
+
+    #[test]
+    fn given_visual_mode_when_w_then_y_then_yanks_word() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v, w, y (select from 0 to word-forward, then yank)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('y')), is);
+
+        // Then: yank register has the word, buffer unchanged, mode is normal
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello world");
+        assert_eq!(state.mode, "normal");
+        assert_eq!(state.selection_start, None);
+        // w moves cursor to col 6 ('w' of "world"). Visual mode is inclusive,
+        // so selection covers cols 0..6 inclusive = "hello w" (7 chars)
+        assert_eq!(state.yank_register, Some("hello w".to_string()));
+    }
+
+    #[test]
+    fn given_visual_mode_when_j_then_d_then_deletes_across_two_lines() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nbye", cursor at (0, 2)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nbye");
+            state.cursor = cursor::new(0, 2);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v, j, d (select from (0,2) to (1,2), then delete)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('j')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        // Then: text from (0,2) to (1,2) inclusive is deleted
+        // selection_range: (0,2) to (1,2), advance_cursor_by_one -> (1,3)
+        // delete from (0,2) to (1,3): removes "llo\nwor"
+        // result: "held\nbye"
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "held\nbye");
+        assert_eq!(state.mode, "normal");
+        assert_eq!(state.selection_start, None);
+    }
+
+    #[test]
+    fn given_visual_mode_when_dollar_then_d_then_deletes_to_end_of_line() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 6
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 6);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v, $, d (select from col 6 to end of line, then delete)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('$')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        // Then: "world" deleted (from col 6 to end), buffer is "hello "
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello ");
+        assert_eq!(state.mode, "normal");
+    }
+
+    #[test]
+    fn given_visual_mode_when_c_then_deletes_selection_and_enters_insert_mode() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at col 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: v, l, l, c (select "hel", then change)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('l')), is);
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('l')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('c')), is);
+
+        // Then: "hel" deleted, buffer is "lo world", mode is insert
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "lo world");
+        assert_eq!(state.mode, "insert");
+        assert_eq!(state.selection_start, None);
+    }
+
+    #[test]
+    fn given_visual_mode_when_status_bar_computed_then_shows_visual() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor in visual mode with render-status hook
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: enter visual mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('v')),
+            super::InputState::Normal,
+        );
+
+        // Then: status bar shows VISUAL
+        let state = state_rc.borrow();
+        let status = super::compute_status_content(&state);
+        assert!(status.is_some());
+        assert!(
+            status.as_ref().unwrap().contains("VISUAL"),
+            "Status bar should contain VISUAL, got: {:?}",
+            status
+        );
+    }
 }

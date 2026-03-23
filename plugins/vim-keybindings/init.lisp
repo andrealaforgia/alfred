@@ -64,6 +64,38 @@
 (define-key "insert-mode" "Left" "cursor-left")
 (define-key "insert-mode" "Right" "cursor-right")
 
+;; Create visual-mode keymap with navigation (same as normal) + operators
+(make-keymap "visual-mode")
+;; Navigation (same keys as normal-mode)
+(define-key "visual-mode" "Char:h" "cursor-left")
+(define-key "visual-mode" "Char:j" "cursor-down")
+(define-key "visual-mode" "Char:k" "cursor-up")
+(define-key "visual-mode" "Char:l" "cursor-right")
+(define-key "visual-mode" "Char:0" "cursor-line-start")
+(define-key "visual-mode" "Char:$" "cursor-line-end")
+(define-key "visual-mode" "Char:^" "cursor-first-non-blank")
+(define-key "visual-mode" "Char:w" "cursor-word-forward")
+(define-key "visual-mode" "Char:b" "cursor-word-backward")
+(define-key "visual-mode" "Char:e" "cursor-word-end")
+(define-key "visual-mode" "Char:g" "cursor-document-start")
+(define-key "visual-mode" "Char:G" "cursor-document-end")
+(define-key "visual-mode" "Char:H" "cursor-screen-top")
+(define-key "visual-mode" "Char:M" "cursor-screen-middle")
+(define-key "visual-mode" "Char:L" "cursor-screen-bottom")
+(define-key "visual-mode" "Up" "cursor-up")
+(define-key "visual-mode" "Down" "cursor-down")
+(define-key "visual-mode" "Left" "cursor-left")
+(define-key "visual-mode" "Right" "cursor-right")
+;; Operators (act on selection)
+(define-key "visual-mode" "Char:d" "visual-delete")
+(define-key "visual-mode" "Char:x" "visual-delete")
+(define-key "visual-mode" "Char:y" "visual-yank")
+(define-key "visual-mode" "Char:c" "visual-change")
+(define-key "visual-mode" "Escape" "exit-visual-mode")
+
+;; Enter visual mode from normal mode
+(define-key "normal-mode" "Char:v" "enter-visual-mode")
+
 ;; Define mode-switching commands
 (define-command "enter-insert-mode" (lambda () (set-mode "insert")))
 (define-command "enter-normal-mode" (lambda () (set-mode "normal")))

@@ -2440,7 +2440,7 @@ mod tests {
         let runtime = LispRuntime::new();
         register_core_primitives(&runtime, state.clone());
 
-        let result = runtime.eval("(get-cursor-shape \"visual\")").unwrap();
+        let result = runtime.eval("(get-cursor-shape \"unknown-mode\")").unwrap();
         assert_eq!(result.inner().clone(), Value::NIL);
     }
 

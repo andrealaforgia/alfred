@@ -21,6 +21,7 @@ pub type Keymap = HashMap<KeyEvent, String>;
 /// Known mode name constants.
 pub const MODE_NORMAL: &str = "normal";
 pub const MODE_INSERT: &str = "insert";
+pub const MODE_VISUAL: &str = "visual";
 
 /// The kind of character find operation (f/F/t/T).
 ///
@@ -77,6 +78,9 @@ pub struct EditorState {
     pub last_char_find: Option<(CharFindKind, char)>,
     /// The name of the last buffer-mutating command, for `.` (repeat-last-change).
     pub last_edit_command: Option<String>,
+    /// The anchor point where visual selection started (`v`).
+    /// When `Some`, visual mode is active; the selection spans from this cursor to `self.cursor`.
+    pub selection_start: Option<Cursor>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -639,6 +643,162 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Visual mode commands ---
+    crate::command::register(
+        &mut state.commands,
+        "enter-visual-mode".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.selection_start = Some(s.cursor);
+            s.mode = MODE_VISUAL.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_VISUAL)];
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "exit-visual-mode".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.selection_start = None;
+            s.mode = MODE_NORMAL.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "visual-delete".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(anchor) = s.selection_start {
+                let (from, to) = selection_range(anchor, s.cursor);
+                // Visual selection is inclusive of the character under the cursor,
+                // so we need to extend `to` by one character for the exclusive range.
+                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                push_undo(s);
+                let text = crate::buffer::get_text_range(
+                    &s.buffer,
+                    from.line,
+                    from.column,
+                    to_exclusive.line,
+                    to_exclusive.column,
+                );
+                s.yank_register = Some(text);
+                s.yank_linewise = false;
+                s.buffer = crate::buffer::delete_char_range(
+                    &s.buffer,
+                    from.line,
+                    from.column,
+                    to_exclusive.line,
+                    to_exclusive.column,
+                );
+                s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                s.selection_start = None;
+                s.mode = MODE_NORMAL.to_string();
+                s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "visual-yank".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(anchor) = s.selection_start {
+                let (from, to) = selection_range(anchor, s.cursor);
+                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                let text = crate::buffer::get_text_range(
+                    &s.buffer,
+                    from.line,
+                    from.column,
+                    to_exclusive.line,
+                    to_exclusive.column,
+                );
+                s.yank_register = Some(text);
+                s.yank_linewise = false;
+                s.cursor = from;
+                s.selection_start = None;
+                s.mode = MODE_NORMAL.to_string();
+                s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+                s.message = Some("yanked".to_string());
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "visual-change".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(anchor) = s.selection_start {
+                let (from, to) = selection_range(anchor, s.cursor);
+                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                push_undo(s);
+                let text = crate::buffer::get_text_range(
+                    &s.buffer,
+                    from.line,
+                    from.column,
+                    to_exclusive.line,
+                    to_exclusive.column,
+                );
+                s.yank_register = Some(text);
+                s.yank_linewise = false;
+                s.buffer = crate::buffer::delete_char_range(
+                    &s.buffer,
+                    from.line,
+                    from.column,
+                    to_exclusive.line,
+                    to_exclusive.column,
+                );
+                s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                s.selection_start = None;
+                s.mode = MODE_INSERT.to_string();
+                s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
+}
+
+/// Computes the ordered selection range from two cursor positions.
+///
+/// Returns `(min, max)` where `min` is the position that comes first in the buffer
+/// and `max` is the position that comes last. This ensures correct behavior
+/// regardless of whether the user selected forward or backward.
+pub fn selection_range(
+    anchor: crate::cursor::Cursor,
+    current: crate::cursor::Cursor,
+) -> (crate::cursor::Cursor, crate::cursor::Cursor) {
+    if (anchor.line, anchor.column) <= (current.line, current.column) {
+        (anchor, current)
+    } else {
+        (current, anchor)
+    }
+}
+
+/// Advances a cursor by one character position for exclusive range computation.
+///
+/// Visual selection is inclusive (the character under the cursor is part of the selection),
+/// but `delete_char_range` and `get_text_range` use exclusive end positions.
+/// This function moves the cursor one character forward to convert inclusive to exclusive.
+fn advance_cursor_by_one(
+    cursor: crate::cursor::Cursor,
+    buffer: &crate::buffer::Buffer,
+) -> crate::cursor::Cursor {
+    let line_content = crate::buffer::get_line(buffer, cursor.line).unwrap_or("");
+    let line_len = line_content.trim_end_matches('\n').len();
+    if cursor.column < line_len {
+        crate::cursor::new(cursor.line, cursor.column + 1)
+    } else {
+        // At end of line: advance to start of next line
+        let total_lines = crate::buffer::line_count(buffer);
+        if cursor.line + 1 < total_lines {
+            crate::cursor::new(cursor.line + 1, 0)
+        } else {
+            // At very end of buffer: use buffer length as end
+            crate::cursor::new(cursor.line, line_len)
+        }
+    }
 }
 
 /// Executes a character find operation, returning the new cursor position if found.
@@ -720,6 +880,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
     let mut cursor_shapes = HashMap::new();
     cursor_shapes.insert(MODE_NORMAL.to_string(), "block".to_string());
     cursor_shapes.insert(MODE_INSERT.to_string(), "bar".to_string());
+    cursor_shapes.insert(MODE_VISUAL.to_string(), "block".to_string());
 
     EditorState {
         buffer: Buffer::from_string(""),
@@ -743,6 +904,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         search_forward: true,
         last_char_find: None,
         last_edit_command: None,
+        selection_start: None,
     }
 }
 
@@ -1483,7 +1645,7 @@ mod tests {
     #[test]
     fn given_editor_in_unknown_mode_when_cursor_shape_for_mode_then_returns_default() {
         let mut state = editor_state::new(80, 24);
-        state.mode = "visual".to_string();
+        state.mode = "unknown-mode".to_string();
         assert_eq!(editor_state::cursor_shape_for_mode(&state), "default");
     }
 
