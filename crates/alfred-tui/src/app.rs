@@ -1855,4 +1855,121 @@ mod tests {
             assert_eq!(state.message, Some(":".to_string()));
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (06-04): no keymaps means no key dispatch
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_no_keymaps_when_multiple_arrow_keys_pressed_then_cursor_stays_at_origin() {
+        // Given: editor with multiline buffer but no keymaps
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello\nWorld\nBye");
+        assert!(state.active_keymaps.is_empty());
+
+        // When: all four arrow keys pressed
+        for key_code in &[KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
+            let (input_state, action) = super::handle_key_event(
+                &mut state,
+                KeyEvent::plain(*key_code),
+                super::InputState::Normal,
+            );
+            assert_eq!(action, super::DeferredAction::None);
+            assert_eq!(input_state, super::InputState::Normal);
+        }
+
+        // Then: cursor remains at origin
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_no_active_keymaps_when_printable_char_pressed_then_no_self_insert() {
+        // Given: editor with no active keymaps
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        assert!(state.active_keymaps.is_empty());
+        let content_before = alfred_core::buffer::content(&state.buffer);
+
+        // When: printable character pressed
+        let (_, action) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+
+        // Then: no self-insert, buffer unchanged
+        assert_eq!(action, super::DeferredAction::None);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), content_before);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (06-04): without keymaps, editor starts but keys do nothing
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_editor_with_no_keymaps_when_all_key_types_pressed_then_cursor_unchanged_and_buffer_unchanged(
+    ) {
+        // Given: an editor with a multiline buffer but NO keymaps loaded (no plugin)
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello\nWorld\nBye");
+        // Deliberately do NOT call setup_standard_keymaps -- no plugin loaded
+        assert!(
+            state.active_keymaps.is_empty(),
+            "No keymaps should be active"
+        );
+        assert!(state.running, "Editor should start running");
+
+        let cursor_before = state.cursor;
+        let buffer_content_before = alfred_core::buffer::content(&state.buffer);
+
+        // When: press all four arrow keys
+        for key_code in &[KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(*key_code),
+                super::InputState::Normal,
+            );
+        }
+
+        // And: press printable characters
+        for ch in &['a', 'z', '!', ' '] {
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char(*ch)),
+                super::InputState::Normal,
+            );
+        }
+
+        // And: press colon (which would enter command mode if bound)
+        let input_state = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+
+        // Then: cursor has not moved
+        assert_eq!(
+            state.cursor, cursor_before,
+            "Without keymaps, cursor should not move for any key"
+        );
+
+        // And: buffer content is unchanged (no self-insert without active keymaps)
+        let buffer_content_after = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            buffer_content_after, buffer_content_before,
+            "Without keymaps, buffer should not change"
+        );
+
+        // And: we are still in Normal mode (colon did not enter command mode)
+        assert_eq!(
+            input_state,
+            super::InputState::Normal,
+            "Without keymaps, colon should not enter command mode"
+        );
+
+        // And: editor is still running (no quit occurred)
+        assert!(state.running, "Editor should still be running");
+    }
 }
