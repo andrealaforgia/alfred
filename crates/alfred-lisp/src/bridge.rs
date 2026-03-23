@@ -15,6 +15,7 @@ use alfred_core::command;
 use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::hook;
+use alfred_core::theme;
 use alfred_core::viewport;
 
 use crate::runtime::LispRuntime;
@@ -657,6 +658,173 @@ fn register_set_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
         let mut editor = state.borrow_mut();
         editor.mode = mode_name.clone();
         editor.active_keymaps = vec![format!("{}-mode", mode_name)];
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers all theme primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(set-theme-color "key" "color-value")` -- parses color, stores in active theme
+/// - `(get-theme-color "key")` -- returns color value as string, or nil if not set
+/// - `(define-theme "name" "key1" "color1" "key2" "color2" ...)` -- stores a named theme
+/// - `(load-theme "name")` -- activates a named theme by copying its colors into the active theme
+pub fn register_theme_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_set_theme_color(env.clone(), state.clone());
+    register_get_theme_color(env.clone(), state.clone());
+    register_define_theme(env.clone(), state.clone());
+    register_load_theme(env, state);
+}
+
+/// Formats a ThemeColor back into a string representation.
+///
+/// RGB colors become "#rrggbb" hex strings. Named colors become their
+/// lowercase name (e.g., "red", "dark-gray").
+fn format_theme_color(color: &theme::ThemeColor) -> String {
+    match color {
+        theme::ThemeColor::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
+        theme::ThemeColor::Named(named) => match named {
+            theme::NamedColor::Black => "black".to_string(),
+            theme::NamedColor::Red => "red".to_string(),
+            theme::NamedColor::Green => "green".to_string(),
+            theme::NamedColor::Yellow => "yellow".to_string(),
+            theme::NamedColor::Blue => "blue".to_string(),
+            theme::NamedColor::Magenta => "magenta".to_string(),
+            theme::NamedColor::Cyan => "cyan".to_string(),
+            theme::NamedColor::White => "white".to_string(),
+            theme::NamedColor::DarkGray => "dark-gray".to_string(),
+            theme::NamedColor::LightRed => "light-red".to_string(),
+            theme::NamedColor::LightGreen => "light-green".to_string(),
+            theme::NamedColor::LightYellow => "light-yellow".to_string(),
+            theme::NamedColor::LightBlue => "light-blue".to_string(),
+            theme::NamedColor::LightMagenta => "light-magenta".to_string(),
+            theme::NamedColor::LightCyan => "light-cyan".to_string(),
+        },
+    }
+}
+
+/// Registers `set-theme-color`: parses a color value and stores it in the active theme.
+///
+/// Usage: `(set-theme-color "key" "color-value")`
+///
+/// Returns NIL on success. Returns error for invalid color values.
+fn register_set_theme_color(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-theme-color", move |_env, args| {
+        let key = extract_string_arg_at(&args, 0, "set-theme-color", "key")?;
+        let color_str = extract_string_arg_at(&args, 1, "set-theme-color", "color-value")?;
+
+        let color = theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
+            msg: format!(
+                "set-theme-color: invalid color \"{}\". Expected #rrggbb or named color",
+                color_str
+            ),
+        })?;
+
+        state.borrow_mut().theme.insert(key, color);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `get-theme-color`: reads a named color from the active theme.
+///
+/// Usage: `(get-theme-color "key")`
+///
+/// Returns the color as a string (e.g., "#3c3836" or "red"), or NIL if not set.
+fn register_get_theme_color(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "get-theme-color", move |_env, args| {
+        let key = extract_string_arg(&args, "get-theme-color")?;
+
+        let editor = state.borrow();
+        match editor.theme.get(&key) {
+            Some(color) => Ok(Value::String(format_theme_color(color))),
+            None => Ok(Value::NIL),
+        }
+    });
+}
+
+/// Registers `define-theme`: creates a named theme from variadic key-value pairs.
+///
+/// Usage: `(define-theme "name" "key1" "color1" "key2" "color2" ...)`
+///
+/// Stores the theme in `state.named_themes` for later activation via `load-theme`.
+/// Returns error if an odd number of key-value arguments is provided or if any color is invalid.
+fn register_define_theme(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "define-theme", move |_env, args| {
+        let theme_name = extract_string_arg(&args, "define-theme")?;
+
+        let pairs = &args[1..];
+        if pairs.len() % 2 != 0 {
+            return Err(RuntimeError {
+                msg: format!(
+                    "define-theme: expected even number of key-value arguments after name, got {}",
+                    pairs.len()
+                ),
+            });
+        }
+
+        let mut new_theme = theme::new_theme();
+        for chunk in pairs.chunks(2) {
+            let key = match &chunk[0] {
+                Value::String(s) => s.clone(),
+                other => {
+                    return Err(RuntimeError {
+                        msg: format!("define-theme: expected string key, got {}", other),
+                    });
+                }
+            };
+            let color_str = match &chunk[1] {
+                Value::String(s) => s.clone(),
+                other => {
+                    return Err(RuntimeError {
+                        msg: format!("define-theme: expected string color value, got {}", other),
+                    });
+                }
+            };
+            let color = theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
+                msg: format!(
+                    "define-theme: invalid color \"{}\" for key \"{}\". Expected #rrggbb or named color",
+                    color_str, key
+                ),
+            })?;
+            new_theme.insert(key, color);
+        }
+
+        state
+            .borrow_mut()
+            .named_themes
+            .insert(theme_name, new_theme);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `load-theme`: activates a previously defined named theme.
+///
+/// Usage: `(load-theme "name")`
+///
+/// Copies all color entries from the named theme into the active theme.
+/// Returns error if the theme name is not found.
+fn register_load_theme(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "load-theme", move |_env, args| {
+        let theme_name = extract_string_arg(&args, "load-theme")?;
+
+        let mut editor = state.borrow_mut();
+        let named_theme = editor
+            .named_themes
+            .get(&theme_name)
+            .ok_or_else(|| RuntimeError {
+                msg: format!(
+                    "load-theme: theme \"{}\" not found. Define it first with (define-theme ...)",
+                    theme_name
+                ),
+            })?
+            .clone();
+
+        for (key, color) in named_theme {
+            editor.theme.insert(key, color);
+        }
+
         Ok(Value::NIL)
     });
 }
@@ -1809,5 +1977,197 @@ mod tests {
 
         // And: modified flag is reset
         assert!(!state.borrow().buffer.is_modified());
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (10-03): set-theme-color then get-theme-color round-trip
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_theme_primitives_when_set_then_get_theme_color_then_returns_stored_value() {
+        // Given: an editor state with theme primitives registered
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // When: set-theme-color is called, then get-theme-color retrieves it
+        runtime
+            .eval("(set-theme-color \"status-bar-bg\" \"#3c3836\")")
+            .unwrap();
+        let result = runtime.eval("(get-theme-color \"status-bar-bg\")").unwrap();
+
+        // Then: the retrieved color matches what was set
+        assert_eq!(result.as_string(), Some("#3c3836".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (10-03): theme primitives
+    // Test Budget: 6 behaviors x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_theme_primitives_when_set_theme_color_with_hex_then_stores_in_theme() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(set-theme-color \"text-fg\" \"#ff5733\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(
+            editor.theme.get("text-fg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(255, 87, 51))
+        );
+    }
+
+    #[test]
+    fn given_theme_primitives_when_set_theme_color_with_named_then_stores_in_theme() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(set-theme-color \"gutter-fg\" \"cyan\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(
+            editor.theme.get("gutter-fg"),
+            Some(&alfred_core::theme::ThemeColor::Named(
+                alfred_core::theme::NamedColor::Cyan
+            ))
+        );
+    }
+
+    #[test]
+    fn given_theme_primitives_when_set_theme_color_with_invalid_color_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-theme-color \"text-fg\" \"not-a-color\")");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_theme_primitives_when_get_theme_color_missing_key_then_returns_nil() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-theme-color \"nonexistent\")").unwrap();
+
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    #[test]
+    fn given_theme_primitives_when_define_theme_with_pairs_then_stores_named_theme() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(define-theme \"gruvbox\" \"text-fg\" \"#ebdbb2\" \"text-bg\" \"#282828\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let theme = editor
+            .named_themes
+            .get("gruvbox")
+            .expect("theme should exist");
+        assert_eq!(
+            theme.get("text-fg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(235, 219, 178))
+        );
+        assert_eq!(
+            theme.get("text-bg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(40, 40, 40))
+        );
+    }
+
+    #[test]
+    fn given_theme_primitives_when_define_theme_with_odd_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // Odd number of key-value arguments (name + 3 args = odd pairs)
+        let result = runtime.eval("(define-theme \"bad\" \"key1\" \"#ff0000\" \"orphan\")");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_theme_primitives_when_define_theme_with_invalid_color_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(define-theme \"bad\" \"key1\" \"not-a-color\")");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_defined_theme_when_load_theme_then_copies_colors_to_active_theme() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // Define a theme, then load it
+        runtime
+            .eval("(define-theme \"dracula\" \"text-fg\" \"#f8f8f2\" \"text-bg\" \"#282a36\")")
+            .unwrap();
+        runtime.eval("(load-theme \"dracula\")").unwrap();
+
+        // Active theme should now contain the dracula colors
+        let editor = state.borrow();
+        assert_eq!(
+            editor.theme.get("text-fg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(248, 248, 242))
+        );
+        assert_eq!(
+            editor.theme.get("text-bg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(40, 42, 54))
+        );
+    }
+
+    #[test]
+    fn given_theme_primitives_when_load_theme_nonexistent_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(load-theme \"nonexistent\")");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_active_theme_with_colors_when_load_theme_then_overwrites_matching_keys() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_theme_primitives(&runtime, state.clone());
+
+        // Set a color in active theme first
+        runtime
+            .eval("(set-theme-color \"text-fg\" \"#000000\")")
+            .unwrap();
+
+        // Define and load a theme that overrides text-fg
+        runtime
+            .eval("(define-theme \"override\" \"text-fg\" \"#ffffff\")")
+            .unwrap();
+        runtime.eval("(load-theme \"override\")").unwrap();
+
+        // The active theme text-fg should be overridden
+        let editor = state.borrow();
+        assert_eq!(
+            editor.theme.get("text-fg"),
+            Some(&alfred_core::theme::ThemeColor::Rgb(255, 255, 255))
+        );
     }
 }

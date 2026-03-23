@@ -52,6 +52,7 @@ pub struct EditorState {
     pub undo_stack: Vec<UndoSnapshot>,
     pub redo_stack: Vec<UndoSnapshot>,
     pub theme: Theme,
+    pub named_themes: HashMap<String, Theme>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -495,6 +496,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
         theme: crate::theme::new_theme(),
+        named_themes: HashMap::new(),
     }
 }
 
