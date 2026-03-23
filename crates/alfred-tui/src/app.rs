@@ -80,6 +80,8 @@ pub(crate) enum InputState {
     Command(String),
     /// Accumulating a search pattern (entered via `/`)
     Search(String),
+    /// Waiting for a character key to complete a find/til command (f/F/t/T)
+    PendingChar(alfred_core::editor_state::CharFindKind),
 }
 
 /// Handles a key event by updating the editor state.
@@ -186,6 +188,22 @@ pub(crate) fn handle_key_event(
         }
     }
 
+    // PendingChar mode: waiting for a character key after f/F/t/T.
+    // Execute the char find, store it for repeat, return to Normal.
+    if let InputState::PendingChar(kind) = input_state {
+        if let KeyCode::Char(ch) = key.code {
+            if let Some(new_cursor) =
+                alfred_core::editor_state::execute_char_find(state.cursor, &state.buffer, kind, ch)
+            {
+                state.cursor = new_cursor;
+                state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+            }
+            state.last_char_find = Some((kind, ch));
+        }
+        // Any non-Char key (e.g., Escape) just cancels the pending find.
+        return (InputState::Normal, DeferredAction::None, None);
+    }
+
     // Normal mode: accumulate digit keys into a count prefix.
     // 1-9 starts a new count; 0-9 appends when a count is already pending.
     // 0 alone (no pending count) falls through to keymap resolution (cursor-line-start).
@@ -222,6 +240,26 @@ pub(crate) fn handle_key_event(
                 None,
             )
         }
+        Some(ref cmd) if cmd == "enter-char-find-forward" => (
+            InputState::PendingChar(alfred_core::editor_state::CharFindKind::FindForward),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-char-find-backward" => (
+            InputState::PendingChar(alfred_core::editor_state::CharFindKind::FindBackward),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-char-til-forward" => (
+            InputState::PendingChar(alfred_core::editor_state::CharFindKind::TilForward),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-char-til-backward" => (
+            InputState::PendingChar(alfred_core::editor_state::CharFindKind::TilBackward),
+            DeferredAction::None,
+            None,
+        ),
         Some(cmd) => (
             InputState::Normal,
             DeferredAction::ExecCommand(cmd),
@@ -3889,5 +3927,193 @@ mod tests {
         // Should find "bbb" on line 1 (searching backward)
         assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: add char-find keybindings (f/F/t/T/;/,) to a keymap
+    // -----------------------------------------------------------------------
+
+    fn setup_char_find_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('f')),
+            "enter-char-find-forward".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('F')),
+            "enter-char-find-backward".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('t')),
+            "enter-char-til-forward".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('T')),
+            "enter-char-til-backward".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(';')),
+            "repeat-char-find".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(',')),
+            "reverse-char-find".to_string(),
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Character find commands: f/F/t/T (two-key sequences) and ;/, (repeat)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_when_f_char_then_cursor_jumps_to_char() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcxdef");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'f' -> enters PendingChar(FindForward)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('f')),
+            super::InputState::Normal,
+        );
+        assert_eq!(
+            is,
+            super::InputState::PendingChar(alfred_core::editor_state::CharFindKind::FindForward)
+        );
+
+        // Press 'x' -> cursor jumps to col 3
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.cursor.column, 3);
+    }
+
+    #[test]
+    fn given_line_when_t_char_then_cursor_jumps_before_char() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcxdef");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 't' then 'x' -> cursor jumps to col 2 (one before x)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('t')),
+            super::InputState::Normal,
+        );
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(state.cursor.column, 2);
+    }
+
+    #[test]
+    fn given_line_when_big_f_char_then_cursor_jumps_backward_to_char() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcxdef");
+        state.cursor = cursor::new(0, 5);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'F' then 'x' -> cursor jumps backward to col 3
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('F')),
+            super::InputState::Normal,
+        );
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(state.cursor.column, 3);
+    }
+
+    #[test]
+    fn given_line_when_big_t_char_then_cursor_jumps_after_backward_char() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcxdef");
+        state.cursor = cursor::new(0, 5);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'T' then 'x' -> cursor jumps to col 4 (one after x going backward)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('T')),
+            super::InputState::Normal,
+        );
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(state.cursor.column, 4);
+    }
+
+    #[test]
+    fn given_line_when_f_no_match_then_cursor_stays() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcxdef");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'f' then 'z' -> no match, cursor stays at col 0
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('f')),
+            super::InputState::Normal,
+        );
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_previous_find_when_semicolon_then_repeats_find() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("axbxcxd");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'f' then 'x' -> cursor at col 1
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('f')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(state.cursor.column, 1);
+
+        // Press ';' -> repeats find forward, cursor at col 3
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(';')), is);
+        assert_eq!(state.cursor.column, 3);
+
+        // Press ';' again -> cursor at col 5
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(';')), is);
+        assert_eq!(state.cursor.column, 5);
+    }
+
+    #[test]
+    fn given_previous_find_when_comma_then_reverses_find() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("axbxcxd");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_char_find_keymaps(&mut state);
+
+        // Press 'f' then 'x' -> cursor at col 1
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('f')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(state.cursor.column, 1);
+
+        // Press ';' -> cursor at col 3
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(';')), is);
+        assert_eq!(state.cursor.column, 3);
+
+        // Press ',' -> reverses (find backward), cursor at col 1
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(',')), is);
+        assert_eq!(state.cursor.column, 1);
     }
 }

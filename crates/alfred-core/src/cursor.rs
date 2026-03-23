@@ -350,6 +350,78 @@ pub fn move_word_end(cursor: Cursor, buf: &Buffer) -> Cursor {
     Cursor { line, column: col }
 }
 
+/// Finds the next occurrence of a character on the current line after the cursor (vim `f`).
+///
+/// Returns the cursor positioned at the found character, or None if not found.
+pub fn find_char_forward(cursor: Cursor, buf: &Buffer, target: char) -> Option<Cursor> {
+    let chars = line_chars(buf, cursor.line);
+    let search_start = cursor.column + 1;
+    chars[search_start..]
+        .iter()
+        .position(|&c| c == target)
+        .map(|offset| Cursor {
+            line: cursor.line,
+            column: search_start + offset,
+        })
+}
+
+/// Finds the previous occurrence of a character on the current line before the cursor (vim `F`).
+///
+/// Returns the cursor positioned at the found character, or None if not found.
+pub fn find_char_backward(cursor: Cursor, buf: &Buffer, target: char) -> Option<Cursor> {
+    let chars = line_chars(buf, cursor.line);
+    if cursor.column == 0 || chars.is_empty() {
+        return None;
+    }
+    chars[..cursor.column]
+        .iter()
+        .rposition(|&c| c == target)
+        .map(|col| Cursor {
+            line: cursor.line,
+            column: col,
+        })
+}
+
+/// Finds one position before the next occurrence of a character on the current line (vim `t`).
+///
+/// Returns the cursor positioned one column before the found character, or None if not found.
+pub fn til_char_forward(cursor: Cursor, buf: &Buffer, target: char) -> Option<Cursor> {
+    find_char_forward(cursor, buf, target).and_then(|found| {
+        if found.column > cursor.column + 1 {
+            Some(Cursor {
+                line: found.line,
+                column: found.column - 1,
+            })
+        } else if found.column == cursor.column + 1 {
+            // Target is immediately next to cursor; `t` lands on current pos + 1 - 1 = current pos
+            // But vim `t` should still move at least to one before the target,
+            // which is the cursor's current position -- so no movement.
+            // However, if cursor.column + 1 == found.column, the "til" position is cursor.column,
+            // which is no movement. Return None to indicate no useful movement.
+            None
+        } else {
+            None
+        }
+    })
+}
+
+/// Finds one position after the previous occurrence of a character on the current line (vim `T`).
+///
+/// Returns the cursor positioned one column after the found character, or None if not found.
+pub fn til_char_backward(cursor: Cursor, buf: &Buffer, target: char) -> Option<Cursor> {
+    find_char_backward(cursor, buf, target).and_then(|found| {
+        if found.column + 1 < cursor.column {
+            Some(Cursor {
+                line: found.line,
+                column: found.column + 1,
+            })
+        } else {
+            // Found character is immediately before cursor; no useful movement.
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -722,6 +794,156 @@ mod tests {
             let buf = Buffer::from_string(buffer_text);
             let result = move_word_end(*start, &buf);
             assert_eq!(result, *expected, "move_word_end: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: find_char_forward (vim f)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_char_forward_cases() {
+        // (buffer, start_cursor, target_char, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, char, Option<Cursor>, &str)> = vec![
+            (
+                "abcxdef",
+                new(0, 0),
+                'x',
+                Some(new(0, 3)),
+                "fx on abcxdef at col 0 -> col 3",
+            ),
+            (
+                "abcxdef",
+                new(0, 5),
+                'z',
+                None,
+                "no match stays (returns None)",
+            ),
+            (
+                "axxb",
+                new(0, 0),
+                'x',
+                Some(new(0, 1)),
+                "finds first occurrence after cursor",
+            ),
+            (
+                "abcxdef",
+                new(0, 3),
+                'x',
+                None,
+                "does not find char at cursor position itself",
+            ),
+        ];
+
+        for (buffer_text, start, target, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = find_char_forward(*start, &buf, *target);
+            assert_eq!(result, *expected, "find_char_forward: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: find_char_backward (vim F)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_char_backward_cases() {
+        let cases: Vec<(&str, Cursor, char, Option<Cursor>, &str)> = vec![
+            (
+                "abcxdef",
+                new(0, 5),
+                'x',
+                Some(new(0, 3)),
+                "Fx on abcxdef at col 5 -> col 3",
+            ),
+            (
+                "abcxdef",
+                new(0, 0),
+                'x',
+                None,
+                "at col 0 nothing before cursor",
+            ),
+            (
+                "xabcxdef",
+                new(0, 5),
+                'x',
+                Some(new(0, 4)),
+                "finds last occurrence before cursor",
+            ),
+        ];
+
+        for (buffer_text, start, target, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = find_char_backward(*start, &buf, *target);
+            assert_eq!(result, *expected, "find_char_backward: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: til_char_forward (vim t)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn til_char_forward_cases() {
+        let cases: Vec<(&str, Cursor, char, Option<Cursor>, &str)> = vec![
+            (
+                "abcxdef",
+                new(0, 0),
+                'x',
+                Some(new(0, 2)),
+                "tx on abcxdef at col 0 -> col 2 (one before x)",
+            ),
+            ("abcxdef", new(0, 5), 'z', None, "no match returns None"),
+            (
+                "axb",
+                new(0, 0),
+                'x',
+                None,
+                "target immediately adjacent: no useful movement",
+            ),
+        ];
+
+        for (buffer_text, start, target, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = til_char_forward(*start, &buf, *target);
+            assert_eq!(result, *expected, "til_char_forward: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: til_char_backward (vim T)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn til_char_backward_cases() {
+        let cases: Vec<(&str, Cursor, char, Option<Cursor>, &str)> = vec![
+            (
+                "abcxdef",
+                new(0, 5),
+                'x',
+                Some(new(0, 4)),
+                "Tx on abcxdef at col 5 -> col 4 (one after x)",
+            ),
+            (
+                "abcxdef",
+                new(0, 0),
+                'x',
+                None,
+                "at col 0 nothing before cursor",
+            ),
+            (
+                "axb",
+                new(0, 2),
+                'x',
+                None,
+                "target immediately before: no useful movement",
+            ),
+        ];
+
+        for (buffer_text, start, target, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = til_char_backward(*start, &buf, *target);
+            assert_eq!(result, *expected, "til_char_backward: {}", label);
         }
     }
 }

@@ -22,6 +22,17 @@ pub type Keymap = HashMap<KeyEvent, String>;
 pub const MODE_NORMAL: &str = "normal";
 pub const MODE_INSERT: &str = "insert";
 
+/// The kind of character find operation (f/F/t/T).
+///
+/// Used to track what was last executed so `;` and `,` can repeat or reverse it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CharFindKind {
+    FindForward,
+    FindBackward,
+    TilForward,
+    TilBackward,
+}
+
 /// A snapshot of buffer and cursor state for undo/redo.
 ///
 /// Rope cloning is O(1) due to structural sharing, making
@@ -59,6 +70,8 @@ pub struct EditorState {
     pub search_pattern: Option<String>,
     /// True means last search was forward (`/`), false means backward (`?`).
     pub search_forward: bool,
+    /// The most recent character find (f/F/t/T) for `;`/`,` repeat.
+    pub last_char_find: Option<(CharFindKind, char)>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -536,6 +549,66 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Character find repeat commands: ; (repeat) and , (reverse) ---
+    crate::command::register(
+        &mut state.commands,
+        "repeat-char-find".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some((kind, ch)) = s.last_char_find {
+                if let Some(new_cursor) = execute_char_find(s.cursor, &s.buffer, kind, ch) {
+                    s.cursor = new_cursor;
+                    s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+                }
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "reverse-char-find".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some((kind, ch)) = s.last_char_find {
+                let reversed_kind = reverse_char_find_kind(kind);
+                if let Some(new_cursor) = execute_char_find(s.cursor, &s.buffer, reversed_kind, ch)
+                {
+                    s.cursor = new_cursor;
+                    s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+                }
+            }
+            Ok(())
+        }),
+    );
+}
+
+/// Executes a character find operation, returning the new cursor position if found.
+///
+/// This is a pure function that dispatches to the appropriate cursor find function
+/// based on the CharFindKind.
+pub fn execute_char_find(
+    cursor: crate::cursor::Cursor,
+    buffer: &crate::buffer::Buffer,
+    kind: CharFindKind,
+    target: char,
+) -> Option<crate::cursor::Cursor> {
+    match kind {
+        CharFindKind::FindForward => crate::cursor::find_char_forward(cursor, buffer, target),
+        CharFindKind::FindBackward => crate::cursor::find_char_backward(cursor, buffer, target),
+        CharFindKind::TilForward => crate::cursor::til_char_forward(cursor, buffer, target),
+        CharFindKind::TilBackward => crate::cursor::til_char_backward(cursor, buffer, target),
+    }
+}
+
+/// Returns the reverse direction for a CharFindKind.
+///
+/// Used by the `,` (reverse-char-find) command to repeat the last find in
+/// the opposite direction.
+pub fn reverse_char_find_kind(kind: CharFindKind) -> CharFindKind {
+    match kind {
+        CharFindKind::FindForward => CharFindKind::FindBackward,
+        CharFindKind::FindBackward => CharFindKind::FindForward,
+        CharFindKind::TilForward => CharFindKind::TilBackward,
+        CharFindKind::TilBackward => CharFindKind::TilForward,
+    }
 }
 
 /// Saves a snapshot of the current buffer and cursor onto the undo stack.
@@ -606,6 +679,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         cursor_shapes,
         search_pattern: None,
         search_forward: true,
+        last_char_find: None,
     }
 }
 
