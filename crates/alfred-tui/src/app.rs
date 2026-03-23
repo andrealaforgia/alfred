@@ -350,7 +350,7 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 /// Runs the main editor event loop.
 ///
 /// This function is the imperative shell. It:
-/// 1. Enters raw mode (via RawModeGuard for cleanup safety)
+/// 1. Enters raw mode and alternate screen (via TerminalGuard for cleanup safety)
 /// 2. Creates a ratatui Terminal with CrosstermBackend
 /// 3. Loops while `state.running`:
 ///    a. Renders the current frame
@@ -358,9 +358,9 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 ///    c. Converts crossterm KeyEvent to alfred-core KeyEvent
 ///    d. Handles the key event (updates state)
 ///    e. If an eval expression was returned, evaluates it via the Lisp runtime
-/// 4. On exit: clears screen, raw mode guard drops (restores terminal)
+/// 4. On exit: clears screen, terminal guard drops (leaves alternate screen, disables raw mode)
 pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Result<()> {
-    let _raw_guard = renderer::RawModeGuard::new()?;
+    let _terminal_guard = renderer::TerminalGuard::new()?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;

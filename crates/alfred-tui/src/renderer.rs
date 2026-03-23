@@ -205,21 +205,50 @@ fn exit_raw_mode() -> io::Result<()> {
     crossterm::terminal::disable_raw_mode()
 }
 
-/// A guard that enables raw mode on creation and disables it on drop.
+/// Enters the alternate screen buffer.
 ///
-/// This ensures raw mode is always cleaned up, even on panic or early return.
-pub(crate) struct RawModeGuard;
+/// The alternate screen is a separate terminal buffer that hides the shell
+/// history and provides a clean full-screen canvas for the editor.
+fn enter_alternate_screen() -> io::Result<()> {
+    crossterm::execute!(io::stdout(), crossterm::terminal::EnterAlternateScreen)
+}
 
-impl RawModeGuard {
-    /// Creates a new RawModeGuard, enabling raw mode immediately.
+/// Leaves the alternate screen buffer, restoring the original terminal content.
+///
+/// This reveals the shell history that was hidden when the alternate screen
+/// was entered.
+fn leave_alternate_screen() -> io::Result<()> {
+    crossterm::execute!(io::stdout(), crossterm::terminal::LeaveAlternateScreen)
+}
+
+/// A guard that manages terminal state: raw mode and alternate screen.
+///
+/// On creation, the guard enables raw mode and enters the alternate screen.
+/// On drop, it leaves the alternate screen and disables raw mode (reverse
+/// order of initialization). This ensures the terminal is always restored
+/// to its original state, even on panic or early return (RAII pattern).
+pub(crate) struct TerminalGuard;
+
+impl TerminalGuard {
+    /// Creates a new TerminalGuard, enabling raw mode and entering
+    /// the alternate screen immediately.
+    ///
+    /// If entering raw mode succeeds but entering the alternate screen
+    /// fails, raw mode is disabled before returning the error.
     pub fn new() -> io::Result<Self> {
         enter_raw_mode()?;
-        Ok(RawModeGuard)
+        if let Err(err) = enter_alternate_screen() {
+            let _ = exit_raw_mode();
+            return Err(err);
+        }
+        Ok(TerminalGuard)
     }
 }
 
-impl Drop for RawModeGuard {
+impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        // Reverse order: leave alternate screen first, then disable raw mode
+        let _ = leave_alternate_screen();
         let _ = exit_raw_mode();
     }
 }
@@ -544,6 +573,24 @@ mod tests {
             "Row 1 after gutter should start with 'World' but was: '{}'",
             row1_after_gutter
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (10-01): TerminalGuard type exists and manages both
+    // raw mode and alternate screen
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_terminal_guard_type_when_referenced_then_it_exists_and_is_public_in_crate() {
+        // This test verifies the TerminalGuard type exists as a compile-time contract.
+        // The guard manages both raw mode and alternate screen via RAII.
+        // Actual terminal state cannot be tested without a real terminal,
+        // so we verify the type signature and construction contract.
+        fn _assert_terminal_guard_returns_io_result() -> std::io::Result<super::TerminalGuard> {
+            // This function is never called -- it only needs to compile.
+            // It proves: TerminalGuard::new() returns io::Result<TerminalGuard>
+            super::TerminalGuard::new()
+        }
     }
 
     // -----------------------------------------------------------------------
