@@ -129,6 +129,31 @@ pub fn move_to_line_end(cursor: Cursor, buf: &Buffer) -> Cursor {
     }
 }
 
+/// Moves the cursor to the insert position after the last character (vim `A`).
+///
+/// Unlike `move_to_line_end` which lands on the last character (vim `$`),
+/// this positions the cursor one past the last character, where new text
+/// would be appended in insert mode.
+pub fn move_to_line_end_for_insert(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let len = line_length(buf, cursor.line);
+    Cursor {
+        line: cursor.line,
+        column: len,
+    }
+}
+
+/// Moves the cursor right by one column on the same line, clamped to line length (vim `a`).
+///
+/// Unlike `move_right` which wraps to the next line at end of line,
+/// this stays on the current line and clamps to the line length (insert position).
+pub fn move_right_on_line(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let len = line_length(buf, cursor.line);
+    Cursor {
+        line: cursor.line,
+        column: (cursor.column + 1).min(len),
+    }
+}
+
 /// Moves the cursor to the first non-blank character on the current line (vim `^`).
 pub fn move_to_first_non_blank(cursor: Cursor, buf: &Buffer) -> Cursor {
     let line_content = buffer::get_line(buf, cursor.line).unwrap_or("");
@@ -202,10 +227,7 @@ pub fn move_word_forward(cursor: Cursor, buf: &Buffer) -> Cursor {
         // Skip leading whitespace
         let first_non_ws = chars.iter().position(|c| !c.is_whitespace());
         if let Some(pos) = first_non_ws {
-            return Cursor {
-                line,
-                column: pos,
-            };
+            return Cursor { line, column: pos };
         }
         line += 1;
     }

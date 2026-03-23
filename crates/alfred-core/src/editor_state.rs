@@ -218,6 +218,64 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // Insert mode variant commands (vim I, a, A, o, O)
+    crate::command::register(
+        &mut state.commands,
+        "insert-at-line-start".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_first_non_blank(s.cursor, &s.buffer);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "insert-after-cursor".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_right_on_line(s.cursor, &s.buffer);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "insert-at-line-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_line_end_for_insert(s.cursor, &s.buffer);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "open-line-below".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let current_line = s.cursor.line;
+            let line_len = crate::buffer::get_line(&s.buffer, current_line)
+                .map(|l| l.trim_end_matches('\n').len())
+                .unwrap_or(0);
+            s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
+            s.cursor = crate::cursor::new(current_line + 1, 0);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "open-line-above".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let current_line = s.cursor.line;
+            s.buffer = crate::buffer::insert_at(&s.buffer, current_line, 0, "\n");
+            s.cursor = crate::cursor::new(current_line, 0);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {
@@ -451,5 +509,152 @@ mod tests {
         let result = command::execute(&mut state, "delete-line");
         assert!(result.is_ok());
         assert_eq!(buffer::content(&state.buffer), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (09-02): open-line-below inserts new line and enters insert mode
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_normal_mode_when_open_line_below_then_new_line_inserted_and_mode_is_insert() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("First\nSecond\nThird");
+        state.cursor = crate::cursor::new(0, 2); // cursor on "First", column 2
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        // When: open-line-below is executed
+        let result = command::execute(&mut state, "open-line-below");
+
+        // Then: execution succeeds
+        assert!(result.is_ok());
+
+        // And: a new empty line is inserted below current line
+        assert_eq!(buffer::content(&state.buffer), "First\n\nSecond\nThird");
+
+        // And: cursor is on the new line at column 0
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+
+        // And: mode is insert
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-02): insert mode variant commands
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_with_leading_whitespace_when_insert_at_line_start_then_cursor_at_first_non_blank_and_insert_mode(
+    ) {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("   hello world");
+        state.cursor = crate::cursor::new(0, 8); // cursor in middle
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "insert-at-line-start");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.column, 3); // first non-blank
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_cursor_in_middle_of_line_when_insert_after_cursor_then_cursor_moves_right_and_insert_mode(
+    ) {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 2); // cursor at 'l'
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "insert-after-cursor");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.column, 3); // moved right by 1
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_cursor_at_end_of_line_when_insert_after_cursor_then_cursor_stays_at_end_and_insert_mode(
+    ) {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("hi\nworld");
+        state.cursor = crate::cursor::new(0, 2); // cursor at end of "hi" (line_length)
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "insert-after-cursor");
+        assert!(result.is_ok());
+        // Should NOT wrap to next line; should stay at end of current line
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 2);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_cursor_anywhere_when_insert_at_line_end_then_cursor_at_end_of_line_and_insert_mode() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("hello world");
+        state.cursor = crate::cursor::new(0, 2); // cursor at 'l'
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "insert-at-line-end");
+        assert!(result.is_ok());
+        // "hello world" has 11 chars, insert position is at column 11 (past last char)
+        assert_eq!(state.cursor.column, 11);
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_normal_mode_when_open_line_above_then_new_line_inserted_above_and_mode_is_insert() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("First\nSecond\nThird");
+        state.cursor = crate::cursor::new(1, 3); // cursor on "Second"
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "open-line-above");
+        assert!(result.is_ok());
+
+        // New empty line inserted above "Second"
+        assert_eq!(buffer::content(&state.buffer), "First\n\nSecond\nThird");
+
+        // Cursor is on the new empty line (line 1) at column 0
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+
+        // Mode is insert
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_first_line_when_open_line_above_then_new_line_at_top_and_cursor_on_it() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Only line");
+        state.cursor = crate::cursor::new(0, 4);
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "open-line-above");
+        assert!(result.is_ok());
+
+        // New empty line inserted above, original line pushed down
+        assert_eq!(buffer::content(&state.buffer), "\nOnly line");
+
+        // Cursor is on the new empty line (line 0) at column 0
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
     }
 }
