@@ -21,6 +21,16 @@ pub type Keymap = HashMap<KeyEvent, String>;
 pub const MODE_NORMAL: &str = "normal";
 pub const MODE_INSERT: &str = "insert";
 
+/// A snapshot of buffer and cursor state for undo/redo.
+///
+/// Rope cloning is O(1) due to structural sharing, making
+/// whole-buffer snapshots cheap.
+#[derive(Debug, Clone)]
+pub struct UndoSnapshot {
+    pub buffer: Buffer,
+    pub cursor: Cursor,
+}
+
 /// The top-level editor state, aggregating all subsystems.
 ///
 /// This is the single mutable container passed through the event loop.
@@ -37,6 +47,9 @@ pub struct EditorState {
     pub hooks: HookRegistry,
     pub message: Option<String>,
     pub running: bool,
+    pub yank_register: Option<String>,
+    pub undo_stack: Vec<UndoSnapshot>,
+    pub redo_stack: Vec<UndoSnapshot>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -276,6 +289,129 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- 09-03: Join, yank, paste, change, undo, redo commands ---
+    crate::command::register(
+        &mut state.commands,
+        "join-lines".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::join_lines(&s.buffer, s.cursor.line);
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "yank-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
+            s.yank_register = Some(content);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "paste-below".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(ref text) = s.yank_register.clone() {
+                push_undo(s);
+                let current_line = s.cursor.line;
+                let line_len = crate::buffer::get_line(&s.buffer, current_line)
+                    .map(|l| l.trim_end_matches('\n').len())
+                    .unwrap_or(0);
+                // Insert a newline at end of current line, then the yanked text
+                s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
+                s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, text);
+                s.cursor = crate::cursor::new(current_line + 1, 0);
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "change-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::replace_line(&s.buffer, s.cursor.line, "");
+            s.cursor = crate::cursor::new(s.cursor.line, 0);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "change-to-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::delete_to_line_end(&s.buffer, s.cursor.line, s.cursor.column);
+            s.mode = MODE_INSERT.to_string();
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "undo".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            undo(s);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "redo".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            redo(s);
+            Ok(())
+        }),
+    );
+}
+
+/// Saves a snapshot of the current buffer and cursor onto the undo stack.
+///
+/// Clears the redo stack (any redo history is lost when a new edit is made).
+/// Call this before any buffer mutation to enable undo.
+pub fn push_undo(state: &mut EditorState) {
+    state.undo_stack.push(UndoSnapshot {
+        buffer: state.buffer.clone(),
+        cursor: state.cursor,
+    });
+    state.redo_stack.clear();
+}
+
+/// Undoes the last change by popping the undo stack.
+///
+/// Pushes the current state onto the redo stack before restoring.
+/// If the undo stack is empty, the state is unchanged.
+pub fn undo(state: &mut EditorState) {
+    if let Some(snapshot) = state.undo_stack.pop() {
+        state.redo_stack.push(UndoSnapshot {
+            buffer: state.buffer.clone(),
+            cursor: state.cursor,
+        });
+        state.buffer = snapshot.buffer;
+        state.cursor = snapshot.cursor;
+        state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+    }
+}
+
+/// Redoes the last undone change by popping the redo stack.
+///
+/// Pushes the current state onto the undo stack before restoring.
+/// If the redo stack is empty, the state is unchanged.
+pub fn redo(state: &mut EditorState) {
+    if let Some(snapshot) = state.redo_stack.pop() {
+        state.undo_stack.push(UndoSnapshot {
+            buffer: state.buffer.clone(),
+            cursor: state.cursor,
+        });
+        state.buffer = snapshot.buffer;
+        state.cursor = snapshot.cursor;
+        state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+    }
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {
@@ -290,6 +426,9 @@ pub fn new(width: u16, height: u16) -> EditorState {
         hooks: HookRegistry::new(),
         message: None,
         running: true,
+        yank_register: None,
+        undo_stack: Vec::new(),
+        redo_stack: Vec::new(),
     }
 }
 
@@ -656,5 +795,197 @@ mod tests {
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 0);
         assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (09-03): yank line then paste below duplicates the line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_yank_line_and_paste_below_then_line_is_duplicated() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("First\nSecond\nThird");
+        state.cursor = crate::cursor::new(1, 0); // cursor on "Second"
+        editor_state::register_builtin_commands(&mut state);
+
+        // When: yank the current line, then paste below
+        let result = command::execute(&mut state, "yank-line");
+        assert!(result.is_ok());
+        let result = command::execute(&mut state, "paste-below");
+        assert!(result.is_ok());
+
+        // Then: "Second" is duplicated below
+        assert_eq!(
+            buffer::content(&state.buffer),
+            "First\nSecond\nSecond\nThird"
+        );
+
+        // And: cursor is on the pasted line
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-03): join-lines, change-line, change-to-end, undo, redo
+    // Test Budget: 7 behaviors x 2 = 14 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_multiline_buffer_when_join_lines_then_current_and_next_merged_with_space() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello\nWorld\nEnd");
+        state.cursor = crate::cursor::new(0, 3);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "join-lines");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello World\nEnd");
+    }
+
+    #[test]
+    fn given_last_line_when_join_lines_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Only");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "join-lines");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Only");
+    }
+
+    #[test]
+    fn given_line_with_text_when_change_line_then_line_cleared_and_insert_mode() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello\nWorld");
+        state.cursor = crate::cursor::new(0, 3);
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "change-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "\nWorld");
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_cursor_in_middle_when_change_to_end_then_text_after_cursor_deleted_and_insert_mode() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello World\nSecond");
+        state.cursor = crate::cursor::new(0, 5);
+        state.mode = editor_state::MODE_NORMAL.to_string();
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "change-to-end");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello\nSecond");
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 5);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_buffer_modified_when_undo_then_buffer_restored_to_previous_state() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Original");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Modify: join-lines pushes undo before mutation
+        state.buffer = buffer::Buffer::from_string("Hello\nWorld");
+        state.cursor = crate::cursor::new(0, 0);
+        let result = command::execute(&mut state, "join-lines");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello World");
+
+        // When: undo
+        let result = command::execute(&mut state, "undo");
+        assert!(result.is_ok());
+
+        // Then: buffer is restored
+        assert_eq!(buffer::content(&state.buffer), "Hello\nWorld");
+    }
+
+    #[test]
+    fn given_undone_change_when_redo_then_change_reapplied() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello\nWorld");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Mutate: join lines
+        let result = command::execute(&mut state, "join-lines");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello World");
+
+        // Undo
+        let result = command::execute(&mut state, "undo");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello\nWorld");
+
+        // When: redo
+        let result = command::execute(&mut state, "redo");
+        assert!(result.is_ok());
+
+        // Then: change reapplied
+        assert_eq!(buffer::content(&state.buffer), "Hello World");
+    }
+
+    #[test]
+    fn given_no_undo_history_when_undo_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Unchanged");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "undo");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Unchanged");
+    }
+
+    #[test]
+    fn given_no_redo_history_when_redo_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Unchanged");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "redo");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Unchanged");
+    }
+
+    #[test]
+    fn given_paste_without_yank_when_paste_below_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "paste-below");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hello");
     }
 }

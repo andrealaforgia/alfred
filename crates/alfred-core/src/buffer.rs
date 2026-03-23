@@ -248,6 +248,127 @@ pub fn save_to_file(buffer: &Buffer, path: &Path) -> Result<Buffer> {
     })
 }
 
+/// Returns the content of a line as an owned String, without trailing newline.
+///
+/// If the line index is out of bounds, returns an empty string.
+/// Useful for yanking: the caller gets clean text without newline artifacts.
+pub fn get_line_content(buffer: &Buffer, line: usize) -> String {
+    get_line(buffer, line)
+        .unwrap_or("")
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+/// Joins the given line with the next line, separated by a single space.
+///
+/// If the line is the last line or out of bounds, the buffer is returned unchanged.
+/// Both lines' trailing newlines are consumed; the result is one line with a space separator.
+pub fn join_lines(buffer: &Buffer, line: usize) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line + 1 >= total_lines {
+        return buffer.clone();
+    }
+
+    let current_content = get_line_content(buffer, line);
+    let next_content = get_line_content(buffer, line + 1);
+
+    // Build joined content: "current next"
+    let joined = if current_content.is_empty() {
+        next_content
+    } else if next_content.is_empty() {
+        current_content
+    } else {
+        format!("{} {}", current_content, next_content)
+    };
+
+    // Delete both lines and insert the joined content
+    let mut rope = buffer.rope.clone();
+    let line_start = rope.line_to_char(line);
+    let next_line_end_char = {
+        let next_line_start = rope.line_to_char(line + 1);
+        let next_line_len = rope.line(line + 1).len_chars();
+        next_line_start + next_line_len
+    };
+
+    // Remove both lines
+    rope.remove(line_start..next_line_end_char);
+
+    // Insert joined content (with newline if there are more lines after)
+    let has_more_lines = line + 2 < total_lines;
+    let insert_text = if has_more_lines {
+        format!("{}\n", joined)
+    } else {
+        joined
+    };
+    rope.insert(line_start, &insert_text);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
+/// Replaces the content of a line with new text, preserving the trailing newline if present.
+///
+/// If the line index is out of bounds, the buffer is returned unchanged.
+pub fn replace_line(buffer: &Buffer, line: usize, new_text: &str) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line >= total_lines {
+        return buffer.clone();
+    }
+
+    let mut rope = buffer.rope.clone();
+    let line_start = rope.line_to_char(line);
+    let line_chars = rope.line(line).len_chars();
+    let has_newline = line_chars > 0 && {
+        let last_char_idx = line_start + line_chars - 1;
+        last_char_idx < rope.len_chars() && rope.char(last_char_idx) == '\n'
+    };
+
+    // Remove old content
+    rope.remove(line_start..line_start + line_chars);
+
+    // Insert new content (preserving trailing newline)
+    let insert_text = if has_newline {
+        format!("{}\n", new_text)
+    } else {
+        new_text.to_string()
+    };
+    rope.insert(line_start, &insert_text);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
+/// Deletes text from the given column to the end of the line.
+///
+/// If the line or column is out of bounds, the buffer is returned unchanged.
+/// The trailing newline (if any) is preserved.
+pub fn delete_to_line_end(buffer: &Buffer, line: usize, column: usize) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line >= total_lines {
+        return buffer.clone();
+    }
+
+    let line_content = get_line_content(buffer, line);
+    if column >= line_content.len() {
+        return buffer.clone();
+    }
+
+    let new_content = &line_content[..column];
+    replace_line(buffer, line, new_content)
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -469,5 +590,83 @@ mod tests {
 
         // Then: modified is still false
         assert!(!saved_buffer.is_modified());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-03): get_line_content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_multiline_buffer_when_get_line_content_then_returns_content_without_newline() {
+        let buffer = super::Buffer::from_string("Hello\nWorld\n");
+        assert_eq!(super::get_line_content(&buffer, 0), "Hello");
+        assert_eq!(super::get_line_content(&buffer, 1), "World");
+    }
+
+    #[test]
+    fn given_buffer_when_get_line_content_out_of_bounds_then_returns_empty() {
+        let buffer = super::Buffer::from_string("Only line");
+        assert_eq!(super::get_line_content(&buffer, 99), "");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-03): join_lines
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_two_lines_when_join_lines_then_lines_merged_with_space() {
+        let buffer = super::Buffer::from_string("Hello\nWorld");
+        let result = super::join_lines(&buffer, 0);
+        assert_eq!(super::content(&result), "Hello World");
+    }
+
+    #[test]
+    fn given_three_lines_when_join_first_then_first_two_merged_third_intact() {
+        let buffer = super::Buffer::from_string("One\nTwo\nThree");
+        let result = super::join_lines(&buffer, 0);
+        assert_eq!(super::content(&result), "One Two\nThree");
+    }
+
+    #[test]
+    fn given_last_line_when_join_lines_then_buffer_unchanged() {
+        let buffer = super::Buffer::from_string("Hello\nWorld");
+        let result = super::join_lines(&buffer, 1);
+        assert_eq!(super::content(&result), "Hello\nWorld");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-03): replace_line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_multiline_buffer_when_replace_line_then_line_replaced() {
+        let buffer = super::Buffer::from_string("First\nSecond\nThird");
+        let result = super::replace_line(&buffer, 1, "Replaced");
+        assert_eq!(super::content(&result), "First\nReplaced\nThird");
+    }
+
+    #[test]
+    fn given_buffer_when_replace_last_line_no_trailing_newline_then_replaced() {
+        let buffer = super::Buffer::from_string("First\nSecond");
+        let result = super::replace_line(&buffer, 1, "New");
+        assert_eq!(super::content(&result), "First\nNew");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-03): delete_to_line_end
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_when_delete_to_end_from_column_then_text_after_column_removed() {
+        let buffer = super::Buffer::from_string("Hello World\nSecond");
+        let result = super::delete_to_line_end(&buffer, 0, 5);
+        assert_eq!(super::content(&result), "Hello\nSecond");
+    }
+
+    #[test]
+    fn given_line_when_delete_to_end_from_start_then_line_becomes_empty() {
+        let buffer = super::Buffer::from_string("Hello\nWorld");
+        let result = super::delete_to_line_end(&buffer, 0, 0);
+        assert_eq!(super::content(&result), "\nWorld");
     }
 }

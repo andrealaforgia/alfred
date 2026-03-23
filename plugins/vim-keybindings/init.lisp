@@ -24,6 +24,13 @@
 (define-key "normal-mode" "Char:w" "cursor-word-forward")
 (define-key "normal-mode" "Char:b" "cursor-word-backward")
 (define-key "normal-mode" "Char:e" "cursor-word-end")
+(define-key "normal-mode" "Char:J" "join-lines")
+(define-key "normal-mode" "Char:y" "yank-line")
+(define-key "normal-mode" "Char:p" "paste-below")
+(define-key "normal-mode" "Char:c" "change-line")
+(define-key "normal-mode" "Char:C" "change-to-end")
+(define-key "normal-mode" "Char:u" "undo")
+(define-key "normal-mode" "Ctrl:r" "redo")
 (define-key "normal-mode" "Char::" "enter-command-mode")
 
 ;; Create insert-mode keymap with Escape to return to normal mode and Backspace
