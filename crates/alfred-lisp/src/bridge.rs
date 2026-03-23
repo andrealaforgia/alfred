@@ -1579,4 +1579,112 @@ mod tests {
         let result = runtime.eval("(set-mode)");
         assert!(result.is_err(), "set-mode with no args should fail");
     }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (07-02): vim-keybindings plugin creates normal/insert
+    // mode keymaps with hjkl navigation, mode switching, and editing commands
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_vim_keybindings_plugin_when_loaded_then_normal_mode_keymaps_with_hjkl_and_editing_commands_active(
+    ) {
+        use alfred_core::key_event::{KeyCode, KeyEvent};
+
+        // Given: an editor state with builtin commands and a runtime with all primitives
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer =
+                alfred_core::buffer::Buffer::from_string("Hello World\nSecond line\nThird line");
+            editor.cursor = cursor::new(0, 0);
+        }
+        editor_state::register_builtin_commands(&mut state.borrow_mut());
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        // When: the vim-keybindings plugin is loaded
+        let plugin_source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("plugins/vim-keybindings/init.lisp"),
+        )
+        .expect("vim-keybindings plugin should exist");
+        runtime.eval(&plugin_source).unwrap();
+
+        // Then: normal-mode keymap exists with hjkl bindings
+        let editor = state.borrow();
+        let normal_keymap = editor
+            .keymaps
+            .get("normal-mode")
+            .expect("normal-mode keymap should exist");
+
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('h'))),
+            Some(&"cursor-left".to_string()),
+            "h should be bound to cursor-left"
+        );
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('j'))),
+            Some(&"cursor-down".to_string()),
+            "j should be bound to cursor-down"
+        );
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('k'))),
+            Some(&"cursor-up".to_string()),
+            "k should be bound to cursor-up"
+        );
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('l'))),
+            Some(&"cursor-right".to_string()),
+            "l should be bound to cursor-right"
+        );
+
+        // And: i is bound to enter-insert-mode, x to delete-char-at-cursor, d to delete-line
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('i'))),
+            Some(&"enter-insert-mode".to_string()),
+            "i should be bound to enter-insert-mode"
+        );
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('x'))),
+            Some(&"delete-char-at-cursor".to_string()),
+            "x should be bound to delete-char-at-cursor"
+        );
+        assert_eq!(
+            normal_keymap.get(&KeyEvent::plain(KeyCode::Char('d'))),
+            Some(&"delete-line".to_string()),
+            "d should be bound to delete-line"
+        );
+
+        // And: insert-mode keymap exists with Escape bound to enter-normal-mode
+        let insert_keymap = editor
+            .keymaps
+            .get("insert-mode")
+            .expect("insert-mode keymap should exist");
+        assert_eq!(
+            insert_keymap.get(&KeyEvent::plain(KeyCode::Escape)),
+            Some(&"enter-normal-mode".to_string()),
+            "Escape should be bound to enter-normal-mode in insert mode"
+        );
+
+        // And: mode is "normal" and active keymap is "normal-mode"
+        assert_eq!(editor.mode, "normal");
+        assert_eq!(editor.active_keymaps, vec!["normal-mode".to_string()]);
+
+        // And: enter-insert-mode and enter-normal-mode commands are registered
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "enter-insert-mode").is_some(),
+            "enter-insert-mode command should be registered"
+        );
+        assert!(
+            alfred_core::command::lookup(&editor.commands, "enter-normal-mode").is_some(),
+            "enter-normal-mode command should be registered"
+        );
+    }
 }

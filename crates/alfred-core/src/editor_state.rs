@@ -123,6 +123,29 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    crate::command::register(
+        &mut state.commands,
+        "delete-char-at-cursor".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            // Delete the character at the cursor position (forward delete, vim 'x').
+            // If cursor is at end of buffer, do nothing (delete_at handles this).
+            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "delete-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            // Delete the entire current line (vim 'dd' / 'd').
+            s.buffer = crate::buffer::delete_line(&s.buffer, s.cursor.line);
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {
@@ -293,5 +316,68 @@ mod tests {
         // No keymaps, no active keymaps
         let result = editor_state::resolve_key(&state, KeyEvent::plain(KeyCode::Up));
         assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (07-02): delete-char-at-cursor and delete-line commands
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_text_when_delete_char_at_cursor_executed_then_char_at_cursor_removed() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello");
+        state.cursor = crate::cursor::new(0, 1); // cursor at 'e'
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "delete-char-at-cursor");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hllo");
+        // Cursor stays at same position after forward-delete
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_cursor_at_end_of_buffer_when_delete_char_at_cursor_executed_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hi");
+        state.cursor = crate::cursor::new(0, 2); // cursor past last char
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "delete-char-at-cursor");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Hi");
+    }
+
+    #[test]
+    fn given_multiline_buffer_when_delete_line_executed_then_current_line_removed() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("First\nSecond\nThird");
+        state.cursor = crate::cursor::new(1, 3); // cursor on "Second"
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "delete-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "First\nThird");
+    }
+
+    #[test]
+    fn given_single_line_buffer_when_delete_line_executed_then_buffer_becomes_empty() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Only line");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "delete-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "");
     }
 }

@@ -165,6 +165,55 @@ pub fn delete_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
     }
 }
 
+/// Deletes an entire line from the buffer, returning a new Buffer.
+///
+/// If the line index is out of bounds, the buffer is returned unchanged.
+/// When the last remaining line is deleted, the buffer becomes empty.
+/// The trailing newline of the deleted line (or preceding newline if last line)
+/// is also removed to avoid leaving blank lines.
+pub fn delete_line(buffer: &Buffer, line: usize) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line >= total_lines {
+        return buffer.clone();
+    }
+
+    let mut rope = buffer.rope.clone();
+    let line_start = rope.line_to_char(line);
+    let line_char_count = rope.line(line).len_chars();
+
+    if line_char_count == 0 && rope.len_chars() == 0 {
+        // Already empty
+        return buffer.clone();
+    }
+
+    // Determine the range to delete:
+    // Include the trailing newline if there is one, so no blank line is left.
+    let end = if line_start + line_char_count <= rope.len_chars() {
+        line_start + line_char_count
+    } else {
+        rope.len_chars()
+    };
+
+    // If deleting the last line and there's a preceding newline, also remove it
+    let start = if line > 0 && end == rope.len_chars() && line_start > 0 {
+        line_start - 1 // remove preceding newline
+    } else {
+        line_start
+    };
+
+    if start < end {
+        rope.remove(start..end);
+    }
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.

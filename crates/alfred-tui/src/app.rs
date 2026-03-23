@@ -2000,7 +2000,10 @@ mod tests {
 
         // Then: 'x' is inserted
         let content = alfred_core::buffer::content(&state.buffer);
-        assert_eq!(content, "Hellox", "Insert mode should self-insert unbound chars");
+        assert_eq!(
+            content, "Hellox",
+            "Insert mode should self-insert unbound chars"
+        );
         assert_eq!(state.cursor.column, 6);
     }
 
