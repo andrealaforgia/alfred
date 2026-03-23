@@ -296,6 +296,150 @@ fn register_remove_hook(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
     });
 }
 
+/// Parses a key-spec string into a `KeyEvent`.
+///
+/// Supported formats:
+/// - Arrow keys: `"Up"`, `"Down"`, `"Left"`, `"Right"`
+/// - Special keys: `"Enter"`, `"Escape"`, `"Backspace"`, `"Tab"`, `"Home"`, `"End"`, `"PageUp"`, `"PageDown"`, `"Delete"`
+/// - Character keys: `"Char:a"`, `"Char::"` (colon character)
+/// - Modifier keys: `"Ctrl:q"` (Ctrl + character)
+///
+/// Returns `Err(RuntimeError)` for unrecognized key-spec strings.
+fn parse_key_spec(spec: &str) -> Result<alfred_core::key_event::KeyEvent, RuntimeError> {
+    use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
+
+    // Check for modifier prefix "Ctrl:"
+    if let Some(rest) = spec.strip_prefix("Ctrl:") {
+        let ch = rest.chars().next().ok_or_else(|| RuntimeError {
+            msg: "parse_key_spec: 'Ctrl:' requires a character, got empty string".to_string(),
+        })?;
+        return Ok(KeyEvent::new(KeyCode::Char(ch), Modifiers::ctrl()));
+    }
+
+    // Check for "Char:" prefix
+    if let Some(rest) = spec.strip_prefix("Char:") {
+        let ch = rest.chars().next().ok_or_else(|| RuntimeError {
+            msg: "parse_key_spec: 'Char:' requires a character, got empty string".to_string(),
+        })?;
+        return Ok(KeyEvent::plain(KeyCode::Char(ch)));
+    }
+
+    // Named keys (no modifier)
+    let code = match spec {
+        "Up" => KeyCode::Up,
+        "Down" => KeyCode::Down,
+        "Left" => KeyCode::Left,
+        "Right" => KeyCode::Right,
+        "Enter" => KeyCode::Enter,
+        "Escape" => KeyCode::Escape,
+        "Backspace" => KeyCode::Backspace,
+        "Tab" => KeyCode::Tab,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        "Delete" => KeyCode::Delete,
+        _ => {
+            return Err(RuntimeError {
+                msg: format!(
+                    "parse_key_spec: unrecognized key-spec \"{}\". \
+                     Expected: Up, Down, Left, Right, Enter, Escape, Backspace, Tab, \
+                     Home, End, PageUp, PageDown, Delete, Char:<c>, or Ctrl:<c>",
+                    spec
+                ),
+            });
+        }
+    };
+
+    Ok(KeyEvent::plain(code))
+}
+
+/// Extracts a required string argument at a specific index from the args list.
+fn extract_string_arg_at(
+    args: &[Value],
+    index: usize,
+    fn_name: &str,
+    param_name: &str,
+) -> Result<String, RuntimeError> {
+    match args.get(index) {
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(other) => Err(RuntimeError {
+            msg: format!(
+                "{}: expected string for {}, got {}",
+                fn_name, param_name, other
+            ),
+        }),
+        None => Err(RuntimeError {
+            msg: format!("{}: missing required argument '{}'", fn_name, param_name),
+        }),
+    }
+}
+
+/// Registers keymap primitives (`make-keymap`, `define-key`, `set-active-keymap`) into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(make-keymap "name")` -- creates a named keymap in EditorState
+/// - `(define-key "keymap-name" "key-spec" "command-name")` -- binds a key to a command
+/// - `(set-active-keymap "keymap-name")` -- sets the active keymap
+pub fn register_keymap_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_make_keymap(env.clone(), state.clone());
+    register_define_key(env.clone(), state.clone());
+    register_set_active_keymap(env, state);
+}
+
+/// Registers `make-keymap`: creates a named keymap in EditorState.
+///
+/// Usage: `(make-keymap "name")`
+fn register_make_keymap(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "make-keymap", move |_env, args| {
+        let name = extract_string_arg(&args, "make-keymap")?;
+        let mut editor = state.borrow_mut();
+        editor
+            .keymaps
+            .entry(name)
+            .or_default();
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `define-key`: binds a key-spec to a command name in a keymap.
+///
+/// Usage: `(define-key "keymap-name" "key-spec" "command-name")`
+fn register_define_key(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "define-key", move |_env, args| {
+        let keymap_name = extract_string_arg_at(&args, 0, "define-key", "keymap-name")?;
+        let key_spec_str = extract_string_arg_at(&args, 1, "define-key", "key-spec")?;
+        let command_name = extract_string_arg_at(&args, 2, "define-key", "command-name")?;
+
+        let key_event = parse_key_spec(&key_spec_str)?;
+
+        let mut editor = state.borrow_mut();
+        let keymap = editor.keymaps.get_mut(&keymap_name).ok_or_else(|| RuntimeError {
+            msg: format!(
+                "define-key: keymap \"{}\" does not exist. Create it first with (make-keymap \"{}\")",
+                keymap_name, keymap_name
+            ),
+        })?;
+
+        keymap.insert(key_event, command_name);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-active-keymap`: sets the active keymap(s) in EditorState.
+///
+/// Usage: `(set-active-keymap "keymap-name")`
+fn register_set_active_keymap(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-active-keymap", move |_env, args| {
+        let keymap_name = extract_string_arg(&args, "set-active-keymap")?;
+        let mut editor = state.borrow_mut();
+        editor.active_keymaps = vec![keymap_name];
+        Ok(Value::NIL)
+    });
+}
+
 /// Registers `buffer-insert`: inserts text at the current cursor position.
 fn register_buffer_insert(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "buffer-insert", move |_env, args| {
@@ -1131,5 +1275,220 @@ mod tests {
             result.is_err(),
             "add-hook with non-callable callback should fail"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: keymap primitives (step 06-01)
+    // Test Budget: 6 behaviors x 2 = 12 max unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_runtime_with_keymap_primitives_when_make_keymap_then_keymap_exists_in_state() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        runtime.eval("(make-keymap \"insert\")").unwrap();
+
+        let editor = state.borrow();
+        assert!(
+            editor.keymaps.contains_key("insert"),
+            "make-keymap should create an entry in EditorState.keymaps"
+        );
+    }
+
+    #[test]
+    fn given_keymap_exists_when_define_key_then_binding_stored() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        runtime.eval("(make-keymap \"normal\")").unwrap();
+        runtime
+            .eval("(define-key \"normal\" \"Char:a\" \"insert-a\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let keymap = editor.keymaps.get("normal").unwrap();
+        let key_a =
+            alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Char('a'));
+        assert_eq!(keymap.get(&key_a), Some(&"insert-a".to_string()));
+    }
+
+    #[test]
+    fn given_runtime_when_set_active_keymap_then_active_keymaps_updated() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        runtime.eval("(make-keymap \"visual\")").unwrap();
+        runtime.eval("(set-active-keymap \"visual\")").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.active_keymaps, vec!["visual".to_string()]);
+    }
+
+    #[test]
+    fn given_various_key_specs_when_define_key_then_all_parsed_correctly() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        runtime.eval("(make-keymap \"test\")").unwrap();
+
+        let specs_and_expected: Vec<(&str, alfred_core::key_event::KeyEvent)> = vec![
+            (
+                "Up",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Up),
+            ),
+            (
+                "Down",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Down),
+            ),
+            (
+                "Left",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Left),
+            ),
+            (
+                "Right",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Right),
+            ),
+            (
+                "Enter",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Enter),
+            ),
+            (
+                "Escape",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Escape),
+            ),
+            (
+                "Backspace",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Backspace),
+            ),
+            (
+                "Char::",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Char(':')),
+            ),
+            (
+                "Ctrl:q",
+                alfred_core::key_event::KeyEvent::new(
+                    alfred_core::key_event::KeyCode::Char('q'),
+                    alfred_core::key_event::Modifiers::ctrl(),
+                ),
+            ),
+        ];
+
+        for (i, (spec, expected)) in specs_and_expected.iter().enumerate() {
+            let cmd = format!("cmd-{}", i);
+            let expr = format!("(define-key \"test\" \"{}\" \"{}\")", spec, cmd);
+            runtime.eval(&expr).unwrap();
+
+            let editor = state.borrow();
+            let keymap = editor.keymaps.get("test").unwrap();
+            assert_eq!(
+                keymap.get(expected),
+                Some(&cmd),
+                "key-spec '{}' should parse correctly",
+                spec
+            );
+        }
+    }
+
+    #[test]
+    fn given_invalid_key_spec_when_define_key_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        runtime.eval("(make-keymap \"test\")").unwrap();
+
+        let result = runtime.eval("(define-key \"test\" \"InvalidKey\" \"cmd\")");
+        assert!(result.is_err(), "invalid key-spec should return error");
+    }
+
+    #[test]
+    fn given_define_key_on_nonexistent_keymap_when_evaluated_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(define-key \"nonexistent\" \"Up\" \"cmd\")");
+        assert!(
+            result.is_err(),
+            "define-key on nonexistent keymap should return error"
+        );
+    }
+
+    #[test]
+    fn given_keymap_primitives_with_wrong_args_when_evaluated_then_returns_errors() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        // make-keymap: no args
+        assert!(runtime.eval("(make-keymap)").is_err());
+        // make-keymap: wrong type
+        assert!(runtime.eval("(make-keymap 42)").is_err());
+        // define-key: missing args
+        assert!(runtime.eval("(define-key \"km\")").is_err());
+        // set-active-keymap: no args
+        assert!(runtime.eval("(set-active-keymap)").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: keymap primitives round-trip through Lisp bridge
+    // (step 06-01)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_keymap_primitives_when_make_keymap_define_key_set_active_then_keymap_stored_and_active(
+    ) {
+        // Given: an editor state and a runtime with keymap primitives registered
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+
+        // When: a keymap is created, keys are bound, and it is activated
+        runtime.eval("(make-keymap \"normal\")").unwrap();
+        runtime
+            .eval("(define-key \"normal\" \"Ctrl:q\" \"quit\")")
+            .unwrap();
+        runtime
+            .eval("(define-key \"normal\" \"Up\" \"cursor-up\")")
+            .unwrap();
+        runtime.eval("(set-active-keymap \"normal\")").unwrap();
+
+        // Then: the keymap exists with the correct bindings
+        let editor = state.borrow();
+        let keymap = editor
+            .keymaps
+            .get("normal")
+            .expect("keymap 'normal' should exist");
+        let ctrl_q = alfred_core::key_event::KeyEvent::new(
+            alfred_core::key_event::KeyCode::Char('q'),
+            alfred_core::key_event::Modifiers::ctrl(),
+        );
+        assert_eq!(
+            keymap.get(&ctrl_q),
+            Some(&"quit".to_string()),
+            "Ctrl:q should be bound to 'quit'"
+        );
+        let up = alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Up);
+        assert_eq!(
+            keymap.get(&up),
+            Some(&"cursor-up".to_string()),
+            "Up should be bound to 'cursor-up'"
+        );
+
+        // And: the active keymaps include "normal"
+        assert_eq!(editor.active_keymaps, vec!["normal".to_string()]);
     }
 }

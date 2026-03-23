@@ -5,14 +5,17 @@
 //! hook registry, message, and running flag.
 //! This module has no I/O dependencies -- EditorState is pure state.
 
+use std::collections::HashMap;
+
 use crate::buffer::Buffer;
 use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
 use crate::hook::HookRegistry;
+use crate::key_event::KeyEvent;
 use crate::viewport::Viewport;
 
-/// Stub type for keymaps. Full implementation in M6.
-pub type Keymap = String;
+/// A keymap maps key events to command names.
+pub type Keymap = HashMap<KeyEvent, String>;
 
 /// The editor mode, determining how key events are interpreted.
 ///
@@ -42,7 +45,8 @@ pub struct EditorState {
     pub viewport: Viewport,
     pub commands: CommandRegistry,
     pub mode: EditorMode,
-    pub active_keymaps: Vec<Keymap>,
+    pub keymaps: HashMap<String, Keymap>,
+    pub active_keymaps: Vec<String>,
     pub hooks: HookRegistry,
     pub message: Option<String>,
     pub running: bool,
@@ -55,7 +59,7 @@ pub struct EditorState {
 /// - Viewport fits the given terminal width and height.
 /// - Command registry is empty.
 /// - Mode is "normal".
-/// - Active keymaps are empty, hook registry is empty.
+/// - Keymaps registry is empty, active keymaps are empty, hook registry is empty.
 /// - Message is None.
 /// - Running is true.
 pub fn new(width: u16, height: u16) -> EditorState {
@@ -65,6 +69,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         viewport: crate::viewport::new(0, height, width),
         commands: CommandRegistry::new(),
         mode: EditorMode::Normal,
+        keymaps: HashMap::new(),
         active_keymaps: Vec::new(),
         hooks: HookRegistry::new(),
         message: None,

@@ -5,7 +5,7 @@
 //! no I/O dependencies.
 
 /// The key that was pressed, independent of modifier keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyCode {
     /// A character key (e.g. 'a', 'Z', '3', '!').
     Char(char),
@@ -27,7 +27,7 @@ pub enum KeyCode {
 }
 
 /// Modifier keys held during a key press.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Modifiers {
     pub ctrl: bool,
     pub alt: bool,
@@ -55,7 +55,7 @@ impl Modifiers {
 }
 
 /// A single key input event combining the key pressed and any modifiers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: Modifiers,

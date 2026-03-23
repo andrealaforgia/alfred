@@ -1,75 +1,75 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-22T12:00:00Z",
+    "created_at": "2026-03-23T11:00:00Z",
     "total_steps": 4
   },
   "phases": [
     {
-      "id": "04",
-      "name": "M4 Line Numbers Plugin",
+      "id": "06",
+      "name": "M6 Basic Keybinding Plugin",
       "steps": [
         {
-          "id": "04-01",
-          "name": "Hook system with register and dispatch",
+          "id": "06-01",
+          "name": "Keymap primitives in Lisp bridge",
           "criteria": [
-            "HookRegistry stores named hooks with callbacks",
-            "register_hook adds a callback to a named hook",
-            "dispatch_hook calls all callbacks for a hook name",
-            "Callbacks receive arguments and return values",
-            "Unregister removes a specific callback by ID"
+            "make-keymap primitive creates a named keymap",
+            "define-key primitive binds key sequence to command",
+            "set-active-keymap primitive activates a keymap",
+            "Keymap operations accessible from Lisp code",
+            "Invalid key specs return error messages"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/hook.rs",
-            "crates/alfred-core/src/lib.rs",
+            "crates/alfred-lisp/src/bridge.rs",
             "crates/alfred-core/src/editor_state.rs"
           ]
         },
         {
-          "id": "04-02",
-          "name": "Hook primitives in Lisp bridge",
+          "id": "06-02",
+          "name": "Keymap-based key dispatch in event loop",
           "criteria": [
-            "add-hook primitive registers a Lisp callback",
-            "Hooks callable from Rust via dispatch",
-            "Hook callbacks receive Lisp value arguments",
-            "Hook errors display as messages not crashes",
-            "define-hook primitive creates a named hook"
+            "Event loop resolves keys through active keymap",
+            "Keymap match executes the bound command",
+            "Unbound keys fall through without error",
+            "No hardcoded key handlers remain in Rust",
+            "Command mode colon still works via keymap"
           ],
           "files_to_modify": [
+            "crates/alfred-tui/src/app.rs",
+            "crates/alfred-core/src/key_event.rs"
+          ],
+          "deps": ["06-01"]
+        },
+        {
+          "id": "06-03",
+          "name": "Basic keybinding plugin in Alfred Lisp",
+          "criteria": [
+            "Plugin in plugins/basic-keybindings/init.lisp loads",
+            "Arrow keys navigate via plugin-defined bindings",
+            "Character insertion works for printable keys",
+            "Backspace deletes character before cursor",
+            "Colon enters command mode via plugin binding"
+          ],
+          "files_to_modify": [
+            "plugins/basic-keybindings/init.lisp",
             "crates/alfred-lisp/src/bridge.rs"
           ],
-          "deps": ["04-01"]
+          "deps": ["06-02"]
         },
         {
-          "id": "04-03",
-          "name": "Gutter rendering area in TUI renderer",
+          "id": "06-04",
+          "name": "Remove hardcoded keybindings from Rust",
           "criteria": [
-            "Renderer reserves gutter columns on the left",
-            "Gutter width controlled by viewport gutter_width",
-            "Buffer text shifts right by gutter width",
-            "Gutter area displays content from render-gutter hook",
-            "Zero gutter width renders without gutter"
+            "No hardcoded key matching in app.rs handle_key_event",
+            "All navigation via keymap-resolved commands",
+            "Removing plugin means no keybindings work",
+            "Editor starts but keys have no effect without plugin",
+            "Existing tests updated to use keymap dispatch"
           ],
           "files_to_modify": [
-            "crates/alfred-tui/src/renderer.rs"
-          ],
-          "deps": ["04-02"]
-        },
-        {
-          "id": "04-04",
-          "name": "Line numbers plugin in Alfred Lisp",
-          "criteria": [
-            "Plugin in plugins/line-numbers/init.lisp loads",
-            "Line numbers appear in gutter column",
-            "Numbers update correctly when scrolling",
-            "Gutter width adjusts for digit count",
-            "Removing plugin directory causes no errors"
-          ],
-          "files_to_modify": [
-            "plugins/line-numbers/init.lisp",
             "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["04-03"]
+          "deps": ["06-03"]
         }
       ]
     }
