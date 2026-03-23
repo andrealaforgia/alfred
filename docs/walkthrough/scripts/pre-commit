@@ -1,0 +1,19 @@
+#!/bin/sh
+# Pre-commit hook for Alfred editor
+# Uses Makefile targets for consistency with CI and local development.
+# Install: ./scripts/setup-hooks.sh
+
+set -e
+
+echo "Running pre-commit checks..."
+
+echo "  Checking formatting..."
+make format
+
+echo "  Running lint..."
+make lint
+
+echo "  Running tests..."
+make test
+
+echo "All pre-commit checks passed."
