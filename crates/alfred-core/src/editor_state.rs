@@ -62,6 +62,66 @@ pub struct EditorState {
 /// - Keymaps registry is empty, active keymaps are empty, hook registry is empty.
 /// - Message is None.
 /// - Running is true.
+/// Resolves a key event by looking it up in the active keymaps.
+///
+/// Iterates through active keymaps in order, returning the command name
+/// from the first keymap that contains a binding for the given key.
+/// Returns None if no keymap contains the key.
+pub fn resolve_key(state: &EditorState, key: KeyEvent) -> Option<String> {
+    for keymap_name in &state.active_keymaps {
+        if let Some(keymap) = state.keymaps.get(keymap_name) {
+            if let Some(command_name) = keymap.get(&key) {
+                return Some(command_name.clone());
+            }
+        }
+    }
+    None
+}
+
+/// Registers built-in native commands for cursor movement and mode switching.
+///
+/// These commands are the minimal set needed for keymap-based dispatch:
+/// - "cursor-up", "cursor-down", "cursor-left", "cursor-right"
+/// - "enter-command-mode" is handled specially by the event loop (not a command)
+pub fn register_builtin_commands(state: &mut EditorState) {
+    crate::command::register(
+        &mut state.commands,
+        "cursor-up".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_up(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-down".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_down(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-left".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_left(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-right".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_right(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+}
+
 pub fn new(width: u16, height: u16) -> EditorState {
     EditorState {
         buffer: Buffer::from_string(""),
@@ -164,5 +224,71 @@ mod tests {
     fn given_new_editor_state_then_active_keymaps_is_empty() {
         let state = editor_state::new(80, 24);
         assert!(state.active_keymaps.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (06-02): resolve_key keymap lookup
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_keymap_with_binding_when_resolve_key_then_returns_command_name() {
+        use crate::key_event::{KeyCode, KeyEvent};
+
+        let mut state = editor_state::new(80, 24);
+        let mut keymap = crate::editor_state::Keymap::new();
+        keymap.insert(KeyEvent::plain(KeyCode::Up), "cursor-up".to_string());
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+
+        let result = editor_state::resolve_key(&state, KeyEvent::plain(KeyCode::Up));
+        assert_eq!(result, Some("cursor-up".to_string()));
+    }
+
+    #[test]
+    fn given_keymap_when_unbound_key_then_returns_none() {
+        use crate::key_event::{KeyCode, KeyEvent};
+
+        let mut state = editor_state::new(80, 24);
+        let keymap = crate::editor_state::Keymap::new(); // empty keymap
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+
+        let result = editor_state::resolve_key(&state, KeyEvent::plain(KeyCode::Tab));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_multiple_active_keymaps_when_key_in_first_then_first_wins() {
+        use crate::key_event::{KeyCode, KeyEvent};
+
+        let mut state = editor_state::new(80, 24);
+
+        // First keymap: Up -> "custom-up"
+        let mut keymap1 = crate::editor_state::Keymap::new();
+        keymap1.insert(KeyEvent::plain(KeyCode::Up), "custom-up".to_string());
+        state.keymaps.insert("overlay".to_string(), keymap1);
+
+        // Second keymap: Up -> "cursor-up"
+        let mut keymap2 = crate::editor_state::Keymap::new();
+        keymap2.insert(KeyEvent::plain(KeyCode::Up), "cursor-up".to_string());
+        state.keymaps.insert("global".to_string(), keymap2);
+
+        // Active keymaps: overlay checked first, then global
+        state.active_keymaps.push("overlay".to_string());
+        state.active_keymaps.push("global".to_string());
+
+        let result = editor_state::resolve_key(&state, KeyEvent::plain(KeyCode::Up));
+        assert_eq!(result, Some("custom-up".to_string()));
+    }
+
+    #[test]
+    fn given_no_active_keymaps_when_resolve_key_then_returns_none() {
+        use crate::key_event::{KeyCode, KeyEvent};
+
+        let state = editor_state::new(80, 24);
+        // No keymaps, no active keymaps
+        let result = editor_state::resolve_key(&state, KeyEvent::plain(KeyCode::Up));
+        assert_eq!(result, None);
     }
 }

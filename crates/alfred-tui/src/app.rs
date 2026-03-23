@@ -15,10 +15,8 @@ use crossterm::event::{
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
-use alfred_core::viewport;
 use alfred_lisp::runtime::LispRuntime;
 
 use crate::renderer;
@@ -123,34 +121,15 @@ pub(crate) fn handle_key_event(
         }
     }
 
-    // Normal mode
-    match key {
-        KeyEvent {
-            code: KeyCode::Char(':'),
-            modifiers: Modifiers { ctrl: false, .. },
-        } => {
+    // Normal mode: resolve key through active keymaps
+    match alfred_core::editor_state::resolve_key(state, key) {
+        Some(ref cmd) if cmd == "enter-command-mode" => {
             state.message = Some(":".to_string());
-            return (InputState::Command(String::new()), DeferredAction::None);
+            (InputState::Command(String::new()), DeferredAction::None)
         }
-        KeyEvent {
-            code: KeyCode::Up,
-            modifiers: Modifiers { ctrl: false, .. },
-        } => move_cursor_and_adjust_viewport(state, cursor::move_up),
-        KeyEvent {
-            code: KeyCode::Down,
-            modifiers: Modifiers { ctrl: false, .. },
-        } => move_cursor_and_adjust_viewport(state, cursor::move_down),
-        KeyEvent {
-            code: KeyCode::Left,
-            modifiers: Modifiers { ctrl: false, .. },
-        } => move_cursor_and_adjust_viewport(state, cursor::move_left),
-        KeyEvent {
-            code: KeyCode::Right,
-            modifiers: Modifiers { ctrl: false, .. },
-        } => move_cursor_and_adjust_viewport(state, cursor::move_right),
-        _ => {}
+        Some(cmd) => (InputState::Normal, DeferredAction::ExecCommand(cmd)),
+        None => (InputState::Normal, DeferredAction::None),
     }
-    (InputState::Normal, DeferredAction::None)
 }
 
 /// Action to perform after handle_key_event releases the EditorState borrow.
@@ -192,18 +171,6 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
             }
         }
     }
-}
-
-/// Applies a cursor movement function and adjusts the viewport to follow.
-fn move_cursor_and_adjust_viewport(
-    state: &mut EditorState,
-    move_fn: fn(
-        alfred_core::cursor::Cursor,
-        &alfred_core::buffer::Buffer,
-    ) -> alfred_core::cursor::Cursor,
-) {
-    state.cursor = move_fn(state.cursor, &state.buffer);
-    state.viewport = viewport::adjust(state.viewport, &state.cursor);
 }
 
 /// Evaluates a Lisp expression and sets the result (or error) as the editor message.
@@ -467,6 +434,40 @@ mod tests {
         super::handle_key_event(state, key, input_state).0
     }
 
+    /// Helper: set up standard keymaps with arrow keys and colon binding,
+    /// plus register built-in native commands.
+    /// Used by tests that rely on keymap-based key dispatch (06-02+).
+    fn setup_standard_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        use alfred_core::editor_state::Keymap;
+        let mut keymap = Keymap::new();
+        keymap.insert(KeyEvent::plain(KeyCode::Up), "cursor-up".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Down), "cursor-down".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Left), "cursor-left".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Right), "cursor-right".to_string());
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(':')),
+            "enter-command-mode".to_string(),
+        );
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+        alfred_core::editor_state::register_builtin_commands(state);
+    }
+
+    /// Helper: dispatch a key event through keymap lookup and execute any
+    /// deferred command. Returns the new InputState.
+    /// This replaces handle_key for tests that need full dispatch (cursor movement etc).
+    fn dispatch_key(
+        state: &mut alfred_core::editor_state::EditorState,
+        key: KeyEvent,
+        input_state: super::InputState,
+    ) -> super::InputState {
+        let (new_input_state, action) = super::handle_key_event(state, key, input_state);
+        if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
+            let _ = alfred_core::command::execute(state, cmd_name);
+        }
+        new_input_state
+    }
+
     // -----------------------------------------------------------------------
     // Acceptance test: simulate a sequence of key events on EditorState,
     // verifying cursor movement and running flag changes
@@ -475,9 +476,10 @@ mod tests {
     #[test]
     fn given_editor_with_multiline_buffer_when_key_events_dispatched_then_cursor_moves_and_quit_stops_running(
     ) {
-        // Given: an EditorState with a 3-line buffer
+        // Given: an EditorState with a 3-line buffer and standard keymaps
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("Hello\nWorld!\nBye");
+        setup_standard_keymaps(&mut state);
 
         // Cursor starts at (0, 0), running is true
         assert_eq!(state.cursor.line, 0);
@@ -485,7 +487,7 @@ mod tests {
         assert!(state.running);
 
         // When: press Down arrow
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Down),
             super::InputState::Normal,
@@ -495,12 +497,12 @@ mod tests {
         assert_eq!(state.cursor.column, 0);
 
         // When: press Right arrow twice
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Right),
             super::InputState::Normal,
         );
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Right),
             super::InputState::Normal,
@@ -510,7 +512,7 @@ mod tests {
         assert_eq!(state.cursor.column, 2);
 
         // When: press Up arrow
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Up),
             super::InputState::Normal,
@@ -520,7 +522,7 @@ mod tests {
         assert_eq!(state.cursor.column, 2);
 
         // When: press Left arrow
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Left),
             super::InputState::Normal,
@@ -535,13 +537,13 @@ mod tests {
         assert!(state.cursor.line < state.viewport.top_line + state.viewport.height as usize);
 
         // When: type :q Enter to quit
-        let result = handle_key(
+        let result = dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
-        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
         // Then: running is false
         assert!(!state.running);
     }
@@ -559,11 +561,12 @@ mod tests {
             "Line9",
         ];
         state.buffer = Buffer::from_string(&lines.join("\n"));
+        setup_standard_keymaps(&mut state);
         assert_eq!(state.viewport.top_line, 0);
 
         // When: move cursor down 6 times (past the 5-line viewport)
         for _ in 0..6 {
-            handle_key(
+            dispatch_key(
                 &mut state,
                 KeyEvent::plain(KeyCode::Down),
                 super::InputState::Normal,
@@ -710,9 +713,10 @@ mod tests {
     fn given_editor_when_down_arrow_then_cursor_line_increases() {
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
+        setup_standard_keymaps(&mut state);
         assert_eq!(state.cursor.line, 0);
 
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Down),
             super::InputState::Normal,
@@ -724,9 +728,10 @@ mod tests {
     fn given_editor_when_up_arrow_then_cursor_line_decreases() {
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("aaa\nbbb\nccc");
+        setup_standard_keymaps(&mut state);
         state.cursor = cursor::new(2, 0);
 
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Up),
             super::InputState::Normal,
@@ -738,9 +743,10 @@ mod tests {
     fn given_editor_when_right_arrow_then_cursor_column_increases() {
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("Hello");
+        setup_standard_keymaps(&mut state);
         assert_eq!(state.cursor.column, 0);
 
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Right),
             super::InputState::Normal,
@@ -752,9 +758,10 @@ mod tests {
     fn given_editor_when_left_arrow_then_cursor_column_decreases() {
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("Hello");
+        setup_standard_keymaps(&mut state);
         state.cursor = cursor::new(0, 3);
 
-        handle_key(
+        dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Left),
             super::InputState::Normal,
@@ -765,6 +772,7 @@ mod tests {
     #[test]
     fn given_editor_when_colon_q_enter_then_running_becomes_false() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
         assert!(state.running);
 
         // `:` enters command mode
@@ -790,9 +798,10 @@ mod tests {
     #[test]
     fn given_editor_in_command_mode_when_escape_then_command_cancelled() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
 
         // Enter command mode
-        let result = handle_key(
+        let result = dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
@@ -800,10 +809,10 @@ mod tests {
         assert!(matches!(result, super::InputState::Command(_)));
 
         // Type some chars
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), result);
 
         // Escape cancels
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Escape), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), result);
         assert_eq!(result, super::InputState::Normal);
         assert!(state.running);
         assert_eq!(state.message, None);
@@ -812,17 +821,18 @@ mod tests {
     #[test]
     fn given_editor_when_unknown_command_then_shows_error_message() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
 
         // :foo Enter
-        let result = handle_key(
+        let result = dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('f')), result);
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
-        let result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
-        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('f')), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
+        let result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('o')), result);
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
 
         assert!(state.running); // Did NOT quit
         assert_eq!(state.message, Some("Unknown command: foo".to_string()));
@@ -831,17 +841,18 @@ mod tests {
     #[test]
     fn given_editor_when_quit_command_then_also_accepts_full_word() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
 
         // :quit Enter
-        let mut result = handle_key(
+        let mut result = dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
         for c in "quit".chars() {
-            result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+            result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        handle_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Enter), result);
         assert!(!state.running);
     }
 
@@ -866,11 +877,12 @@ mod tests {
     fn given_editor_when_arrow_key_then_viewport_adjusted() {
         let mut state = editor_state::new(80, 3);
         state.buffer = Buffer::from_string("L0\nL1\nL2\nL3\nL4\nL5");
+        setup_standard_keymaps(&mut state);
         assert_eq!(state.viewport.top_line, 0);
 
         // Move cursor past viewport bottom
         for _ in 0..4 {
-            handle_key(
+            dispatch_key(
                 &mut state,
                 KeyEvent::plain(KeyCode::Down),
                 super::InputState::Normal,
@@ -891,6 +903,10 @@ mod tests {
 
         // Given: an editor state wrapped in Rc<RefCell> (for bridge sharing)
         let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            setup_standard_keymaps(&mut state);
+        }
 
         // And: a Lisp runtime with core primitives registered
         let runtime = alfred_lisp::runtime::LispRuntime::new();
@@ -899,13 +915,13 @@ mod tests {
         // When: simulate typing `:eval (message "hi")` and pressing Enter
         let deferred = {
             let mut state = state_rc.borrow_mut();
-            let mut result = handle_key(
+            let mut result = dispatch_key(
                 &mut state,
                 KeyEvent::plain(KeyCode::Char(':')),
                 super::InputState::Normal,
             );
             for c in "eval (message \"hi\")".chars() {
-                result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+                result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
             }
             let (_, action) =
                 super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
@@ -928,15 +944,16 @@ mod tests {
     #[test]
     fn given_editor_when_eval_command_entered_then_returns_eval_expression() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
 
         // Type `:eval (+ 1 2)` and press Enter
-        let mut result = handle_key(
+        let mut result = dispatch_key(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
         );
         for c in "eval (+ 1 2)".chars() {
-            result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+            result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
         let (input_state, action) =
             super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
@@ -951,8 +968,12 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        // Given: runtime with bridge
+        // Given: runtime with bridge and keymaps
         let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            setup_standard_keymaps(&mut state);
+        }
         let runtime = alfred_lisp::runtime::LispRuntime::new();
         alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
 
@@ -991,6 +1012,7 @@ mod tests {
     #[test]
     fn given_editor_when_q_command_then_still_quits_after_lisp_integration() {
         let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
         assert!(state.running);
 
         // Type `:q` and press Enter (should still work)
@@ -1441,5 +1463,127 @@ mod tests {
             "cursor at (2,1) should show Ln 3, Col 1, got: '{}'",
             status_after_move
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (06-02): keymap-based key dispatch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_keymap_with_up_binding_when_up_pressed_then_returns_exec_command_cursor_up() {
+        use alfred_core::editor_state::Keymap;
+
+        // Given: an EditorState with a keymap binding Up -> "cursor-up"
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello\nWorld\nBye");
+
+        let mut keymap = Keymap::new();
+        keymap.insert(KeyEvent::plain(KeyCode::Up), "cursor-up".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Down), "cursor-down".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Left), "cursor-left".to_string());
+        keymap.insert(KeyEvent::plain(KeyCode::Right), "cursor-right".to_string());
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(':')),
+            "enter-command-mode".to_string(),
+        );
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+
+        // When: Up key pressed in Normal mode
+        let (_input_state, action) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Up),
+            super::InputState::Normal,
+        );
+
+        // Then: returns ExecCommand("cursor-up")
+        assert_eq!(
+            action,
+            super::DeferredAction::ExecCommand("cursor-up".to_string()),
+            "keymap lookup should resolve Up to cursor-up command"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (06-02): keymap-based dispatch behaviors
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_keymap_when_unbound_key_pressed_then_no_action_no_error() {
+        use alfred_core::editor_state::Keymap;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+
+        // Keymap with only Up bound
+        let mut keymap = Keymap::new();
+        keymap.insert(KeyEvent::plain(KeyCode::Up), "cursor-up".to_string());
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+
+        let cursor_before = state.cursor;
+
+        // When: Tab key pressed (not in keymap)
+        let (input_state, action) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: no action, state unchanged
+        assert_eq!(action, super::DeferredAction::None);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(state.cursor, cursor_before);
+    }
+
+    #[test]
+    fn given_keymap_with_colon_binding_when_colon_pressed_then_enters_command_mode() {
+        use alfred_core::editor_state::Keymap;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+
+        let mut keymap = Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(':')),
+            "enter-command-mode".to_string(),
+        );
+        state.keymaps.insert("global".to_string(), keymap);
+        state.active_keymaps.push("global".to_string());
+
+        // When: colon pressed in Normal mode
+        let (input_state, action) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+
+        // Then: enters Command mode (same behavior as before, via keymap)
+        assert!(
+            matches!(input_state, super::InputState::Command(_)),
+            "colon via keymap should enter command mode"
+        );
+        assert_eq!(state.message, Some(":".to_string()));
+        assert_eq!(action, super::DeferredAction::None);
+    }
+
+    #[test]
+    fn given_no_keymaps_when_key_pressed_in_normal_mode_then_falls_through_silently() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        let cursor_before = state.cursor;
+
+        // No keymaps configured at all
+        let (input_state, action) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Up),
+            super::InputState::Normal,
+        );
+
+        // Then: no action, no crash
+        assert_eq!(action, super::DeferredAction::None);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(state.cursor, cursor_before);
     }
 }
