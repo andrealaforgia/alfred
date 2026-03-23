@@ -82,55 +82,89 @@ pub(crate) enum InputState {
 
 /// Handles a key event by updating the editor state.
 ///
-/// Returns `(InputState, DeferredAction)` where the DeferredAction tells the
-/// caller what to do after dropping the EditorState borrow (eval Lisp, execute
-/// a registered command, or nothing).
+/// Returns `(InputState, DeferredAction, Option<u32>)` where:
+/// - `InputState` tracks multi-key input mode (normal vs command-line)
+/// - `DeferredAction` tells the caller what to do after dropping the EditorState borrow
+/// - `Option<u32>` is the pending numeric count prefix (for Vim-style `5j`, `3x`, etc.)
+///
+/// In normal mode, digit keys (1-9 to start, 0-9 to continue) accumulate into
+/// a count prefix. When a non-digit key arrives, the command is dispatched and
+/// the count is returned so the caller can execute it that many times.
+/// `0` alone (no pending count) maps to `cursor-line-start` as usual.
 pub(crate) fn handle_key_event(
     state: &mut EditorState,
     key: KeyEvent,
     input_state: InputState,
-) -> (InputState, DeferredAction) {
+    pending_count: Option<u32>,
+) -> (InputState, DeferredAction, Option<u32>) {
     // Command-line mode: accumulating input after `:`
+    // Count prefix is discarded when entering command mode.
     if let InputState::Command(mut cmd) = input_state {
         match key.code {
             KeyCode::Enter => {
-                let trimmed = cmd.trim().to_string();
-                return execute_colon_command(state, &trimmed);
+                let (is, da) = execute_colon_command(state, cmd.trim());
+                return (is, da, None);
             }
             KeyCode::Escape => {
                 state.message = None;
-                return (InputState::Normal, DeferredAction::None);
+                return (InputState::Normal, DeferredAction::None, None);
             }
             KeyCode::Backspace => {
                 cmd.pop();
                 if cmd.is_empty() {
                     state.message = None;
-                    return (InputState::Normal, DeferredAction::None);
+                    return (InputState::Normal, DeferredAction::None, None);
                 }
                 state.message = Some(format!(":{}", cmd));
-                return (InputState::Command(cmd), DeferredAction::None);
+                return (InputState::Command(cmd), DeferredAction::None, None);
             }
             KeyCode::Char(c) => {
                 cmd.push(c);
                 state.message = Some(format!(":{}", cmd));
-                return (InputState::Command(cmd), DeferredAction::None);
+                return (InputState::Command(cmd), DeferredAction::None, None);
             }
             _ => {
-                return (InputState::Command(cmd), DeferredAction::None);
+                return (InputState::Command(cmd), DeferredAction::None, None);
             }
         }
     }
 
-    // Normal mode: resolve key through active keymaps
+    // Normal mode: accumulate digit keys into a count prefix.
+    // 1-9 starts a new count; 0-9 appends when a count is already pending.
+    // 0 alone (no pending count) falls through to keymap resolution (cursor-line-start).
+    if let KeyCode::Char(digit @ '0'..='9') = key.code {
+        let is_start_digit = ('1'..='9').contains(&digit);
+        if is_start_digit || pending_count.is_some() {
+            let current = pending_count.unwrap_or(0);
+            let new_count = current
+                .saturating_mul(10)
+                .saturating_add(digit as u32 - '0' as u32);
+            return (InputState::Normal, DeferredAction::None, Some(new_count));
+        }
+    }
+
+    // Non-digit key in normal mode: resolve through active keymaps.
+    // The accumulated count (if any) is returned for the caller to repeat the command.
+    let repeat_count = pending_count;
     match alfred_core::editor_state::resolve_key(state, key) {
         Some(ref cmd) if cmd == "enter-command-mode" => {
             state.message = Some(":".to_string());
-            (InputState::Command(String::new()), DeferredAction::None)
+            // Discard count when entering command mode
+            (
+                InputState::Command(String::new()),
+                DeferredAction::None,
+                None,
+            )
         }
-        Some(cmd) => (InputState::Normal, DeferredAction::ExecCommand(cmd)),
+        Some(cmd) => (
+            InputState::Normal,
+            DeferredAction::ExecCommand(cmd),
+            repeat_count,
+        ),
         None => {
             // Self-insert: only in insert mode with active keymaps.
             // Handles printable characters and Enter (newline).
+            // Count prefix does not apply to insert-mode self-insert.
             if state.mode == alfred_core::editor_state::MODE_INSERT
                 && !state.active_keymaps.is_empty()
             {
@@ -163,7 +197,7 @@ pub(crate) fn handle_key_event(
                     _ => {}
                 }
             }
-            (InputState::Normal, DeferredAction::None)
+            (InputState::Normal, DeferredAction::None, None)
         }
     }
 }
@@ -387,6 +421,7 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
     terminal.clear()?;
 
     let mut input_state = InputState::Normal;
+    let mut pending_count: Option<u32> = None;
 
     loop {
         // Check if still running
@@ -446,11 +481,23 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                 let key = convert_crossterm_key(ct_key);
 
                 // Handle the key event (borrow state, then drop before deferred action)
-                let deferred = {
+                let (deferred, repeat) = {
                     let mut state = state_rc.borrow_mut();
-                    let (new_input_state, action) = handle_key_event(&mut state, key, input_state);
+                    let (new_input_state, action, returned_count) =
+                        handle_key_event(&mut state, key, input_state, pending_count);
                     input_state = new_input_state;
-                    action
+                    // When action is a command dispatch, returned_count is the repeat
+                    // count to use (then clear). When action is None, returned_count
+                    // is the pending count still being accumulated.
+                    let repeat = if action != DeferredAction::None {
+                        let r = returned_count.unwrap_or(1);
+                        pending_count = None; // count consumed by command
+                        r
+                    } else {
+                        pending_count = returned_count; // keep accumulating
+                        1
+                    };
+                    (action, repeat)
                 }; // borrow dropped here
 
                 // Execute deferred actions outside the borrow
@@ -467,26 +514,31 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
 
                         state_rc.borrow_mut().message = None;
 
-                        let result = match handler {
-                            Some(alfred_core::command::ClonedHandler::Native(f)) => {
-                                // Native handlers are plain fn pointers — safe to call with borrow
-                                f(&mut state_rc.borrow_mut())
-                            }
-                            Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
-                                // Dynamic (Lisp) handlers capture their own Rc<RefCell<EditorState>>
-                                // and call borrow_mut() internally. We must NOT hold a borrow here.
-                                // Pass a temporary EditorState that the closure ignores.
-                                let mut dummy = alfred_core::editor_state::new(1, 1);
-                                f(&mut dummy)
-                            }
-                            None => {
+                        // Execute command `repeat` times (default 1, or count prefix N).
+                        for _ in 0..repeat {
+                            let result = match &handler {
+                                Some(alfred_core::command::ClonedHandler::Native(f)) => {
+                                    // Native handlers are plain fn pointers — safe to call with borrow
+                                    f(&mut state_rc.borrow_mut())
+                                }
+                                Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
+                                    // Dynamic (Lisp) handlers capture their own Rc<RefCell<EditorState>>
+                                    // and call borrow_mut() internally. We must NOT hold a borrow here.
+                                    // Pass a temporary EditorState that the closure ignores.
+                                    let mut dummy = alfred_core::editor_state::new(1, 1);
+                                    f(&mut dummy)
+                                }
+                                None => {
+                                    state_rc.borrow_mut().message =
+                                        Some(format!("Unknown command: {}", cmd_name));
+                                    break;
+                                }
+                            };
+                            if let Err(e) = result {
                                 state_rc.borrow_mut().message =
-                                    Some(format!("Unknown command: {}", cmd_name));
-                                Ok(())
+                                    Some(format!("Command error: {}", e));
+                                break;
                             }
-                        };
-                        if let Err(e) = result {
-                            state_rc.borrow_mut().message = Some(format!("Command error: {}", e));
                         }
                     }
                     DeferredAction::SaveBuffer(opt_path) => {
@@ -590,7 +642,7 @@ mod tests {
         key: KeyEvent,
         input_state: super::InputState,
     ) -> super::InputState {
-        super::handle_key_event(state, key, input_state).0
+        super::handle_key_event(state, key, input_state, None).0
     }
 
     /// Helper: set up standard keymaps with arrow keys and colon binding,
@@ -620,9 +672,29 @@ mod tests {
         key: KeyEvent,
         input_state: super::InputState,
     ) -> super::InputState {
-        let (new_input_state, action) = super::handle_key_event(state, key, input_state);
+        let (new_input_state, action, _count) =
+            super::handle_key_event(state, key, input_state, None);
         if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
             let _ = alfred_core::command::execute(state, cmd_name);
+        }
+        new_input_state
+    }
+
+    /// Helper: dispatch a key event with a count prefix, executing the
+    /// command `count` times. Returns the new InputState.
+    fn dispatch_key_with_count(
+        state: &mut alfred_core::editor_state::EditorState,
+        key: KeyEvent,
+        input_state: super::InputState,
+        pending_count: Option<u32>,
+    ) -> super::InputState {
+        let (new_input_state, action, returned_count) =
+            super::handle_key_event(state, key, input_state, pending_count);
+        if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
+            let repeat = returned_count.unwrap_or(1);
+            for _ in 0..repeat {
+                let _ = alfred_core::command::execute(state, cmd_name);
+            }
         }
         new_input_state
     }
@@ -979,22 +1051,32 @@ mod tests {
         assert!(state.running);
 
         // `:` enters command mode
-        let (input_state, _) = super::handle_key_event(
+        let (input_state, _, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
+            None,
         );
         assert!(matches!(input_state, super::InputState::Command(_)));
         assert_eq!(state.message, Some(":".to_string()));
 
         // Type `q`
-        let (input_state, _) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Char('q')), input_state);
+        let (input_state, _, _) = super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            input_state,
+            None,
+        );
         assert!(matches!(input_state, super::InputState::Command(_)));
         assert_eq!(state.message, Some(":q".to_string()));
 
         // Press Enter to execute
-        super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), input_state);
+        super::handle_key_event(
+            &mut state,
+            KeyEvent::plain(KeyCode::Enter),
+            input_state,
+            None,
+        );
         assert!(!state.running);
     }
 
@@ -1126,8 +1208,8 @@ mod tests {
             for c in "eval (message \"hi\")".chars() {
                 result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
             }
-            let (_, action) =
-                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+            let (_, action, _) =
+                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
             action
         };
 
@@ -1158,8 +1240,8 @@ mod tests {
         for c in "eval (+ 1 2)".chars() {
             result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        let (input_state, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (input_state, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         // Then: returns the expression to eval
         assert_eq!(input_state, super::InputState::Normal);
@@ -1191,8 +1273,8 @@ mod tests {
             for c in "eval (+ 1".chars() {
                 result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
             }
-            let (_, action) =
-                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+            let (_, action, _) =
+                super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
             action
         };
 
@@ -1225,8 +1307,8 @@ mod tests {
             super::InputState::Normal,
         );
         result = handle_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), result);
-        let (input_state, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (input_state, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         // Then: quit works, no deferred action
         assert!(!state.running);
@@ -1693,10 +1775,11 @@ mod tests {
         state.active_keymaps.push("global".to_string());
 
         // When: Up key pressed in Normal mode
-        let (_input_state, action) = super::handle_key_event(
+        let (_input_state, action, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Up),
             super::InputState::Normal,
+            None,
         );
 
         // Then: returns ExecCommand("cursor-up")
@@ -1728,10 +1811,11 @@ mod tests {
         let cursor_before = state.cursor;
 
         // When: Tab key pressed (not in keymap)
-        let (input_state, action) = super::handle_key_event(
+        let (input_state, action, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Tab),
             super::InputState::Normal,
+            None,
         );
 
         // Then: no action, state unchanged
@@ -1756,10 +1840,11 @@ mod tests {
         state.active_keymaps.push("global".to_string());
 
         // When: colon pressed in Normal mode
-        let (input_state, action) = super::handle_key_event(
+        let (input_state, action, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Char(':')),
             super::InputState::Normal,
+            None,
         );
 
         // Then: enters Command mode (same behavior as before, via keymap)
@@ -1778,10 +1863,11 @@ mod tests {
         let cursor_before = state.cursor;
 
         // No keymaps configured at all
-        let (input_state, action) = super::handle_key_event(
+        let (input_state, action, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Up),
             super::InputState::Normal,
+            None,
         );
 
         // Then: no action, no crash
@@ -2035,10 +2121,11 @@ mod tests {
         // AC4: Colon enters command mode via plugin binding
         {
             let mut state = state_rc.borrow_mut();
-            let (input_state, _action) = super::handle_key_event(
+            let (input_state, _action, _) = super::handle_key_event(
                 &mut state,
                 KeyEvent::plain(KeyCode::Char(':')),
                 super::InputState::Normal,
+                None,
             );
             assert!(
                 matches!(input_state, super::InputState::Command(_)),
@@ -2062,10 +2149,11 @@ mod tests {
 
         // When: all four arrow keys pressed
         for key_code in &[KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right] {
-            let (input_state, action) = super::handle_key_event(
+            let (input_state, action, _) = super::handle_key_event(
                 &mut state,
                 KeyEvent::plain(*key_code),
                 super::InputState::Normal,
+                None,
             );
             assert_eq!(action, super::DeferredAction::None);
             assert_eq!(input_state, super::InputState::Normal);
@@ -2085,10 +2173,11 @@ mod tests {
         let content_before = alfred_core::buffer::content(&state.buffer);
 
         // When: printable character pressed
-        let (_, action) = super::handle_key_event(
+        let (_, action, _) = super::handle_key_event(
             &mut state,
             KeyEvent::plain(KeyCode::Char('x')),
             super::InputState::Normal,
+            None,
         );
 
         // Then: no self-insert, buffer unchanged
@@ -2272,9 +2361,9 @@ mod tests {
         key: KeyEvent,
         input_state: super::InputState,
     ) -> super::InputState {
-        let (new_input_state, action) = {
+        let (new_input_state, action, _count) = {
             let mut state = state_rc.borrow_mut();
-            super::handle_key_event(&mut state, key, input_state)
+            super::handle_key_event(&mut state, key, input_state, None)
         }; // borrow dropped before deferred action
 
         if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
@@ -2891,8 +2980,8 @@ mod tests {
             super::InputState::Normal,
         );
         result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
-        let (_, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (_, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         // Then: action is SaveBuffer(None)
         assert_eq!(action, super::DeferredAction::SaveBuffer(None));
@@ -2961,8 +3050,8 @@ mod tests {
             super::InputState::Normal,
         );
         result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
-        let (input_state, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (input_state, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(action, super::DeferredAction::SaveBuffer(None));
@@ -2982,8 +3071,8 @@ mod tests {
         for c in "w /tmp/test.txt".chars() {
             result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        let (input_state, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (input_state, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(
@@ -3006,8 +3095,8 @@ mod tests {
         for c in "e /tmp/test.txt".chars() {
             result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        let (input_state, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (input_state, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(
@@ -3030,8 +3119,8 @@ mod tests {
             super::InputState::Normal,
         );
         result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
-        let (_, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (_, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         // Then: action is SaveBuffer(None) -- the event loop handler will check
         // for file_path and show "No file name" error
@@ -3193,8 +3282,8 @@ mod tests {
         for c in "wq".chars() {
             result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
         }
-        let (_, action) =
-            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+        let (_, action, _) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result, None);
 
         // Then: action is SaveAndQuit
         assert_eq!(action, super::DeferredAction::SaveAndQuit);
