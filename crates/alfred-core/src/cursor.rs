@@ -355,236 +355,275 @@ mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_down
+    // Table-driven: move_down boundary clamping
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_down_from_first_line_moves_to_second_line() {
-        let buf = Buffer::from_string("aaa\nbbb\nccc");
-        let cursor = move_down(new(0, 0), &buf);
-        assert_eq!(cursor.line, 1);
-    }
+    fn move_down_boundary_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "aaa\nbbb\nccc",
+                new(0, 0),
+                new(1, 0),
+                "first line moves to second",
+            ),
+            (
+                "aaa\nbbb",
+                new(1, 0),
+                new(1, 0),
+                "last line stays on last line",
+            ),
+            (
+                "abcdef\nxy",
+                new(0, 5),
+                new(1, 2),
+                "clamps column to shorter line",
+            ),
+        ];
 
-    #[test]
-    fn move_down_from_last_line_stays_on_last_line() {
-        let buf = Buffer::from_string("aaa\nbbb");
-        let cursor = move_down(new(1, 0), &buf);
-        assert_eq!(cursor.line, 1);
-    }
-
-    #[test]
-    fn move_down_clamps_column_to_shorter_line() {
-        // line 0: "abcdef" (6 chars), line 1: "xy" (2 chars)
-        let buf = Buffer::from_string("abcdef\nxy");
-        let cursor = move_down(new(0, 5), &buf);
-        assert_eq!(cursor, new(1, 2));
-    }
-
-    // -----------------------------------------------------------------------
-    // Unit tests: move_up
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn move_up_from_second_line_moves_to_first_line() {
-        let buf = Buffer::from_string("aaa\nbbb");
-        let cursor = move_up(new(1, 0), &buf);
-        assert_eq!(cursor.line, 0);
-    }
-
-    #[test]
-    fn move_up_from_first_line_stays_on_first_line() {
-        let buf = Buffer::from_string("aaa\nbbb");
-        let cursor = move_up(new(0, 2), &buf);
-        assert_eq!(cursor, new(0, 2));
-    }
-
-    #[test]
-    fn move_up_clamps_column_to_shorter_line() {
-        // line 0: "ab" (2 chars), line 1: "cdefgh" (6 chars)
-        let buf = Buffer::from_string("ab\ncdefgh");
-        let cursor = move_up(new(1, 5), &buf);
-        assert_eq!(cursor, new(0, 2));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_down(*start, &buf);
+            assert_eq!(result, *expected, "move_down: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_right
+    // Table-driven: move_up boundary clamping
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_right_within_line_increments_column() {
-        let buf = Buffer::from_string("abc");
-        let cursor = move_right(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 1));
-    }
+    fn move_up_boundary_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "aaa\nbbb",
+                new(1, 0),
+                new(0, 0),
+                "second line moves to first",
+            ),
+            (
+                "aaa\nbbb",
+                new(0, 2),
+                new(0, 2),
+                "first line stays on first line",
+            ),
+            (
+                "ab\ncdefgh",
+                new(1, 5),
+                new(0, 2),
+                "clamps column to shorter line",
+            ),
+        ];
 
-    #[test]
-    fn move_right_at_end_of_line_wraps_to_next_line() {
-        let buf = Buffer::from_string("ab\ncd");
-        let cursor = move_right(new(0, 2), &buf);
-        assert_eq!(cursor, new(1, 0));
-    }
-
-    #[test]
-    fn move_right_at_end_of_last_line_stays_clamped() {
-        let buf = Buffer::from_string("ab\ncd");
-        let cursor = move_right(new(1, 2), &buf);
-        assert_eq!(cursor, new(1, 2));
-    }
-
-    // -----------------------------------------------------------------------
-    // Unit tests: move_left
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn move_left_within_line_decrements_column() {
-        let buf = Buffer::from_string("abc");
-        let cursor = move_left(new(0, 2), &buf);
-        assert_eq!(cursor, new(0, 1));
-    }
-
-    #[test]
-    fn move_left_at_start_of_line_wraps_to_previous_line_end() {
-        let buf = Buffer::from_string("ab\ncd");
-        let cursor = move_left(new(1, 0), &buf);
-        assert_eq!(cursor, new(0, 2));
-    }
-
-    #[test]
-    fn move_left_at_start_of_first_line_stays_clamped() {
-        let buf = Buffer::from_string("ab\ncd");
-        let cursor = move_left(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 0));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_up(*start, &buf);
+            assert_eq!(result, *expected, "move_up: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: ensure_within_bounds
+    // Table-driven: move_right boundary clamping
     // -----------------------------------------------------------------------
 
     #[test]
-    fn ensure_within_bounds_clamps_line_beyond_buffer() {
-        let buf = Buffer::from_string("abc\ndef");
-        let cursor = ensure_within_bounds(new(10, 0), &buf);
-        assert_eq!(cursor.line, 1);
-    }
+    fn move_right_boundary_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("abc", new(0, 0), new(0, 1), "within line increments column"),
+            (
+                "ab\ncd",
+                new(0, 2),
+                new(1, 0),
+                "end of line wraps to next line",
+            ),
+            (
+                "ab\ncd",
+                new(1, 2),
+                new(1, 2),
+                "end of last line stays clamped",
+            ),
+        ];
 
-    #[test]
-    fn ensure_within_bounds_clamps_column_beyond_line_length() {
-        let buf = Buffer::from_string("abc\ndef");
-        let cursor = ensure_within_bounds(new(0, 50), &buf);
-        assert_eq!(cursor, new(0, 3));
-    }
-
-    #[test]
-    fn ensure_within_bounds_leaves_valid_cursor_unchanged() {
-        let buf = Buffer::from_string("abc\ndef");
-        let cursor = ensure_within_bounds(new(1, 2), &buf);
-        assert_eq!(cursor, new(1, 2));
-    }
-
-    // -----------------------------------------------------------------------
-    // Unit tests: move_to_line_start (vim 0)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn move_to_line_start_sets_column_to_zero() {
-        let buf = Buffer::from_string("hello world");
-        let cursor = move_to_line_start(new(0, 5), &buf);
-        assert_eq!(cursor, new(0, 0));
-    }
-
-    #[test]
-    fn move_to_line_start_already_at_zero_stays() {
-        let buf = Buffer::from_string("hello");
-        let cursor = move_to_line_start(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 0));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_right(*start, &buf);
+            assert_eq!(result, *expected, "move_right: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_to_line_end (vim $)
+    // Table-driven: move_left boundary clamping
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_to_line_end_moves_to_last_character() {
-        let buf = Buffer::from_string("hello");
-        let cursor = move_to_line_end(new(0, 0), &buf);
-        // "hello" has 5 chars, last char index is 4
-        assert_eq!(cursor, new(0, 4));
-    }
+    fn move_left_boundary_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("abc", new(0, 2), new(0, 1), "within line decrements column"),
+            (
+                "ab\ncd",
+                new(1, 0),
+                new(0, 2),
+                "start of line wraps to previous line end",
+            ),
+            (
+                "ab\ncd",
+                new(0, 0),
+                new(0, 0),
+                "start of first line stays clamped",
+            ),
+        ];
 
-    #[test]
-    fn move_to_line_end_on_empty_line_stays_at_zero() {
-        let buf = Buffer::from_string("");
-        let cursor = move_to_line_end(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 0));
-    }
-
-    #[test]
-    fn move_to_line_end_on_second_line() {
-        let buf = Buffer::from_string("abc\ndefgh");
-        let cursor = move_to_line_end(new(1, 0), &buf);
-        // "defgh" has 5 chars, last char index is 4
-        assert_eq!(cursor, new(1, 4));
-    }
-
-    // -----------------------------------------------------------------------
-    // Unit tests: move_to_first_non_blank (vim ^)
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn move_to_first_non_blank_skips_leading_spaces() {
-        let buf = Buffer::from_string("   hello");
-        let cursor = move_to_first_non_blank(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 3));
-    }
-
-    #[test]
-    fn move_to_first_non_blank_no_leading_spaces() {
-        let buf = Buffer::from_string("hello");
-        let cursor = move_to_first_non_blank(new(0, 5), &buf);
-        assert_eq!(cursor, new(0, 0));
-    }
-
-    #[test]
-    fn move_to_first_non_blank_tabs_and_spaces() {
-        let buf = Buffer::from_string("\t  world");
-        let cursor = move_to_first_non_blank(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 3));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_left(*start, &buf);
+            assert_eq!(result, *expected, "move_left: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_to_document_start (vim gg)
+    // Table-driven: ensure_within_bounds
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_to_document_start_from_middle_of_buffer() {
-        let buf = Buffer::from_string("aaa\nbbb\nccc");
-        let cursor = move_to_document_start(new(2, 2), &buf);
-        assert_eq!(cursor, new(0, 0));
-    }
+    fn ensure_within_bounds_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "abc\ndef",
+                new(10, 0),
+                new(1, 0),
+                "clamps line beyond buffer",
+            ),
+            (
+                "abc\ndef",
+                new(0, 50),
+                new(0, 3),
+                "clamps column beyond line length",
+            ),
+            (
+                "abc\ndef",
+                new(1, 2),
+                new(1, 2),
+                "leaves valid cursor unchanged",
+            ),
+        ];
 
-    #[test]
-    fn move_to_document_start_already_at_start() {
-        let buf = Buffer::from_string("aaa\nbbb");
-        let cursor = move_to_document_start(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 0));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = ensure_within_bounds(*start, &buf);
+            assert_eq!(result, *expected, "ensure_within_bounds: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_to_document_end (vim G)
+    // Table-driven: move_to_line_start (vim 0)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_to_document_end_from_first_line() {
-        let buf = Buffer::from_string("aaa\nbbb\nccc");
-        let cursor = move_to_document_end(new(0, 0), &buf);
-        assert_eq!(cursor, new(2, 0));
+    fn move_to_line_start_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("hello world", new(0, 5), new(0, 0), "sets column to zero"),
+            ("hello", new(0, 0), new(0, 0), "already at zero stays"),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_to_line_start(*start, &buf);
+            assert_eq!(result, *expected, "move_to_line_start: {}", label);
+        }
     }
 
+    // -----------------------------------------------------------------------
+    // Table-driven: move_to_line_end (vim $)
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn move_to_document_end_already_at_last_line() {
-        let buf = Buffer::from_string("aaa\nbbb");
-        let cursor = move_to_document_end(new(1, 2), &buf);
-        assert_eq!(cursor, new(1, 0));
+    fn move_to_line_end_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("hello", new(0, 0), new(0, 4), "moves to last character"),
+            ("", new(0, 0), new(0, 0), "empty line stays at zero"),
+            (
+                "abc\ndefgh",
+                new(1, 0),
+                new(1, 4),
+                "second line moves to last char",
+            ),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_to_line_end(*start, &buf);
+            assert_eq!(result, *expected, "move_to_line_end: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: move_to_first_non_blank (vim ^)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_first_non_blank_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("   hello", new(0, 0), new(0, 3), "skips leading spaces"),
+            ("hello", new(0, 5), new(0, 0), "no leading spaces"),
+            ("\t  world", new(0, 0), new(0, 3), "tabs and spaces"),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_to_first_non_blank(*start, &buf);
+            assert_eq!(result, *expected, "move_to_first_non_blank: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: move_to_document_start (vim gg)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_document_start_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "aaa\nbbb\nccc",
+                new(2, 2),
+                new(0, 0),
+                "from middle of buffer",
+            ),
+            ("aaa\nbbb", new(0, 0), new(0, 0), "already at start"),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_to_document_start(*start, &buf);
+            assert_eq!(result, *expected, "move_to_document_start: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: move_to_document_end (vim G)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_document_end_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("aaa\nbbb\nccc", new(0, 0), new(2, 0), "from first line"),
+            ("aaa\nbbb", new(1, 2), new(1, 0), "already at last line"),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_to_document_end(*start, &buf);
+            assert_eq!(result, *expected, "move_to_document_end: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -602,7 +641,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_word_forward (vim w)
+    // Unit test: move_word_forward punctuation (multi-step, kept separate)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -615,82 +654,74 @@ mod tests {
         assert_eq!(c2, new(0, 4)); // 'b' of "bar"
     }
 
-    #[test]
-    fn move_word_forward_across_lines() {
-        let buf = Buffer::from_string("end\nstart");
-        let cursor = move_word_forward(new(0, 0), &buf);
-        assert_eq!(cursor, new(1, 0)); // 's' of "start"
-    }
-
-    #[test]
-    fn move_word_forward_at_end_of_buffer_stays() {
-        let buf = Buffer::from_string("last");
-        let cursor = move_word_forward(new(0, 3), &buf);
-        // Already at last char, no more words
-        assert_eq!(cursor, new(0, 3));
-    }
-
     // -----------------------------------------------------------------------
-    // Unit tests: move_word_backward (vim b)
+    // Table-driven: move_word_forward single-step cases (vim w)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_word_backward_to_previous_word_start() {
-        let buf = Buffer::from_string("hello world");
-        let cursor = move_word_backward(new(0, 6), &buf);
-        assert_eq!(cursor, new(0, 0)); // 'h' of "hello"
-    }
+    fn move_word_forward_single_step_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            ("end\nstart", new(0, 0), new(1, 0), "across lines"),
+            ("last", new(0, 3), new(0, 3), "at end of buffer stays"),
+        ];
 
-    #[test]
-    fn move_word_backward_across_lines() {
-        let buf = Buffer::from_string("first\nsecond");
-        let cursor = move_word_backward(new(1, 0), &buf);
-        assert_eq!(cursor, new(0, 0)); // 'f' of "first"
-    }
-
-    #[test]
-    fn move_word_backward_at_start_of_buffer_stays() {
-        let buf = Buffer::from_string("hello");
-        let cursor = move_word_backward(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 0));
-    }
-
-    #[test]
-    fn move_word_backward_from_middle_of_word() {
-        let buf = Buffer::from_string("hello world");
-        let cursor = move_word_backward(new(0, 8), &buf);
-        assert_eq!(cursor, new(0, 6)); // 'w' of "world"
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_word_forward(*start, &buf);
+            assert_eq!(result, *expected, "move_word_forward: {}", label);
+        }
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: move_word_end (vim e)
+    // Table-driven: move_word_backward (vim b)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn move_word_end_to_end_of_current_word() {
-        let buf = Buffer::from_string("hello world");
-        let cursor = move_word_end(new(0, 0), &buf);
-        assert_eq!(cursor, new(0, 4)); // 'o' of "hello"
+    fn move_word_backward_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "hello world",
+                new(0, 6),
+                new(0, 0),
+                "to previous word start",
+            ),
+            ("first\nsecond", new(1, 0), new(0, 0), "across lines"),
+            ("hello", new(0, 0), new(0, 0), "at start of buffer stays"),
+            ("hello world", new(0, 8), new(0, 6), "from middle of word"),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_word_backward(*start, &buf);
+            assert_eq!(result, *expected, "move_word_backward: {}", label);
+        }
     }
 
-    #[test]
-    fn move_word_end_to_end_of_next_word() {
-        let buf = Buffer::from_string("hello world");
-        let cursor = move_word_end(new(0, 4), &buf);
-        assert_eq!(cursor, new(0, 10)); // 'd' of "world"
-    }
+    // -----------------------------------------------------------------------
+    // Table-driven: move_word_end (vim e)
+    // -----------------------------------------------------------------------
 
     #[test]
-    fn move_word_end_across_lines() {
-        let buf = Buffer::from_string("hi\nthere");
-        let cursor = move_word_end(new(0, 1), &buf);
-        assert_eq!(cursor, new(1, 4)); // 'e' of "there"
-    }
+    fn move_word_end_cases() {
+        // (buffer, start_cursor, expected_cursor, label)
+        let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+            (
+                "hello world",
+                new(0, 0),
+                new(0, 4),
+                "to end of current word",
+            ),
+            ("hello world", new(0, 4), new(0, 10), "to end of next word"),
+            ("hi\nthere", new(0, 1), new(1, 4), "across lines"),
+            ("end", new(0, 2), new(0, 2), "at end of buffer stays"),
+        ];
 
-    #[test]
-    fn move_word_end_at_end_of_buffer_stays() {
-        let buf = Buffer::from_string("end");
-        let cursor = move_word_end(new(0, 2), &buf);
-        assert_eq!(cursor, new(0, 2));
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = move_word_end(*start, &buf);
+            assert_eq!(result, *expected, "move_word_end: {}", label);
+        }
     }
 }

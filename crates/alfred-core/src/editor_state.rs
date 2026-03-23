@@ -536,51 +536,35 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Unit tests: EditorState initialization
+    // Unit test: EditorState initialization (all default properties)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_new_editor_state_then_cursor_at_origin() {
+    fn given_new_editor_state_then_all_defaults_are_correct() {
         let state = editor_state::new(80, 24);
+
+        // Cursor at origin
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 0);
-    }
 
-    #[test]
-    fn given_new_editor_state_then_viewport_matches_terminal_size() {
-        let state = editor_state::new(80, 24);
+        // Viewport matches terminal size
         assert_eq!(state.viewport.width, 80);
         assert_eq!(state.viewport.height, 24);
         assert_eq!(state.viewport.top_line, 0);
-    }
 
-    #[test]
-    fn given_new_editor_state_then_running_is_true() {
-        let state = editor_state::new(80, 24);
+        // Running flag
         assert!(state.running);
-    }
 
-    #[test]
-    fn given_new_editor_state_then_message_is_none() {
-        let state = editor_state::new(80, 24);
+        // No message
         assert!(state.message.is_none());
-    }
 
-    #[test]
-    fn given_new_editor_state_then_mode_is_normal() {
-        let state = editor_state::new(80, 24);
+        // Normal mode
         assert_eq!(state.mode, "normal");
-    }
 
-    #[test]
-    fn given_new_editor_state_then_command_registry_is_empty() {
-        let state = editor_state::new(80, 24);
+        // Empty command registry
         assert!(command::lookup(&state.commands, "anything").is_none());
-    }
 
-    #[test]
-    fn given_new_editor_state_then_active_keymaps_is_empty() {
-        let state = editor_state::new(80, 24);
+        // Empty active keymaps
         assert!(state.active_keymaps.is_empty());
     }
 
@@ -1011,31 +995,28 @@ mod tests {
     }
 
     #[test]
-    fn given_no_undo_history_when_undo_then_buffer_unchanged() {
+    fn given_no_history_when_undo_or_redo_then_buffer_unchanged() {
         use crate::buffer;
 
-        let mut state = editor_state::new(80, 24);
-        state.buffer = buffer::Buffer::from_string("Unchanged");
-        state.cursor = crate::cursor::new(0, 0);
-        editor_state::register_builtin_commands(&mut state);
+        // (command_name, label)
+        let cases: Vec<(&str, &str)> =
+            vec![("undo", "no undo history"), ("redo", "no redo history")];
 
-        let result = command::execute(&mut state, "undo");
-        assert!(result.is_ok());
-        assert_eq!(buffer::content(&state.buffer), "Unchanged");
-    }
+        for (command_name, label) in &cases {
+            let mut state = editor_state::new(80, 24);
+            state.buffer = buffer::Buffer::from_string("Unchanged");
+            state.cursor = crate::cursor::new(0, 0);
+            editor_state::register_builtin_commands(&mut state);
 
-    #[test]
-    fn given_no_redo_history_when_redo_then_buffer_unchanged() {
-        use crate::buffer;
-
-        let mut state = editor_state::new(80, 24);
-        state.buffer = buffer::Buffer::from_string("Unchanged");
-        state.cursor = crate::cursor::new(0, 0);
-        editor_state::register_builtin_commands(&mut state);
-
-        let result = command::execute(&mut state, "redo");
-        assert!(result.is_ok());
-        assert_eq!(buffer::content(&state.buffer), "Unchanged");
+            let result = command::execute(&mut state, command_name);
+            assert!(result.is_ok(), "{}: should succeed", label);
+            assert_eq!(
+                buffer::content(&state.buffer),
+                "Unchanged",
+                "{}: buffer should be unchanged",
+                label
+            );
+        }
     }
 
     #[test]
@@ -1109,69 +1090,114 @@ mod tests {
     }
 
     #[test]
-    fn given_buffer_when_scroll_half_page_down_then_cursor_and_viewport_move_down() {
-        let mut state = editor_state::new(80, 24);
-        // 50-line buffer
-        let lines: Vec<&str> = (0..50).map(|_| "content").collect();
-        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
-        state.viewport = crate::viewport::new(0, 24, 80);
-        state.cursor = crate::cursor::new(5, 3);
-        editor_state::register_builtin_commands(&mut state);
+    fn scroll_half_page_moves_cursor_and_viewport() {
+        // (top_line, cursor_line, cursor_col, command, expected_cursor_line, expected_top_line, label)
+        let cases: Vec<(usize, usize, usize, &str, usize, usize, &str)> = vec![
+            (
+                0,
+                5,
+                3,
+                "scroll-half-page-down",
+                17,
+                12,
+                "down moves cursor and viewport by half page",
+            ),
+            (
+                20,
+                30,
+                2,
+                "scroll-half-page-up",
+                18,
+                8,
+                "up moves cursor and viewport by half page",
+            ),
+        ];
 
-        // Ctrl-d: scroll down by half page (24/2 = 12)
-        let result = command::execute(&mut state, "scroll-half-page-down");
-        assert!(result.is_ok());
-        assert_eq!(state.cursor.line, 17); // 5 + 12 = 17
-        assert_eq!(state.viewport.top_line, 12); // 0 + 12 = 12
+        for (
+            top_line,
+            cursor_line,
+            cursor_col,
+            command_name,
+            expected_cursor,
+            expected_top,
+            label,
+        ) in &cases
+        {
+            let mut state = editor_state::new(80, 24);
+            let lines: Vec<&str> = (0..50).map(|_| "content").collect();
+            state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+            state.viewport = crate::viewport::new(*top_line, 24, 80);
+            state.cursor = crate::cursor::new(*cursor_line, *cursor_col);
+            editor_state::register_builtin_commands(&mut state);
+
+            let result = command::execute(&mut state, command_name);
+            assert!(result.is_ok(), "{}: should succeed", label);
+            assert_eq!(
+                state.cursor.line, *expected_cursor,
+                "{}: cursor line",
+                label
+            );
+            assert_eq!(
+                state.viewport.top_line, *expected_top,
+                "{}: viewport top_line",
+                label
+            );
+        }
     }
 
     #[test]
-    fn given_buffer_when_scroll_half_page_up_then_cursor_and_viewport_move_up() {
-        let mut state = editor_state::new(80, 24);
-        // 50-line buffer
-        let lines: Vec<&str> = (0..50).map(|_| "content").collect();
-        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
-        state.viewport = crate::viewport::new(20, 24, 80);
-        state.cursor = crate::cursor::new(30, 2);
-        editor_state::register_builtin_commands(&mut state);
+    fn scroll_half_page_clamps_at_buffer_boundaries() {
+        // (num_lines, top_line, cursor_line, command, expected_cursor, expected_top, label)
+        let cases: Vec<(usize, usize, usize, &str, usize, usize, &str)> = vec![
+            (
+                20,
+                5,
+                15,
+                "scroll-half-page-down",
+                19,
+                17,
+                "down clamps to last line",
+            ),
+            (
+                50,
+                3,
+                5,
+                "scroll-half-page-up",
+                0,
+                0,
+                "up clamps to first line",
+            ),
+        ];
 
-        // Ctrl-u: scroll up by half page (24/2 = 12)
-        let result = command::execute(&mut state, "scroll-half-page-up");
-        assert!(result.is_ok());
-        assert_eq!(state.cursor.line, 18); // 30 - 12 = 18
-        assert_eq!(state.viewport.top_line, 8); // 20 - 12 = 8
-    }
+        for (
+            num_lines,
+            top_line,
+            cursor_line,
+            command_name,
+            expected_cursor,
+            expected_top,
+            label,
+        ) in &cases
+        {
+            let mut state = editor_state::new(80, 24);
+            let lines: Vec<&str> = (0..*num_lines).map(|_| "text").collect();
+            state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+            state.viewport = crate::viewport::new(*top_line, 24, 80);
+            state.cursor = crate::cursor::new(*cursor_line, 0);
+            editor_state::register_builtin_commands(&mut state);
 
-    #[test]
-    fn given_cursor_near_end_when_scroll_half_page_down_then_clamped_to_last_line() {
-        let mut state = editor_state::new(80, 24);
-        // 20-line buffer
-        let lines: Vec<&str> = (0..20).map(|_| "text").collect();
-        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
-        state.viewport = crate::viewport::new(5, 24, 80);
-        state.cursor = crate::cursor::new(15, 0);
-        editor_state::register_builtin_commands(&mut state);
-
-        // Ctrl-d: would move to line 27 (15+12), but buffer only has 20 lines (0..19)
-        let result = command::execute(&mut state, "scroll-half-page-down");
-        assert!(result.is_ok());
-        assert_eq!(state.cursor.line, 19); // clamped to last line
-    }
-
-    #[test]
-    fn given_cursor_near_top_when_scroll_half_page_up_then_clamped_to_first_line() {
-        let mut state = editor_state::new(80, 24);
-        // 50-line buffer
-        let lines: Vec<&str> = (0..50).map(|_| "text").collect();
-        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
-        state.viewport = crate::viewport::new(3, 24, 80);
-        state.cursor = crate::cursor::new(5, 0);
-        editor_state::register_builtin_commands(&mut state);
-
-        // Ctrl-u: would move cursor to line -7 (5-12), should clamp to 0
-        let result = command::execute(&mut state, "scroll-half-page-up");
-        assert!(result.is_ok());
-        assert_eq!(state.cursor.line, 0); // clamped to first line
-        assert_eq!(state.viewport.top_line, 0); // clamped to top
+            let result = command::execute(&mut state, command_name);
+            assert!(result.is_ok(), "{}: should succeed", label);
+            assert_eq!(
+                state.cursor.line, *expected_cursor,
+                "{}: cursor line",
+                label
+            );
+            assert_eq!(
+                state.viewport.top_line, *expected_top,
+                "{}: viewport top_line",
+                label
+            );
+        }
     }
 }
