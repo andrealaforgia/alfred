@@ -13,9 +13,10 @@
 (define-key "normal-mode" "Char:d" "delete-line")
 (define-key "normal-mode" "Char::" "enter-command-mode")
 
-;; Create insert-mode keymap with Escape to return to normal mode
+;; Create insert-mode keymap with Escape to return to normal mode and Backspace
 (make-keymap "insert-mode")
 (define-key "insert-mode" "Escape" "enter-normal-mode")
+(define-key "insert-mode" "Backspace" "delete-backward")
 
 ;; Define mode-switching commands
 (define-command "enter-insert-mode" (lambda () (set-mode "insert")))

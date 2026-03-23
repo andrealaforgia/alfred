@@ -2031,4 +2031,385 @@ mod tests {
             "Normal mode should NOT self-insert unbound chars"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Vim plugin helpers (07-03): dispatch through Rc<RefCell<EditorState>>
+    // to support Lisp-registered Dynamic commands (enter-insert-mode, etc.)
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up runtime with all bridge primitives, register builtin commands,
+    /// and load the vim-keybindings plugin, then also register a render-status hook.
+    fn setup_vim_keybindings_via_lisp(
+        state_rc: &std::rc::Rc<std::cell::RefCell<alfred_core::editor_state::EditorState>>,
+    ) -> alfred_lisp::runtime::LispRuntime {
+        use std::rc::Rc;
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_define_command(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_keymap_primitives(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_hook_primitives(&runtime, Rc::clone(state_rc));
+
+        // Register native commands (cursor-up/down/left/right, delete-backward, etc.)
+        {
+            let mut state = state_rc.borrow_mut();
+            editor_state::register_builtin_commands(&mut state);
+        }
+
+        // Load the actual vim-keybindings plugin
+        let plugin_source = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("plugins/vim-keybindings/init.lisp"),
+        )
+        .expect("vim-keybindings plugin should exist");
+        runtime.eval(&plugin_source).unwrap();
+
+        // Register a render-status hook so compute_status_content works
+        runtime
+            .eval(r#"(add-hook "render-status" (lambda () "active"))"#)
+            .unwrap();
+
+        runtime
+    }
+
+    /// Helper: dispatch a key event through the Rc<RefCell<EditorState>> path,
+    /// replicating the real event loop pattern for both Native and Dynamic commands.
+    /// This correctly handles Lisp-registered commands (like enter-insert-mode)
+    /// which internally borrow the Rc<RefCell<EditorState>>.
+    fn dispatch_key_rc(
+        state_rc: &std::rc::Rc<std::cell::RefCell<alfred_core::editor_state::EditorState>>,
+        key: KeyEvent,
+        input_state: super::InputState,
+    ) -> super::InputState {
+        let (new_input_state, action) = {
+            let mut state = state_rc.borrow_mut();
+            super::handle_key_event(&mut state, key, input_state)
+        }; // borrow dropped before deferred action
+
+        if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
+            let handler = {
+                let state = state_rc.borrow();
+                state.commands.extract_handler(cmd_name)
+            }; // borrow dropped
+
+            match handler {
+                Some(alfred_core::command::ClonedHandler::Native(f)) => {
+                    let _ = f(&mut state_rc.borrow_mut());
+                }
+                Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
+                    // Dynamic (Lisp) handlers capture their own Rc<RefCell<EditorState>>
+                    // and call borrow_mut() internally. Pass a dummy state.
+                    let mut dummy = alfred_core::editor_state::new(1, 1);
+                    let _ = f(&mut dummy);
+                }
+                None => {}
+            }
+        }
+
+        new_input_state
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (07-03): vim insert mode full workflow
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_vim_plugin_loaded_when_i_pressed_then_type_chars_then_escape_then_buffer_changed_and_mode_restored(
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "Hello", cursor at end, and vim-keybindings loaded
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello");
+            state.cursor = cursor::new(0, 5); // at end of "Hello"
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Verify starting state: normal mode, normal-mode keymap active
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.mode, "normal", "Should start in normal mode");
+            assert_eq!(
+                state.active_keymaps,
+                vec!["normal-mode".to_string()],
+                "Should have normal-mode keymap active"
+            );
+        }
+
+        // When: press 'i' to enter insert mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // Then: mode is "insert" and active keymap is "insert-mode"
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.mode, "insert", "After 'i', mode should be insert");
+            assert_eq!(
+                state.active_keymaps,
+                vec!["insert-mode".to_string()],
+                "After 'i', active keymap should be insert-mode"
+            );
+        }
+
+        // And: status bar shows INSERT
+        {
+            let state = state_rc.borrow();
+            let status = super::compute_status_content(&state).unwrap();
+            assert!(
+                status.contains("INSERT"),
+                "Status bar should show INSERT in insert mode, got: '{}'",
+                status
+            );
+        }
+
+        // When: type " World" (characters should self-insert)
+        let mut is = super::InputState::Normal;
+        for ch in " World".chars() {
+            is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char(ch)), is);
+        }
+
+        // Then: buffer contains "Hello World"
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert_eq!(
+                content, "Hello World",
+                "Typed chars should be inserted, got: '{}'",
+                content
+            );
+        }
+
+        // When: press Backspace to delete the 'd'
+        is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Backspace), is);
+
+        // Then: buffer is "Hello Worl"
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert_eq!(
+                content, "Hello Worl",
+                "Backspace should delete last char, got: '{}'",
+                content
+            );
+        }
+
+        // When: press Escape to return to normal mode
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Escape), is);
+
+        // Then: mode is back to "normal" and active keymap is "normal-mode"
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.mode, "normal", "After Escape, mode should be normal");
+            assert_eq!(
+                state.active_keymaps,
+                vec!["normal-mode".to_string()],
+                "After Escape, active keymap should be normal-mode"
+            );
+        }
+
+        // And: status bar shows NORMAL
+        {
+            let state = state_rc.borrow();
+            let status = super::compute_status_content(&state).unwrap();
+            assert!(
+                status.contains("NORMAL"),
+                "Status bar should show NORMAL after escape, got: '{}'",
+                status
+            );
+        }
+
+        // And: typing characters in normal mode does NOT insert
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('z')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert_eq!(
+                content, "Hello Worl",
+                "Normal mode should NOT self-insert chars, got: '{}'",
+                content
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (07-03): vim insert mode behaviors
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_vim_normal_mode_when_i_pressed_then_mode_switches_to_insert_and_keymap_updated() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim plugin loaded, in normal mode
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'i'
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // Then: mode is insert and keymap is insert-mode
+        let state = state_rc.borrow();
+        assert_eq!(state.mode, "insert");
+        assert_eq!(state.active_keymaps, vec!["insert-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_vim_insert_mode_when_escape_pressed_then_mode_switches_to_normal_and_keymap_updated() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim plugin loaded, switched to insert mode
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Enter insert mode first
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // When: press Escape
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Escape),
+            super::InputState::Normal,
+        );
+
+        // Then: mode is normal and keymap is normal-mode
+        let state = state_rc.borrow();
+        assert_eq!(state.mode, "normal");
+        assert_eq!(state.active_keymaps, vec!["normal-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_vim_insert_mode_when_chars_typed_then_chars_inserted_in_buffer() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim plugin loaded, in insert mode, buffer "AB"
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("AB");
+            state.cursor = cursor::new(0, 2); // end of "AB"
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Enter insert mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // When: type "CD"
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('C')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('D')), is);
+
+        // Then: buffer is "ABCD"
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "ABCD",
+            "Characters should be inserted in insert mode"
+        );
+        assert_eq!(
+            state.cursor.column, 4,
+            "Cursor should advance after each insert"
+        );
+    }
+
+    #[test]
+    fn given_vim_insert_mode_when_backspace_pressed_then_char_deleted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim plugin loaded, in insert mode, buffer "Hello"
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello");
+            state.cursor = cursor::new(0, 5);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Enter insert mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // When: press Backspace
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Backspace),
+            super::InputState::Normal,
+        );
+
+        // Then: last character deleted, cursor moves back
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "Hell",
+            "Backspace should delete char before cursor"
+        );
+        assert_eq!(
+            state.cursor.column, 4,
+            "Cursor should move back after backspace"
+        );
+    }
+
+    #[test]
+    fn given_vim_insert_mode_when_status_computed_then_shows_insert_mode() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim plugin loaded, switched to insert mode
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Enter insert mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // When: compute status
+        let state = state_rc.borrow();
+        let status = super::compute_status_content(&state);
+
+        // Then: status shows INSERT
+        let status_str = status.expect("Status should be present with render-status hook");
+        assert!(
+            status_str.contains("INSERT"),
+            "Status should show INSERT in insert mode, got: '{}'",
+            status_str
+        );
+    }
 }
