@@ -553,6 +553,29 @@ pub fn delete_char_range(
     }
 }
 
+/// Extracts text from (from_line, from_col) to (to_line, to_col) exclusive.
+///
+/// Returns the text in the given character range as a String.
+/// If the start position is at or past the end position, returns an empty string.
+/// Positions are clamped to valid buffer boundaries.
+pub fn get_text_range(
+    buffer: &Buffer,
+    from_line: usize,
+    from_col: usize,
+    to_line: usize,
+    to_col: usize,
+) -> String {
+    let start = line_column_to_char_index(&buffer.rope, from_line, from_col);
+    let end = line_column_to_char_index(&buffer.rope, to_line, to_col);
+
+    if start >= end || start >= buffer.rope.len_chars() {
+        return String::new();
+    }
+
+    let clamped_end = end.min(buffer.rope.len_chars());
+    buffer.rope.slice(start..clamped_end).to_string()
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.

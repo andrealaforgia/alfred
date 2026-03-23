@@ -60,6 +60,9 @@ pub struct EditorState {
     pub message: Option<String>,
     pub running: bool,
     pub yank_register: Option<String>,
+    /// Whether the last yank was line-wise (true) or character-wise (false).
+    /// Line-wise yanks paste on a new line; character-wise yanks paste inline.
+    pub yank_linewise: bool,
     pub undo_stack: Vec<UndoSnapshot>,
     pub redo_stack: Vec<UndoSnapshot>,
     pub theme: Theme,
@@ -372,6 +375,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             let content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
             s.yank_register = Some(content);
+            s.yank_linewise = true;
             Ok(())
         }),
     );
@@ -381,14 +385,23 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(ref text) = s.yank_register.clone() {
                 push_undo(s);
-                let current_line = s.cursor.line;
-                let line_len = crate::buffer::get_line(&s.buffer, current_line)
-                    .map(|l| l.trim_end_matches('\n').len())
-                    .unwrap_or(0);
-                // Insert a newline at end of current line, then the yanked text
-                s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
-                s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, text);
-                s.cursor = crate::cursor::new(current_line + 1, 0);
+                if s.yank_linewise {
+                    // Line-wise paste: insert on a new line below
+                    let current_line = s.cursor.line;
+                    let line_len = crate::buffer::get_line(&s.buffer, current_line)
+                        .map(|l| l.trim_end_matches('\n').len())
+                        .unwrap_or(0);
+                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
+                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, text);
+                    s.cursor = crate::cursor::new(current_line + 1, 0);
+                } else {
+                    // Character-wise paste: insert after cursor position
+                    let col = s.cursor.column + 1;
+                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, text);
+                    // Cursor moves to end of pasted text - 1 (on last pasted char)
+                    let end_col = col + text.len().saturating_sub(1);
+                    s.cursor = crate::cursor::new(s.cursor.line, end_col);
+                }
                 s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
             }
             Ok(())
@@ -720,6 +733,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         message: None,
         running: true,
         yank_register: None,
+        yank_linewise: false,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
         theme: crate::theme::new_theme(),

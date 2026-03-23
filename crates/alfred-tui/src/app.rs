@@ -80,6 +80,10 @@ fn convert_modifiers(ct_mods: CtKeyModifiers) -> Modifiers {
 pub(crate) enum Operator {
     /// Delete text in the motion range
     Delete,
+    /// Change text in the motion range (delete + enter insert mode)
+    Change,
+    /// Yank (copy) text in the motion range to the yank register
+    Yank,
 }
 
 /// Tracks multi-key input state (e.g., command-line after `:`)
@@ -218,6 +222,55 @@ fn execute_delete_with_motion(
     state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
 }
 
+/// Executes a yank operator with the given motion, copying text to the yank register.
+///
+/// For character-wise motions, yanks text from min(cursor, motion) to max(cursor, motion).
+/// For line-wise motions, yanks entire lines from the current line to the motion target line.
+/// The cursor stays at its original position after yanking.
+fn execute_yank_with_motion(
+    state: &mut EditorState,
+    motion_cursor: alfred_core::cursor::Cursor,
+    motion_kind: MotionKind,
+) {
+    match motion_kind {
+        MotionKind::CharWise => {
+            let (from, to) = if (state.cursor.line, state.cursor.column)
+                <= (motion_cursor.line, motion_cursor.column)
+            {
+                (state.cursor, motion_cursor)
+            } else {
+                (motion_cursor, state.cursor)
+            };
+            let text = alfred_core::buffer::get_text_range(
+                &state.buffer,
+                from.line,
+                from.column,
+                to.line,
+                to.column,
+            );
+            state.yank_register = Some(text);
+            state.yank_linewise = false;
+            state.message = Some("yanked".to_string());
+        }
+        MotionKind::LineWise => {
+            let min_line = state.cursor.line.min(motion_cursor.line);
+            let max_line = state.cursor.line.max(motion_cursor.line);
+            let mut lines = Vec::new();
+            for line in min_line..=max_line {
+                lines.push(alfred_core::buffer::get_line_content(&state.buffer, line));
+            }
+            let line_count = lines.len();
+            state.yank_register = Some(lines.join("\n"));
+            state.yank_linewise = true;
+            state.message = Some(format!(
+                "{} line{} yanked",
+                line_count,
+                if line_count == 1 { "" } else { "s" }
+            ));
+        }
+    }
+}
+
 /// Handles a key event by updating the editor state.
 ///
 /// Returns `(InputState, DeferredAction, Option<u32>)` where:
@@ -338,7 +391,7 @@ pub(crate) fn handle_key_event(
         return (InputState::Normal, DeferredAction::None, None);
     }
 
-    // OperatorPending mode: waiting for a motion key after an operator (d).
+    // OperatorPending mode: waiting for a motion key after an operator (d, c, y).
     // Resolve the next key as a motion, compute the range, execute the operator.
     if let InputState::OperatorPending(operator) = input_state {
         // Escape cancels the operator
@@ -346,31 +399,72 @@ pub(crate) fn handle_key_event(
             return (InputState::Normal, DeferredAction::None, None);
         }
 
-        match operator {
-            Operator::Delete => {
-                // Check if same operator key pressed again (dd = delete line)
-                if key.code == KeyCode::Char('d') {
+        // Check if same operator key pressed again (dd/cc/yy = line-wise operation)
+        let doubled = matches!(
+            (operator, key.code),
+            (Operator::Delete, KeyCode::Char('d'))
+                | (Operator::Change, KeyCode::Char('c'))
+                | (Operator::Yank, KeyCode::Char('y'))
+        );
+
+        if doubled {
+            match operator {
+                Operator::Delete => {
                     alfred_core::editor_state::push_undo(state);
                     state.buffer =
                         alfred_core::buffer::delete_line(&state.buffer, state.cursor.line);
                     state.cursor =
                         alfred_core::cursor::ensure_within_bounds(state.cursor, &state.buffer);
                     state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
-                    return (InputState::Normal, DeferredAction::None, None);
                 }
+                Operator::Change => {
+                    // cc = clear current line content, enter insert mode
+                    alfred_core::editor_state::push_undo(state);
+                    state.buffer =
+                        alfred_core::buffer::replace_line(&state.buffer, state.cursor.line, "");
+                    state.cursor = alfred_core::cursor::new(state.cursor.line, 0);
+                    state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+                    state.active_keymaps =
+                        vec![format!("{}-mode", alfred_core::editor_state::MODE_INSERT)];
+                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                }
+                Operator::Yank => {
+                    // yy = yank entire line
+                    let content =
+                        alfred_core::buffer::get_line_content(&state.buffer, state.cursor.line);
+                    state.yank_register = Some(content);
+                    state.yank_linewise = true;
+                    state.message = Some("1 line yanked".to_string());
+                }
+            }
+            return (InputState::Normal, DeferredAction::None, None);
+        }
 
-                // Look up the key in the keymap to get a command name
-                if let Some(cmd_name) = alfred_core::editor_state::resolve_key(state, key) {
-                    if let Some((motion_cursor, motion_kind)) = execute_motion(state, &cmd_name) {
+        // Look up the key in the keymap to get a command name
+        if let Some(cmd_name) = alfred_core::editor_state::resolve_key(state, key) {
+            if let Some((motion_cursor, motion_kind)) = execute_motion(state, &cmd_name) {
+                match operator {
+                    Operator::Delete => {
                         execute_delete_with_motion(state, motion_cursor, motion_kind);
-                        return (InputState::Normal, DeferredAction::None, None);
+                    }
+                    Operator::Change => {
+                        // Change = delete range + enter insert mode
+                        execute_delete_with_motion(state, motion_cursor, motion_kind);
+                        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+                        state.active_keymaps =
+                            vec![format!("{}-mode", alfred_core::editor_state::MODE_INSERT)];
+                    }
+                    Operator::Yank => {
+                        // Yank = copy text in range to register, don't delete
+                        execute_yank_with_motion(state, motion_cursor, motion_kind);
                     }
                 }
-
-                // Unrecognized motion key: cancel operator
                 return (InputState::Normal, DeferredAction::None, None);
             }
         }
+
+        // Unrecognized motion key: cancel operator
+        return (InputState::Normal, DeferredAction::None, None);
     }
 
     // Normal mode only: accumulate digit keys into a count prefix.
@@ -434,6 +528,16 @@ pub(crate) fn handle_key_event(
         ),
         Some(ref cmd) if cmd == "enter-operator-delete" => (
             InputState::OperatorPending(Operator::Delete),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-operator-change" => (
+            InputState::OperatorPending(Operator::Change),
+            DeferredAction::None,
+            None,
+        ),
+        Some(ref cmd) if cmd == "enter-operator-yank" => (
+            InputState::OperatorPending(Operator::Yank),
             DeferredAction::None,
             None,
         ),
@@ -4467,5 +4571,342 @@ mod tests {
             super::InputState::Normal,
         );
         assert_eq!(alfred_core::buffer::content(&state.buffer), "untouched");
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: operator-pending Change (c) and Yank (y) operators
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_two_words_when_cw_then_first_word_deleted_and_insert_mode_entered() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at (0,0)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'c' then 'w' (change word)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        assert!(
+            matches!(
+                is,
+                super::InputState::OperatorPending(super::Operator::Change)
+            ),
+            "c should enter operator-pending Change mode"
+        );
+
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Then: "hello " is deleted, buffer is "world", mode is insert
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "world",
+            "cw should delete 'hello ' leaving 'world'"
+        );
+        assert_eq!(
+            state.mode,
+            alfred_core::editor_state::MODE_INSERT,
+            "cw should enter insert mode"
+        );
+        assert_eq!(
+            state.active_keymaps,
+            vec!["insert-mode".to_string()],
+            "cw should activate insert-mode keymap"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_cc_then_line_cleared_and_insert_mode_entered() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world\nsecond line", cursor on line 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world\nsecond line");
+            state.cursor = cursor::new(0, 3);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'c' then 'c' (change line)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('c')), is);
+
+        // Then: first line is cleared, mode is insert, cursor at start of line
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert!(
+            content.starts_with('\n') || content.starts_with("second"),
+            "cc should clear the current line content, got: '{}'",
+            content
+        );
+        assert_eq!(
+            state.mode,
+            alfred_core::editor_state::MODE_INSERT,
+            "cc should enter insert mode"
+        );
+        assert_eq!(state.cursor.line, 0, "cc should keep cursor on same line");
+        assert_eq!(state.cursor.column, 0, "cc should place cursor at column 0");
+    }
+
+    #[test]
+    fn given_buffer_with_two_words_when_yw_then_first_word_yanked_and_buffer_unchanged() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at (0,0)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'y' then 'w' (yank word)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('y')),
+            super::InputState::Normal,
+        );
+        assert!(
+            matches!(
+                is,
+                super::InputState::OperatorPending(super::Operator::Yank)
+            ),
+            "y should enter operator-pending Yank mode"
+        );
+
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Then: buffer unchanged, yank register has "hello ", cursor stays
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "hello world", "yw should not modify the buffer");
+        assert_eq!(
+            state.yank_register,
+            Some("hello ".to_string()),
+            "yw should yank 'hello ' to register"
+        );
+        assert!(!state.yank_linewise, "yw should be character-wise yank");
+        assert_eq!(state.cursor.line, 0, "yw should not move cursor line");
+        assert_eq!(state.cursor.column, 0, "yw should not move cursor column");
+        assert_eq!(
+            state.message,
+            Some("yanked".to_string()),
+            "yw should show 'yanked' message"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_yy_then_entire_line_yanked_and_buffer_unchanged() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world\nsecond line", cursor on line 0
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world\nsecond line");
+            state.cursor = cursor::new(0, 3);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'y' then 'y' (yank line)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('y')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('y')), is);
+
+        // Then: buffer unchanged, yank register has entire line, linewise
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "hello world\nsecond line",
+            "yy should not modify the buffer"
+        );
+        assert_eq!(
+            state.yank_register,
+            Some("hello world".to_string()),
+            "yy should yank entire line content"
+        );
+        assert!(state.yank_linewise, "yy should be a line-wise yank");
+        assert_eq!(
+            state.message,
+            Some("1 line yanked".to_string()),
+            "yy should show '1 line yanked' message"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_yw_then_p_then_yanked_text_pasted_after_cursor() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at (0,0)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Step 1: yank word with 'yw'
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('y')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Step 2: move cursor to end of line ($)
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('$')),
+            super::InputState::Normal,
+        );
+
+        // Step 3: paste with 'p'
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('p')),
+            super::InputState::Normal,
+        );
+
+        // Then: yanked text pasted after cursor
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert!(
+            content.contains("hello "),
+            "p after yw should paste the yanked text, got: '{}'",
+            content
+        );
+        // The text should be "hello worldhello " (pasted after last char)
+        assert_eq!(
+            content, "hello worldhello ",
+            "p should paste yanked text after cursor position"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_c_dollar_then_deletes_to_end_and_enters_insert_mode() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at column 5
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 5);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'c' then '$' (change to end of line)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('$')), is);
+
+        // Then: " world" deleted, buffer is "hello", mode is insert
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "hello",
+            "c$ should delete from cursor to end of line"
+        );
+        assert_eq!(
+            state.mode,
+            alfred_core::editor_state::MODE_INSERT,
+            "c$ should enter insert mode"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_y_dollar_then_yanks_to_end_without_modifying_buffer() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello world", cursor at column 5
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 5);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'y' then '$' (yank to end of line)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('y')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('$')), is);
+
+        // Then: buffer unchanged, register has " world"
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "hello world", "y$ should not modify the buffer");
+        assert_eq!(
+            state.yank_register,
+            Some(" world".to_string()),
+            "y$ should yank from cursor to end of line"
+        );
+    }
+
+    #[test]
+    fn given_operator_pending_when_escape_pressed_then_cancelled() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor in operator-pending mode for Change
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello");
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Enter operator-pending Change
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        assert!(matches!(
+            is,
+            super::InputState::OperatorPending(super::Operator::Change)
+        ));
+
+        // When: press Escape
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Escape), is);
+
+        // Then: back to normal, buffer unchanged
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+        assert_eq!(state.mode, "normal");
     }
 }
