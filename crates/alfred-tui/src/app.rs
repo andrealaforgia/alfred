@@ -616,6 +616,9 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                             state.commands.extract_handler(&cmd_name)
                         }; // borrow dropped
 
+                        // Capture buffer version before execution to detect mutations.
+                        let version_before = state_rc.borrow().buffer.version();
+
                         state_rc.borrow_mut().message = None;
 
                         // Execute command `repeat` times (default 1, or count prefix N).
@@ -643,6 +646,14 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                                     Some(format!("Command error: {}", e));
                                 break;
                             }
+                        }
+
+                        // Track last buffer-mutating command for dot-repeat.
+                        // Only record if the buffer actually changed (version incremented)
+                        // and the command is not repeat-last-change itself (avoid self-recording).
+                        let version_after = state_rc.borrow().buffer.version();
+                        if version_after != version_before && cmd_name != "repeat-last-change" {
+                            state_rc.borrow_mut().last_edit_command = Some(cmd_name.clone());
                         }
                     }
                     DeferredAction::SaveBuffer(opt_path) => {
@@ -4115,5 +4126,167 @@ mod tests {
         // Press ',' -> reverses (find backward), cursor at col 1
         let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(',')), is);
         assert_eq!(state.cursor.column, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helper: dispatch key with last-edit tracking (mirrors event loop logic)
+    // -----------------------------------------------------------------------
+
+    /// Dispatch a key event and track buffer mutations for dot-repeat,
+    /// mirroring the event loop's last_edit_command tracking logic.
+    fn dispatch_key_tracking_edits(
+        state: &mut alfred_core::editor_state::EditorState,
+        key: KeyEvent,
+        input_state: super::InputState,
+    ) -> super::InputState {
+        let (new_input_state, action, _count) =
+            super::handle_key_event(state, key, input_state, None);
+        if let super::DeferredAction::ExecCommand(ref cmd_name) = action {
+            let version_before = state.buffer.version();
+            let _ = alfred_core::command::execute(state, cmd_name);
+            let version_after = state.buffer.version();
+            if version_after != version_before && cmd_name != "repeat-last-change" {
+                state.last_edit_command = Some(cmd_name.clone());
+            }
+        }
+        new_input_state
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: dot-repeat (repeat-last-change) via key dispatch
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_x_pressed_then_dot_pressed_then_two_chars_deleted() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcd");
+        state.cursor = cursor::new(0, 0);
+        let mut keymap = alfred_core::editor_state::Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('x')),
+            "delete-char-at-cursor".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('.')),
+            "repeat-last-change".to_string(),
+        );
+        state.keymaps.insert("normal-mode".to_string(), keymap);
+        state.active_keymaps.push("normal-mode".to_string());
+        editor_state::register_builtin_commands(&mut state);
+
+        // Press 'x' -> deletes 'a'
+        let is = dispatch_key_tracking_edits(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bcd");
+        assert_eq!(
+            state.last_edit_command,
+            Some("delete-char-at-cursor".to_string())
+        );
+
+        // Press '.' -> repeats delete-char-at-cursor, deletes 'b'
+        let _is = dispatch_key_tracking_edits(&mut state, KeyEvent::plain(KeyCode::Char('.')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "cd");
+    }
+
+    #[test]
+    fn given_delete_line_then_dot_then_two_lines_deleted() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Line1\nLine2\nLine3");
+        state.cursor = cursor::new(0, 0);
+        let mut keymap = alfred_core::editor_state::Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('d')),
+            "delete-line".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('.')),
+            "repeat-last-change".to_string(),
+        );
+        state.keymaps.insert("normal-mode".to_string(), keymap);
+        state.active_keymaps.push("normal-mode".to_string());
+        editor_state::register_builtin_commands(&mut state);
+
+        // Press 'd' -> deletes Line1
+        let is = dispatch_key_tracking_edits(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "Line2\nLine3");
+
+        // Press '.' -> repeats delete-line, deletes Line2
+        let _is = dispatch_key_tracking_edits(&mut state, KeyEvent::plain(KeyCode::Char('.')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "Line3");
+    }
+
+    #[test]
+    fn given_movement_after_edit_then_dot_repeats_edit_not_movement() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcdef");
+        state.cursor = cursor::new(0, 0);
+        let mut keymap = alfred_core::editor_state::Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('x')),
+            "delete-char-at-cursor".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('l')),
+            "cursor-right".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('.')),
+            "repeat-last-change".to_string(),
+        );
+        state.keymaps.insert("normal-mode".to_string(), keymap);
+        state.active_keymaps.push("normal-mode".to_string());
+        editor_state::register_builtin_commands(&mut state);
+
+        // Press 'x' -> deletes 'a', buffer="bcdef"
+        let is = dispatch_key_tracking_edits(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bcdef");
+
+        // Press 'l' -> cursor moves right (no buffer mutation)
+        let is = dispatch_key_tracking_edits(&mut state, KeyEvent::plain(KeyCode::Char('l')), is);
+        // last_edit_command should still be delete-char-at-cursor (movement doesn't overwrite)
+        assert_eq!(
+            state.last_edit_command,
+            Some("delete-char-at-cursor".to_string())
+        );
+
+        // Press '.' -> repeats delete-char-at-cursor at current cursor position (col 1),
+        // deleting 'c'. NOT cursor-right.
+        let _is = dispatch_key_tracking_edits(&mut state, KeyEvent::plain(KeyCode::Char('.')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bdef");
+    }
+
+    #[test]
+    fn given_no_prior_edit_when_dot_pressed_then_noop() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("untouched");
+        state.cursor = cursor::new(0, 0);
+        let mut keymap = alfred_core::editor_state::Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('.')),
+            "repeat-last-change".to_string(),
+        );
+        state.keymaps.insert("normal-mode".to_string(), keymap);
+        state.active_keymaps.push("normal-mode".to_string());
+        editor_state::register_builtin_commands(&mut state);
+
+        // Press '.' with no prior edit
+        let _is = dispatch_key_tracking_edits(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('.')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "untouched");
     }
 }

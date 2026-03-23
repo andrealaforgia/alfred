@@ -72,6 +72,8 @@ pub struct EditorState {
     pub search_forward: bool,
     /// The most recent character find (f/F/t/T) for `;`/`,` repeat.
     pub last_char_find: Option<(CharFindKind, char)>,
+    /// The name of the last buffer-mutating command, for `.` (repeat-last-change).
+    pub last_edit_command: Option<String>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -578,6 +580,17 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Dot repeat: repeat last buffer-mutating command ---
+    crate::command::register(
+        &mut state.commands,
+        "repeat-last-change".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(cmd_name) = s.last_edit_command.clone() {
+                crate::command::execute(s, &cmd_name)?;
+            }
+            Ok(())
+        }),
+    );
 }
 
 /// Executes a character find operation, returning the new cursor position if found.
@@ -680,6 +693,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         search_pattern: None,
         search_forward: true,
         last_char_find: None,
+        last_edit_command: None,
     }
 }
 
@@ -1461,5 +1475,104 @@ mod tests {
         assert!(!editor_state::is_valid_cursor_shape("triangle"));
         assert!(!editor_state::is_valid_cursor_shape(""));
         assert!(!editor_state::is_valid_cursor_shape("BLOCK"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: repeat-last-change (dot command)
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_last_edit_is_delete_char_when_repeat_last_change_then_another_char_deleted() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Execute delete-char-at-cursor (deletes 'H')
+        let result = command::execute(&mut state, "delete-char-at-cursor");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "ello");
+
+        // Record it as last edit command (normally done by event loop)
+        state.last_edit_command = Some("delete-char-at-cursor".to_string());
+
+        // When: repeat-last-change (dot)
+        let result = command::execute(&mut state, "repeat-last-change");
+        assert!(result.is_ok());
+
+        // Then: another character deleted
+        assert_eq!(buffer::content(&state.buffer), "llo");
+    }
+
+    #[test]
+    fn given_last_edit_is_delete_line_when_repeat_last_change_then_another_line_deleted() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("First\nSecond\nThird");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Execute delete-line (deletes "First")
+        let result = command::execute(&mut state, "delete-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "Second\nThird");
+
+        // Record it as last edit command
+        state.last_edit_command = Some("delete-line".to_string());
+
+        // When: repeat-last-change (dot)
+        let result = command::execute(&mut state, "repeat-last-change");
+        assert!(result.is_ok());
+
+        // Then: another line deleted
+        assert_eq!(buffer::content(&state.buffer), "Third");
+    }
+
+    #[test]
+    fn given_no_prior_edit_when_repeat_last_change_then_noop() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("Unchanged");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // last_edit_command is None by default
+
+        // When: repeat-last-change (dot) with no prior edit
+        let result = command::execute(&mut state, "repeat-last-change");
+        assert!(result.is_ok());
+
+        // Then: buffer unchanged
+        assert_eq!(buffer::content(&state.buffer), "Unchanged");
+    }
+
+    #[test]
+    fn given_last_edit_is_join_lines_when_repeat_last_change_then_another_join_performed() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("A\nB\nC\nD");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Execute join-lines (joins A and B)
+        let result = command::execute(&mut state, "join-lines");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "A B\nC\nD");
+
+        // Record it as last edit command
+        state.last_edit_command = Some("join-lines".to_string());
+
+        // When: repeat-last-change (dot)
+        let result = command::execute(&mut state, "repeat-last-change");
+        assert!(result.is_ok());
+
+        // Then: next lines joined
+        assert_eq!(buffer::content(&state.buffer), "A B C\nD");
     }
 }
