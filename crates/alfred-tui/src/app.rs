@@ -612,113 +612,158 @@ mod tests {
     }
 
     #[test]
-    fn given_crossterm_arrow_up_when_converted_then_returns_alfred_up() {
-        let ct_event = make_crossterm_key(CtKeyCode::Up, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Up);
-        assert!(!result.modifiers.ctrl);
-    }
+    fn given_crossterm_key_events_when_converted_then_returns_correct_alfred_key_events() {
+        // Each tuple: (crossterm_code, crossterm_modifiers, expected_alfred_code, ctrl, alt, shift, label)
+        let cases: Vec<(CtKeyCode, CtKeyModifiers, KeyCode, bool, bool, bool, &str)> = vec![
+            (
+                CtKeyCode::Up,
+                CtKeyModifiers::NONE,
+                KeyCode::Up,
+                false,
+                false,
+                false,
+                "Up",
+            ),
+            (
+                CtKeyCode::Down,
+                CtKeyModifiers::NONE,
+                KeyCode::Down,
+                false,
+                false,
+                false,
+                "Down",
+            ),
+            (
+                CtKeyCode::Left,
+                CtKeyModifiers::NONE,
+                KeyCode::Left,
+                false,
+                false,
+                false,
+                "Left",
+            ),
+            (
+                CtKeyCode::Right,
+                CtKeyModifiers::NONE,
+                KeyCode::Right,
+                false,
+                false,
+                false,
+                "Right",
+            ),
+            (
+                CtKeyCode::Enter,
+                CtKeyModifiers::NONE,
+                KeyCode::Enter,
+                false,
+                false,
+                false,
+                "Enter",
+            ),
+            (
+                CtKeyCode::Esc,
+                CtKeyModifiers::NONE,
+                KeyCode::Escape,
+                false,
+                false,
+                false,
+                "Escape",
+            ),
+            (
+                CtKeyCode::Backspace,
+                CtKeyModifiers::NONE,
+                KeyCode::Backspace,
+                false,
+                false,
+                false,
+                "Backspace",
+            ),
+            (
+                CtKeyCode::Tab,
+                CtKeyModifiers::NONE,
+                KeyCode::Tab,
+                false,
+                false,
+                false,
+                "Tab",
+            ),
+            (
+                CtKeyCode::Home,
+                CtKeyModifiers::NONE,
+                KeyCode::Home,
+                false,
+                false,
+                false,
+                "Home",
+            ),
+            (
+                CtKeyCode::End,
+                CtKeyModifiers::NONE,
+                KeyCode::End,
+                false,
+                false,
+                false,
+                "End",
+            ),
+            (
+                CtKeyCode::PageUp,
+                CtKeyModifiers::NONE,
+                KeyCode::PageUp,
+                false,
+                false,
+                false,
+                "PageUp",
+            ),
+            (
+                CtKeyCode::PageDown,
+                CtKeyModifiers::NONE,
+                KeyCode::PageDown,
+                false,
+                false,
+                false,
+                "PageDown",
+            ),
+            (
+                CtKeyCode::Delete,
+                CtKeyModifiers::NONE,
+                KeyCode::Delete,
+                false,
+                false,
+                false,
+                "Delete",
+            ),
+            (
+                CtKeyCode::Char('q'),
+                CtKeyModifiers::CONTROL,
+                KeyCode::Char('q'),
+                true,
+                false,
+                false,
+                "Ctrl+Char",
+            ),
+            (
+                CtKeyCode::Char('x'),
+                CtKeyModifiers::ALT,
+                KeyCode::Char('x'),
+                false,
+                true,
+                false,
+                "Alt+Char",
+            ),
+        ];
 
-    #[test]
-    fn given_crossterm_arrow_down_when_converted_then_returns_alfred_down() {
-        let ct_event = make_crossterm_key(CtKeyCode::Down, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Down);
-    }
-
-    #[test]
-    fn given_crossterm_arrow_left_when_converted_then_returns_alfred_left() {
-        let ct_event = make_crossterm_key(CtKeyCode::Left, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Left);
-    }
-
-    #[test]
-    fn given_crossterm_arrow_right_when_converted_then_returns_alfred_right() {
-        let ct_event = make_crossterm_key(CtKeyCode::Right, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Right);
-    }
-
-    #[test]
-    fn given_crossterm_char_with_ctrl_when_converted_then_returns_alfred_char_with_ctrl() {
-        let ct_event = make_crossterm_key(CtKeyCode::Char('q'), CtKeyModifiers::CONTROL);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Char('q'));
-        assert!(result.modifiers.ctrl);
-        assert!(!result.modifiers.alt);
-        assert!(!result.modifiers.shift);
-    }
-
-    #[test]
-    fn given_crossterm_char_with_alt_when_converted_then_returns_alfred_char_with_alt() {
-        let ct_event = make_crossterm_key(CtKeyCode::Char('x'), CtKeyModifiers::ALT);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Char('x'));
-        assert!(result.modifiers.alt);
-    }
-
-    #[test]
-    fn given_crossterm_enter_when_converted_then_returns_alfred_enter() {
-        let ct_event = make_crossterm_key(CtKeyCode::Enter, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Enter);
-    }
-
-    #[test]
-    fn given_crossterm_escape_when_converted_then_returns_alfred_escape() {
-        let ct_event = make_crossterm_key(CtKeyCode::Esc, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Escape);
-    }
-
-    #[test]
-    fn given_crossterm_backspace_when_converted_then_returns_alfred_backspace() {
-        let ct_event = make_crossterm_key(CtKeyCode::Backspace, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Backspace);
-    }
-
-    #[test]
-    fn given_crossterm_tab_when_converted_then_returns_alfred_tab() {
-        let ct_event = make_crossterm_key(CtKeyCode::Tab, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Tab);
-    }
-
-    #[test]
-    fn given_crossterm_home_when_converted_then_returns_alfred_home() {
-        let ct_event = make_crossterm_key(CtKeyCode::Home, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Home);
-    }
-
-    #[test]
-    fn given_crossterm_end_when_converted_then_returns_alfred_end() {
-        let ct_event = make_crossterm_key(CtKeyCode::End, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::End);
-    }
-
-    #[test]
-    fn given_crossterm_pageup_when_converted_then_returns_alfred_pageup() {
-        let ct_event = make_crossterm_key(CtKeyCode::PageUp, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::PageUp);
-    }
-
-    #[test]
-    fn given_crossterm_pagedown_when_converted_then_returns_alfred_pagedown() {
-        let ct_event = make_crossterm_key(CtKeyCode::PageDown, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::PageDown);
-    }
-
-    #[test]
-    fn given_crossterm_delete_when_converted_then_returns_alfred_delete() {
-        let ct_event = make_crossterm_key(CtKeyCode::Delete, CtKeyModifiers::NONE);
-        let result = super::convert_crossterm_key(ct_event);
-        assert_eq!(result.code, KeyCode::Delete);
+        for (ct_code, ct_mods, expected_code, ctrl, alt, shift, label) in &cases {
+            let ct_event = make_crossterm_key(ct_code.clone(), *ct_mods);
+            let result = super::convert_crossterm_key(ct_event);
+            assert_eq!(result.code, *expected_code, "code mismatch for {}", label);
+            assert_eq!(result.modifiers.ctrl, *ctrl, "ctrl mismatch for {}", label);
+            assert_eq!(result.modifiers.alt, *alt, "alt mismatch for {}", label);
+            assert_eq!(
+                result.modifiers.shift, *shift,
+                "shift mismatch for {}",
+                label
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -726,63 +771,62 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_editor_when_down_arrow_then_cursor_line_increases() {
-        let mut state = editor_state::new(80, 24);
-        state.buffer = Buffer::from_string("aaa\nbbb\nccc");
-        setup_standard_keymaps(&mut state);
-        assert_eq!(state.cursor.line, 0);
+    fn given_editor_when_arrow_key_pressed_then_cursor_moves_in_that_direction() {
+        // Each tuple: (buffer, start_line, start_col, key, expected_line, expected_col, label)
+        let cases: Vec<(&str, usize, usize, KeyCode, usize, usize, &str)> = vec![
+            (
+                "aaa\nbbb\nccc",
+                0,
+                0,
+                KeyCode::Down,
+                1,
+                0,
+                "Down increases line",
+            ),
+            (
+                "aaa\nbbb\nccc",
+                2,
+                0,
+                KeyCode::Up,
+                1,
+                0,
+                "Up decreases line",
+            ),
+            (
+                "Hello",
+                0,
+                0,
+                KeyCode::Right,
+                0,
+                1,
+                "Right increases column",
+            ),
+            ("Hello", 0, 3, KeyCode::Left, 0, 2, "Left decreases column"),
+        ];
 
-        dispatch_key(
-            &mut state,
-            KeyEvent::plain(KeyCode::Down),
-            super::InputState::Normal,
-        );
-        assert_eq!(state.cursor.line, 1);
-    }
+        for (buffer_text, start_line, start_col, key, expected_line, expected_col, label) in &cases
+        {
+            let mut state = editor_state::new(80, 24);
+            state.buffer = Buffer::from_string(buffer_text);
+            setup_standard_keymaps(&mut state);
+            state.cursor = cursor::new(*start_line, *start_col);
 
-    #[test]
-    fn given_editor_when_up_arrow_then_cursor_line_decreases() {
-        let mut state = editor_state::new(80, 24);
-        state.buffer = Buffer::from_string("aaa\nbbb\nccc");
-        setup_standard_keymaps(&mut state);
-        state.cursor = cursor::new(2, 0);
-
-        dispatch_key(
-            &mut state,
-            KeyEvent::plain(KeyCode::Up),
-            super::InputState::Normal,
-        );
-        assert_eq!(state.cursor.line, 1);
-    }
-
-    #[test]
-    fn given_editor_when_right_arrow_then_cursor_column_increases() {
-        let mut state = editor_state::new(80, 24);
-        state.buffer = Buffer::from_string("Hello");
-        setup_standard_keymaps(&mut state);
-        assert_eq!(state.cursor.column, 0);
-
-        dispatch_key(
-            &mut state,
-            KeyEvent::plain(KeyCode::Right),
-            super::InputState::Normal,
-        );
-        assert_eq!(state.cursor.column, 1);
-    }
-
-    #[test]
-    fn given_editor_when_left_arrow_then_cursor_column_decreases() {
-        let mut state = editor_state::new(80, 24);
-        state.buffer = Buffer::from_string("Hello");
-        setup_standard_keymaps(&mut state);
-        state.cursor = cursor::new(0, 3);
-
-        dispatch_key(
-            &mut state,
-            KeyEvent::plain(KeyCode::Left),
-            super::InputState::Normal,
-        );
-        assert_eq!(state.cursor.column, 2);
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(key.clone()),
+                super::InputState::Normal,
+            );
+            assert_eq!(
+                state.cursor.line, *expected_line,
+                "line mismatch for {}",
+                label
+            );
+            assert_eq!(
+                state.cursor.column, *expected_col,
+                "col mismatch for {}",
+                label
+            );
+        }
     }
 
     #[test]

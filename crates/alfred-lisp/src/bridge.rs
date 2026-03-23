@@ -1313,25 +1313,6 @@ mod tests {
     }
 
     #[test]
-    fn given_keymap_exists_when_define_key_then_binding_stored() {
-        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
-        let runtime = LispRuntime::new();
-        register_core_primitives(&runtime, state.clone());
-        register_keymap_primitives(&runtime, state.clone());
-
-        runtime.eval("(make-keymap \"normal\")").unwrap();
-        runtime
-            .eval("(define-key \"normal\" \"Char:a\" \"insert-a\")")
-            .unwrap();
-
-        let editor = state.borrow();
-        let keymap = editor.keymaps.get("normal").unwrap();
-        let key_a =
-            alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Char('a'));
-        assert_eq!(keymap.get(&key_a), Some(&"insert-a".to_string()));
-    }
-
-    #[test]
     fn given_runtime_when_set_active_keymap_then_active_keymaps_updated() {
         let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
         let runtime = LispRuntime::new();
@@ -1382,6 +1363,10 @@ mod tests {
             (
                 "Backspace",
                 alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Backspace),
+            ),
+            (
+                "Char:a",
+                alfred_core::key_event::KeyEvent::plain(alfred_core::key_event::KeyCode::Char('a')),
             ),
             (
                 "Char::",
