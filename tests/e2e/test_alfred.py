@@ -106,6 +106,7 @@ def wait_for_exit(child: pexpect.spawn, timeout: int = TIMEOUT):
     return child.exitstatus
 
 
+
 # -------------------------------------------------------------------------
 # Test 1: Basic startup and quit
 # -------------------------------------------------------------------------

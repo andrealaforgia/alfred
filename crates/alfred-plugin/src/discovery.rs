@@ -25,6 +25,13 @@ pub fn scan(dir: &Path) -> (Vec<PluginMetadata>, Vec<PluginError>) {
             continue;
         }
 
+        // Skip directories ending in .disabled
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with(".disabled") {
+                continue;
+            }
+        }
+
         let init_path = path.join("init.lisp");
         if !init_path.exists() {
             errors.push(PluginError::MissingInitFile { path });

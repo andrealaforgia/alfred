@@ -128,12 +128,10 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "delete-backward".to_string(),
         crate::command::CommandHandler::Native(|s| {
-            // Delete the character before the cursor (backspace behavior).
-            // If cursor is at beginning of buffer, do nothing.
             if s.cursor.line == 0 && s.cursor.column == 0 {
                 return Ok(());
             }
-            // Move cursor left, then delete character at new position
+            push_undo(s);
             s.cursor = crate::cursor::move_left(s.cursor, &s.buffer);
             s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
@@ -144,8 +142,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "delete-char-at-cursor".to_string(),
         crate::command::CommandHandler::Native(|s| {
-            // Delete the character at the cursor position (forward delete, vim 'x').
-            // If cursor is at end of buffer, do nothing (delete_at handles this).
+            push_undo(s);
             s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
             s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
@@ -156,7 +153,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "delete-line".to_string(),
         crate::command::CommandHandler::Native(|s| {
-            // Delete the entire current line (vim 'dd' / 'd').
+            push_undo(s);
             s.buffer = crate::buffer::delete_line(&s.buffer, s.cursor.line);
             s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
             s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
