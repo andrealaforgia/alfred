@@ -1,4 +1,4 @@
-.PHONY: dev_install install test build format lint check clean
+.PHONY: dev_install install test build format lint check clean ci-local
 
 # Development install — everything needed to develop with this project
 dev_install: install
@@ -36,3 +36,7 @@ check:
 # Clean build artifacts
 clean:
 	cargo clean
+
+# Run GitHub Actions workflow locally via act (requires Docker)
+ci-local:
+	act push --container-architecture linux/amd64

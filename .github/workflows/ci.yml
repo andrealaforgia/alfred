@@ -17,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
       - run: make check
 
   test:
@@ -26,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
       - run: make test
 
   format:
@@ -47,4 +49,5 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
       - run: make lint
