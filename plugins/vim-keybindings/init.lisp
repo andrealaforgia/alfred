@@ -31,6 +31,11 @@
 (define-key "normal-mode" "Char:C" "change-to-end")
 (define-key "normal-mode" "Char:u" "undo")
 (define-key "normal-mode" "Ctrl:r" "redo")
+(define-key "normal-mode" "Char:H" "cursor-screen-top")
+(define-key "normal-mode" "Char:M" "cursor-screen-middle")
+(define-key "normal-mode" "Char:L" "cursor-screen-bottom")
+(define-key "normal-mode" "Ctrl:d" "scroll-half-page-down")
+(define-key "normal-mode" "Ctrl:u" "scroll-half-page-up")
 (define-key "normal-mode" "Char::" "enter-command-mode")
 
 ;; Create insert-mode keymap with Escape to return to normal mode and Backspace

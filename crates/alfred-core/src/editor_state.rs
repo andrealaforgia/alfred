@@ -369,6 +369,68 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- 09-04: Screen-relative cursor and half-page scroll commands ---
+    crate::command::register(
+        &mut state.commands,
+        "cursor-screen-top".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::new(s.viewport.top_line, 0);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-screen-middle".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let middle_line = s.viewport.top_line + (s.viewport.height as usize) / 2;
+            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
+            s.cursor = crate::cursor::new(middle_line.min(last_line), 0);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-screen-bottom".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let screen_bottom = s.viewport.top_line + s.viewport.height as usize - 1;
+            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
+            s.cursor = crate::cursor::new(screen_bottom.min(last_line), 0);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "scroll-half-page-down".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let half_page = (s.viewport.height as usize) / 2;
+            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
+            let new_cursor_line = (s.cursor.line + half_page).min(last_line);
+            let new_top_line = (s.viewport.top_line + half_page).min(last_line);
+            s.cursor = crate::cursor::new(new_cursor_line, 0);
+            s.viewport = crate::viewport::Viewport {
+                top_line: new_top_line,
+                ..s.viewport
+            };
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "scroll-half-page-up".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let half_page = (s.viewport.height as usize) / 2;
+            let new_cursor_line = s.cursor.line.saturating_sub(half_page);
+            let new_top_line = s.viewport.top_line.saturating_sub(half_page);
+            s.cursor = crate::cursor::new(new_cursor_line, 0);
+            s.viewport = crate::viewport::Viewport {
+                top_line: new_top_line,
+                ..s.viewport
+            };
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 /// Saves a snapshot of the current buffer and cursor onto the undo stack.
@@ -988,5 +1050,128 @@ mod tests {
         let result = command::execute(&mut state, "paste-below");
         assert!(result.is_ok());
         assert_eq!(buffer::content(&state.buffer), "Hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (09-04): H moves cursor to screen top, M to middle, L to bottom
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_scrolled_viewport_when_h_m_l_then_cursor_moves_to_screen_top_middle_bottom() {
+        let mut state = editor_state::new(80, 24);
+        // Create a 50-line buffer
+        let lines: Vec<&str> = (0..50).map(|_| "line content").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        // Viewport showing lines 10..33 (top_line=10, height=24)
+        state.viewport = crate::viewport::new(10, 24, 80);
+        state.cursor = crate::cursor::new(20, 5); // cursor somewhere in middle
+        editor_state::register_builtin_commands(&mut state);
+
+        // When: cursor-screen-top (H)
+        let result = command::execute(&mut state, "cursor-screen-top");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 10); // top of viewport
+        assert_eq!(state.cursor.column, 0);
+
+        // When: cursor-screen-middle (M)
+        let result = command::execute(&mut state, "cursor-screen-middle");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 22); // 10 + 24/2 = 22
+        assert_eq!(state.cursor.column, 0);
+
+        // When: cursor-screen-bottom (L)
+        let result = command::execute(&mut state, "cursor-screen-bottom");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 33); // 10 + 24 - 1 = 33
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (09-04): screen-relative cursor and half-page scroll
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_viewport_near_end_when_cursor_screen_bottom_then_clamped_to_last_line() {
+        let mut state = editor_state::new(80, 24);
+        // Buffer with only 15 lines, viewport at top
+        let lines: Vec<&str> = (0..15).map(|_| "text").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        state.viewport = crate::viewport::new(0, 24, 80);
+        state.cursor = crate::cursor::new(5, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // L should clamp to last line (14), not viewport bottom (23)
+        let result = command::execute(&mut state, "cursor-screen-bottom");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 14);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_buffer_when_scroll_half_page_down_then_cursor_and_viewport_move_down() {
+        let mut state = editor_state::new(80, 24);
+        // 50-line buffer
+        let lines: Vec<&str> = (0..50).map(|_| "content").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        state.viewport = crate::viewport::new(0, 24, 80);
+        state.cursor = crate::cursor::new(5, 3);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Ctrl-d: scroll down by half page (24/2 = 12)
+        let result = command::execute(&mut state, "scroll-half-page-down");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 17); // 5 + 12 = 17
+        assert_eq!(state.viewport.top_line, 12); // 0 + 12 = 12
+    }
+
+    #[test]
+    fn given_buffer_when_scroll_half_page_up_then_cursor_and_viewport_move_up() {
+        let mut state = editor_state::new(80, 24);
+        // 50-line buffer
+        let lines: Vec<&str> = (0..50).map(|_| "content").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        state.viewport = crate::viewport::new(20, 24, 80);
+        state.cursor = crate::cursor::new(30, 2);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Ctrl-u: scroll up by half page (24/2 = 12)
+        let result = command::execute(&mut state, "scroll-half-page-up");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 18); // 30 - 12 = 18
+        assert_eq!(state.viewport.top_line, 8); // 20 - 12 = 8
+    }
+
+    #[test]
+    fn given_cursor_near_end_when_scroll_half_page_down_then_clamped_to_last_line() {
+        let mut state = editor_state::new(80, 24);
+        // 20-line buffer
+        let lines: Vec<&str> = (0..20).map(|_| "text").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        state.viewport = crate::viewport::new(5, 24, 80);
+        state.cursor = crate::cursor::new(15, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Ctrl-d: would move to line 27 (15+12), but buffer only has 20 lines (0..19)
+        let result = command::execute(&mut state, "scroll-half-page-down");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 19); // clamped to last line
+    }
+
+    #[test]
+    fn given_cursor_near_top_when_scroll_half_page_up_then_clamped_to_first_line() {
+        let mut state = editor_state::new(80, 24);
+        // 50-line buffer
+        let lines: Vec<&str> = (0..50).map(|_| "text").collect();
+        state.buffer = crate::buffer::Buffer::from_string(&lines.join("\n"));
+        state.viewport = crate::viewport::new(3, 24, 80);
+        state.cursor = crate::cursor::new(5, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Ctrl-u: would move cursor to line -7 (5-12), should clamp to 0
+        let result = command::execute(&mut state, "scroll-half-page-up");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 0); // clamped to first line
+        assert_eq!(state.viewport.top_line, 0); // clamped to top
     }
 }
