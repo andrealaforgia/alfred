@@ -780,3 +780,229 @@ class TestDeveloperWorkflow:
             f"found {hello_count} times. File content: {repr(content)}"
 
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Tier 1 vim features: count prefix, search, find char, dot, %, indent
+# -------------------------------------------------------------------------
+
+class TestCountPrefix:
+    """Verify numeric count prefix works with commands."""
+
+    def test_count_5j_moves_down_5_lines(self):
+        """Type 5j on a 10-line file, verify cursor moved to line 6 by inserting there."""
+        lines = [f"line{i}" for i in range(10)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # 5j moves down 5 lines (from line 0 to line 5)
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+
+        # Insert marker at cursor position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "MARKER")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        assert "MARKER" in result_lines[5], \
+            f"Expected MARKER on line 6, got: {repr(result_lines[5])}"
+        os.unlink(path)
+
+    def test_count_3x_deletes_3_chars(self):
+        """Type 3x on 'ABCDEF', verify 'DEF' remains."""
+        path = create_temp_file("ABCDEF")
+        child = spawn_alfred(path)
+
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "DEF", f"Expected 'DEF', got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestSearch:
+    """Verify /pattern search and n/N repeat."""
+
+    def test_search_forward_and_save(self):
+        """Search for 'target', cursor moves to it, insert marker, save."""
+        path = create_temp_file("first line\nsecond target line\nthird line")
+        child = spawn_alfred(path)
+
+        # /target Enter
+        send_keys(child, "/")
+        time.sleep(0.2)
+        send_keys(child, "target")
+        send_enter(child)
+        time.sleep(0.3)
+
+        # Insert marker at found position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, ">>")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        assert ">>target" in content, \
+            f"Expected '>>target' in file, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_search_n_repeats(self):
+        """Search for 'x', press n to find next, insert marker at second match."""
+        path = create_temp_file("ax bx cx")
+        child = spawn_alfred(path)
+
+        # /x Enter — finds first 'x' (at col 1)
+        send_keys(child, "/")
+        time.sleep(0.2)
+        send_keys(child, "x")
+        send_enter(child)
+        time.sleep(0.3)
+
+        # n — finds next 'x' (at col 4)
+        send_keys(child, "n")
+        time.sleep(0.3)
+
+        # Insert marker
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, ">")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        # The > should be before the second x (at "b>x")
+        assert ">x" in content, \
+            f"Expected '>x' near second match, got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestFindChar:
+    """Verify f/t character find on line."""
+
+    def test_f_finds_char_forward(self):
+        """Press fx on 'abcxdef', insert marker before x."""
+        path = create_temp_file("abcxdef")
+        child = spawn_alfred(path)
+
+        send_keys(child, "f")
+        time.sleep(0.1)
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        # Cursor should be on 'x' (col 3), insert before it
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, ">")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert ">x" in content, f"Expected '>x', got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestDotRepeat:
+    """Verify . repeats last editing command."""
+
+    def test_dot_repeats_delete(self):
+        """Press x then . — two characters deleted."""
+        path = create_temp_file("ABCD")
+        child = spawn_alfred(path)
+
+        send_keys(child, "x")
+        time.sleep(0.3)
+        send_keys(child, ".")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "CD", f"Expected 'CD' after x then ., got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestBracketMatch:
+    """Verify % jumps to matching bracket."""
+
+    def test_percent_matches_parens(self):
+        """On '(hello)', % on ( jumps to ), insert marker."""
+        path = create_temp_file("(hello)")
+        child = spawn_alfred(path)
+
+        # Cursor on '(' — press % to jump to ')'
+        send_keys(child, "%")
+        time.sleep(0.3)
+
+        # Cursor should be on ')' (col 6), insert before it
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, ">")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert ">)" in content, f"Expected '>)' before closing paren, got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestIndent:
+    """Verify > and < indent/unindent."""
+
+    def test_indent_adds_spaces(self):
+        """Press > on 'hello', verify 4 spaces prepended."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, ">")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "    hello", f"Expected '    hello', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_unindent_removes_spaces(self):
+        """Press < on '    hello', verify spaces removed."""
+        path = create_temp_file("    hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "<")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "hello", f"Expected 'hello', got: {repr(content)}"
+        os.unlink(path)

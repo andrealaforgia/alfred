@@ -204,19 +204,22 @@ pub(crate) fn handle_key_event(
         return (InputState::Normal, DeferredAction::None, None);
     }
 
-    // Normal mode: accumulate digit keys into a count prefix.
+    // Normal mode only: accumulate digit keys into a count prefix.
     // 1-9 starts a new count; 0-9 appends when a count is already pending.
     // 0 alone (no pending count) falls through to keymap resolution (cursor-line-start).
-    if let KeyCode::Char(digit @ '0'..='9') = key.code {
-        let is_start_digit = ('1'..='9').contains(&digit);
-        if is_start_digit || pending_count.is_some() {
-            let current = pending_count.unwrap_or(0);
-            let new_count = current
-                .saturating_mul(10)
-                .saturating_add(digit as u32 - '0' as u32);
-            return (InputState::Normal, DeferredAction::None, Some(new_count));
+    // In insert mode, digits are handled by self-insert (below), not as counts.
+    if state.mode == alfred_core::editor_state::MODE_NORMAL {
+        if let KeyCode::Char(digit @ '0'..='9') = key.code {
+            let is_start_digit = ('1'..='9').contains(&digit);
+            if is_start_digit || pending_count.is_some() {
+                let current = pending_count.unwrap_or(0);
+                let new_count = current
+                    .saturating_mul(10)
+                    .saturating_add(digit as u32 - '0' as u32);
+                return (InputState::Normal, DeferredAction::None, Some(new_count));
+            }
         }
-    }
+    } // end normal-mode-only digit check
 
     // Non-digit key in normal mode: resolve through active keymaps.
     // The accumulated count (if any) is returned for the caller to repeat the command.
