@@ -128,7 +128,21 @@ pub(crate) fn handle_key_event(
             (InputState::Command(String::new()), DeferredAction::None)
         }
         Some(cmd) => (InputState::Normal, DeferredAction::ExecCommand(cmd)),
-        None => (InputState::Normal, DeferredAction::None),
+        None => {
+            // Self-insert: when active keymaps exist and key is an unbound
+            // printable character, insert it at cursor and advance.
+            if !state.active_keymaps.is_empty() {
+                if let KeyCode::Char(c) = key.code {
+                    let line = state.cursor.line;
+                    let col = state.cursor.column;
+                    state.buffer =
+                        alfred_core::buffer::insert_at(&state.buffer, line, col, &c.to_string());
+                    state.cursor = alfred_core::cursor::move_right(state.cursor, &state.buffer);
+                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                }
+            }
+            (InputState::Normal, DeferredAction::None)
+        }
     }
 }
 
@@ -1585,5 +1599,260 @@ mod tests {
         assert_eq!(action, super::DeferredAction::None);
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(state.cursor, cursor_before);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (06-03): self-insert and delete-backward behaviors
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_active_keymaps_when_unbound_printable_char_pressed_then_char_inserted_and_cursor_advances(
+    ) {
+        // Given: editor with active keymaps (simulating basic-keybindings loaded)
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        setup_standard_keymaps(&mut state);
+
+        // When: press 'x' (not bound in keymap)
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+
+        // Then: 'x' is inserted at cursor position and cursor advances
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "Hellox",
+            "Unbound char 'x' should be inserted at cursor"
+        );
+        assert_eq!(
+            state.cursor.column, 6,
+            "Cursor should advance after self-insert"
+        );
+    }
+
+    #[test]
+    fn given_active_keymaps_when_unbound_non_printable_key_pressed_then_no_insert() {
+        // Given: editor with active keymaps
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        let cursor_before = state.cursor;
+        setup_standard_keymaps(&mut state);
+
+        // When: press Tab (not bound, not a printable char)
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: no insertion, cursor unchanged
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "Hello",
+            "Non-printable unbound key should not insert"
+        );
+        assert_eq!(state.cursor, cursor_before, "Cursor should not move");
+    }
+
+    #[test]
+    fn given_delete_backward_command_when_executed_then_char_before_cursor_deleted_and_cursor_moves_back(
+    ) {
+        // Given: editor with buffer "Hello" and cursor at column 5 (end)
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        editor_state::register_builtin_commands(&mut state);
+
+        // When: execute delete-backward command
+        let result = alfred_core::command::execute(&mut state, "delete-backward");
+
+        // Then: 'o' is deleted, buffer is "Hell", cursor moves to column 4
+        assert!(result.is_ok(), "delete-backward should succeed");
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "Hell", "Character before cursor should be deleted");
+        assert_eq!(state.cursor.column, 4, "Cursor should move back one column");
+    }
+
+    #[test]
+    fn given_delete_backward_at_beginning_of_buffer_when_executed_then_nothing_happens() {
+        // Given: editor with cursor at (0, 0)
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // When: execute delete-backward at beginning
+        let result = alfred_core::command::execute(&mut state, "delete-backward");
+
+        // Then: buffer unchanged, cursor unchanged
+        assert!(result.is_ok());
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "Hello", "Nothing should be deleted at beginning");
+        assert_eq!(state.cursor.column, 0);
+        assert_eq!(state.cursor.line, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (06-03): basic-keybindings plugin behaviors
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up runtime with all bridge primitives and register builtin commands,
+    /// then evaluate basic-keybindings Lisp expressions to configure keymaps.
+    fn setup_basic_keybindings_via_lisp(
+        state_rc: &std::rc::Rc<std::cell::RefCell<alfred_core::editor_state::EditorState>>,
+    ) -> alfred_lisp::runtime::LispRuntime {
+        use std::rc::Rc;
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_define_command(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_keymap_primitives(&runtime, Rc::clone(state_rc));
+        alfred_lisp::bridge::register_hook_primitives(&runtime, Rc::clone(state_rc));
+
+        // Register native commands (cursor-up/down/left/right, delete-backward)
+        {
+            let mut state = state_rc.borrow_mut();
+            editor_state::register_builtin_commands(&mut state);
+        }
+
+        // Evaluate the same Lisp that basic-keybindings/init.lisp would contain
+        let lisp_code = r#"
+            (make-keymap "global")
+            (define-key "global" "Up" "cursor-up")
+            (define-key "global" "Down" "cursor-down")
+            (define-key "global" "Left" "cursor-left")
+            (define-key "global" "Right" "cursor-right")
+            (define-key "global" "Char::" "enter-command-mode")
+            (define-key "global" "Backspace" "delete-backward")
+            (set-active-keymap "global")
+        "#;
+        for line in lisp_code.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                runtime
+                    .eval(trimmed)
+                    .unwrap_or_else(|e| panic!("Lisp eval failed for '{}': {}", trimmed, e));
+            }
+        }
+
+        runtime
+    }
+
+    #[test]
+    fn given_basic_keybindings_loaded_when_key_events_sent_then_arrows_navigate_chars_insert_backspace_deletes_colon_enters_command_mode(
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with multiline buffer and basic-keybindings loaded via Lisp
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello\nWorld");
+        }
+        let _runtime = setup_basic_keybindings_via_lisp(&state_rc);
+
+        // AC1: Arrow keys navigate via plugin-defined bindings
+        {
+            let mut state = state_rc.borrow_mut();
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Down),
+                super::InputState::Normal,
+            );
+            assert_eq!(
+                state.cursor.line, 1,
+                "Down arrow should move cursor to line 1"
+            );
+            assert_eq!(state.cursor.column, 0);
+
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Right),
+                super::InputState::Normal,
+            );
+            assert_eq!(
+                state.cursor.column, 1,
+                "Right arrow should move cursor to column 1"
+            );
+
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Up),
+                super::InputState::Normal,
+            );
+            assert_eq!(
+                state.cursor.line, 0,
+                "Up arrow should move cursor to line 0"
+            );
+
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Left),
+                super::InputState::Normal,
+            );
+            assert_eq!(
+                state.cursor.column, 0,
+                "Left arrow should move cursor to column 0"
+            );
+        }
+
+        // AC2: Character insertion works for printable keys (unbound char auto-insert)
+        {
+            let mut state = state_rc.borrow_mut();
+            state.cursor = cursor::new(0, 5); // end of "Hello"
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char('!')),
+                super::InputState::Normal,
+            );
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                content.starts_with("Hello!"),
+                "Unbound printable char '!' should be inserted at cursor, got: '{}'",
+                content
+            );
+            assert_eq!(state.cursor.column, 6, "Cursor should advance after insert");
+        }
+
+        // AC3: Backspace deletes character before cursor
+        {
+            let mut state = state_rc.borrow_mut();
+            // cursor is at column 6 (after "Hello!"), backspace should delete '!'
+            dispatch_key(
+                &mut state,
+                KeyEvent::plain(KeyCode::Backspace),
+                super::InputState::Normal,
+            );
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                content.starts_with("Hello\n"),
+                "Backspace should delete char before cursor, got: '{}'",
+                content
+            );
+            assert_eq!(
+                state.cursor.column, 5,
+                "Cursor should move back after backspace"
+            );
+        }
+
+        // AC4: Colon enters command mode via plugin binding
+        {
+            let mut state = state_rc.borrow_mut();
+            let (input_state, _action) = super::handle_key_event(
+                &mut state,
+                KeyEvent::plain(KeyCode::Char(':')),
+                super::InputState::Normal,
+            );
+            assert!(
+                matches!(input_state, super::InputState::Command(_)),
+                "Colon should enter command mode"
+            );
+            assert_eq!(state.message, Some(":".to_string()));
+        }
     }
 }

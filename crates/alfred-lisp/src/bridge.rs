@@ -396,10 +396,7 @@ fn register_make_keymap(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
     define_native_closure(&env, "make-keymap", move |_env, args| {
         let name = extract_string_arg(&args, "make-keymap")?;
         let mut editor = state.borrow_mut();
-        editor
-            .keymaps
-            .entry(name)
-            .or_default();
+        editor.keymaps.entry(name).or_default();
         Ok(Value::NIL)
     });
 }

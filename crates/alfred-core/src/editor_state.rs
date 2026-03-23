@@ -120,6 +120,22 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    crate::command::register(
+        &mut state.commands,
+        "delete-backward".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            // Delete the character before the cursor (backspace behavior).
+            // If cursor is at beginning of buffer, do nothing.
+            if s.cursor.line == 0 && s.cursor.column == 0 {
+                return Ok(());
+            }
+            // Move cursor left, then delete character at new position
+            s.cursor = crate::cursor::move_left(s.cursor, &s.buffer);
+            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {

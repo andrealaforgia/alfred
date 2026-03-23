@@ -51,11 +51,15 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
         state.borrow_mut().buffer = buffer;
     }
 
+    // Register built-in native commands (cursor movement, delete-backward)
+    editor_state::register_builtin_commands(&mut state.borrow_mut());
+
     // Create Lisp runtime and register bridge primitives
     let runtime = LispRuntime::new();
     bridge::register_core_primitives(&runtime, state.clone());
     bridge::register_define_command(&runtime, state.clone());
     bridge::register_hook_primitives(&runtime, state.clone());
+    bridge::register_keymap_primitives(&runtime, state.clone());
 
     // Discover and load plugins
     let plugin_errors = load_plugins(&runtime);
