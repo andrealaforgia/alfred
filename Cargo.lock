@@ -49,6 +49,7 @@ dependencies = [
  "alfred-lisp",
  "crossterm",
  "ratatui",
+ "tempfile",
 ]
 
 [[package]]

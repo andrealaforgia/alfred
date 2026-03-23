@@ -157,6 +157,10 @@ pub(crate) enum DeferredAction {
     Eval(String),
     /// Execute a registered command by name (from :command-name)
     ExecCommand(String),
+    /// Save the current buffer to a file path (None = use buffer's file_path)
+    SaveBuffer(Option<String>),
+    /// Open a file into the buffer
+    OpenFile(String),
 }
 
 /// Executes a colon command, returning the new input state and a deferred action.
@@ -169,6 +173,18 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
         "q" | "quit" => {
             state.running = false;
             (InputState::Normal, DeferredAction::None)
+        }
+        "w" => {
+            // Save to the buffer's existing file path
+            (InputState::Normal, DeferredAction::SaveBuffer(None))
+        }
+        cmd if cmd.starts_with("w ") => {
+            let path = cmd.strip_prefix("w ").unwrap().trim().to_string();
+            (InputState::Normal, DeferredAction::SaveBuffer(Some(path)))
+        }
+        cmd if cmd.starts_with("e ") => {
+            let path = cmd.strip_prefix("e ").unwrap().trim().to_string();
+            (InputState::Normal, DeferredAction::OpenFile(path))
         }
         cmd if cmd.starts_with("eval ") => {
             let expression = cmd.strip_prefix("eval ").unwrap().to_string();
@@ -417,6 +433,52 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                         };
                         if let Err(e) = result {
                             state_rc.borrow_mut().message = Some(format!("Command error: {}", e));
+                        }
+                    }
+                    DeferredAction::SaveBuffer(opt_path) => {
+                        let mut state = state_rc.borrow_mut();
+                        let save_path = match opt_path {
+                            Some(ref p) => Some(std::path::PathBuf::from(p)),
+                            None => state.buffer.file_path().map(|p| p.to_path_buf()),
+                        };
+                        match save_path {
+                            Some(path) => {
+                                match alfred_core::buffer::save_to_file(&state.buffer, &path) {
+                                    Ok(saved_buffer) => {
+                                        let byte_count =
+                                            alfred_core::buffer::content(&saved_buffer).len();
+                                        state.buffer = saved_buffer;
+                                        state.message = Some(format!(
+                                            "\"{}\" written, {} bytes",
+                                            path.display(),
+                                            byte_count
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        state.message = Some(format!("{}", e));
+                                    }
+                                }
+                            }
+                            None => {
+                                state.message = Some("No file name".to_string());
+                            }
+                        }
+                    }
+                    DeferredAction::OpenFile(ref path_str) => {
+                        let path = std::path::Path::new(path_str);
+                        match alfred_core::buffer::Buffer::from_file(path) {
+                            Ok(new_buffer) => {
+                                let mut state = state_rc.borrow_mut();
+                                let filename =
+                                    new_buffer.filename().unwrap_or(path_str).to_string();
+                                state.buffer = new_buffer;
+                                state.cursor = alfred_core::cursor::new(0, 0);
+                                state.viewport.top_line = 0;
+                                state.message = Some(format!("\"{}\"", filename));
+                            }
+                            Err(e) => {
+                                state_rc.borrow_mut().message = Some(format!("{}", e));
+                            }
                         }
                     }
                     DeferredAction::None => {}
@@ -2717,5 +2779,304 @@ mod tests {
             let state = state_rc.borrow();
             assert!(!state.running, ":q should quit the editor");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (08-02): colon commands for save and open
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_from_file_when_colon_w_then_buffer_saved_and_message_shows_written() {
+        // Given: a buffer loaded from a file, then modified
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("test_save.txt");
+        std::fs::write(&file_path, "Original").unwrap();
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_file(&file_path).unwrap();
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 8, " modified");
+        setup_standard_keymaps(&mut state);
+
+        // Precondition: buffer is modified
+        assert!(state.buffer.is_modified());
+
+        // When: type :w and press Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
+        let (_, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        // Then: action is SaveBuffer(None)
+        assert_eq!(action, super::DeferredAction::SaveBuffer(None));
+
+        // And: when SaveBuffer is executed, file is written and message shows written
+        // (Simulate the event loop's deferred action handling)
+        match action {
+            super::DeferredAction::SaveBuffer(opt_path) => {
+                let save_path = match opt_path {
+                    Some(ref p) => Some(std::path::PathBuf::from(p)),
+                    None => state.buffer.file_path().map(|p| p.to_path_buf()),
+                };
+                match save_path {
+                    Some(path) => match alfred_core::buffer::save_to_file(&state.buffer, &path) {
+                        Ok(saved_buffer) => {
+                            let byte_count = alfred_core::buffer::content(&saved_buffer).len();
+                            state.buffer = saved_buffer;
+                            state.message = Some(format!(
+                                "\"{}\" written, {} bytes",
+                                path.display(),
+                                byte_count
+                            ));
+                        }
+                        Err(e) => {
+                            state.message = Some(format!("{}", e));
+                        }
+                    },
+                    None => {
+                        state.message = Some("No file name".to_string());
+                    }
+                }
+            }
+            _ => panic!("Expected SaveBuffer action"),
+        }
+
+        // Then: file on disk has updated content
+        let on_disk = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(on_disk, "Original modified");
+
+        // And: buffer is no longer modified
+        assert!(!state.buffer.is_modified());
+
+        // And: message shows "written"
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("written"),
+            "Message should contain 'written', got: '{}'",
+            msg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (08-02): colon save and open commands
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_editor_when_colon_w_entered_then_returns_save_buffer_none() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+
+        // Type :w and press Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
+        let (input_state, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::SaveBuffer(None));
+    }
+
+    #[test]
+    fn given_editor_when_colon_w_filename_entered_then_returns_save_buffer_with_path() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+
+        // Type :w /tmp/test.txt and press Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        for c in "w /tmp/test.txt".chars() {
+            result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+        }
+        let (input_state, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            action,
+            super::DeferredAction::SaveBuffer(Some("/tmp/test.txt".to_string()))
+        );
+    }
+
+    #[test]
+    fn given_editor_when_colon_e_filename_entered_then_returns_open_file_with_path() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+
+        // Type :e /tmp/test.txt and press Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        for c in "e /tmp/test.txt".chars() {
+            result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+        }
+        let (input_state, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            action,
+            super::DeferredAction::OpenFile("/tmp/test.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn given_unnamed_buffer_when_colon_w_with_no_filename_then_save_buffer_none_returned() {
+        // Given: a buffer with no file_path (unnamed)
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("some text");
+        setup_standard_keymaps(&mut state);
+
+        // When: :w Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('w')), result);
+        let (_, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        // Then: action is SaveBuffer(None) -- the event loop handler will check
+        // for file_path and show "No file name" error
+        assert_eq!(action, super::DeferredAction::SaveBuffer(None));
+
+        // Simulate the event loop: unnamed buffer with SaveBuffer(None) -> error message
+        assert!(state.buffer.file_path().is_none());
+        // The event loop would set: state.message = Some("No file name".to_string());
+    }
+
+    #[test]
+    fn given_buffer_from_file_when_colon_w_path_then_file_written_to_specified_path() {
+        // Given: a buffer loaded from one file
+        let dir = tempfile::TempDir::new().unwrap();
+        let original_path = dir.path().join("original.txt");
+        std::fs::write(&original_path, "Hello").unwrap();
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_file(&original_path).unwrap();
+
+        // When: execute_colon_command with "w <new_path>"
+        let new_path = dir.path().join("saveas.txt");
+        let (input_state, action) =
+            super::execute_colon_command(&mut state, &format!("w {}", new_path.display()));
+
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            action,
+            super::DeferredAction::SaveBuffer(Some(new_path.display().to_string()))
+        );
+
+        // Simulate executing the deferred save action
+        if let super::DeferredAction::SaveBuffer(Some(ref p)) = action {
+            let path = std::path::Path::new(p);
+            let saved_buffer = alfred_core::buffer::save_to_file(&state.buffer, path).unwrap();
+            state.buffer = saved_buffer;
+        }
+
+        // Then: file written to new path
+        let on_disk = std::fs::read_to_string(&new_path).unwrap();
+        assert_eq!(on_disk, "Hello");
+    }
+
+    #[test]
+    fn given_existing_file_when_colon_e_then_buffer_replaced_and_cursor_reset() {
+        // Given: a file exists with known content
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("open_test.txt");
+        std::fs::write(&file_path, "Line1\nLine2\nLine3").unwrap();
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("old content");
+        state.cursor = cursor::new(5, 10); // somewhere in old buffer
+
+        // When: execute_colon_command with "e <path>"
+        let (input_state, action) =
+            super::execute_colon_command(&mut state, &format!("e {}", file_path.display()));
+
+        assert_eq!(input_state, super::InputState::Normal);
+
+        // Simulate executing the deferred open action
+        if let super::DeferredAction::OpenFile(ref path_str) = action {
+            let path = std::path::Path::new(path_str);
+            match alfred_core::buffer::Buffer::from_file(path) {
+                Ok(new_buffer) => {
+                    let filename = new_buffer.filename().unwrap_or(path_str).to_string();
+                    state.buffer = new_buffer;
+                    state.cursor = alfred_core::cursor::new(0, 0);
+                    state.viewport.top_line = 0;
+                    state.message = Some(format!("\"{}\"", filename));
+                }
+                Err(e) => {
+                    state.message = Some(format!("{}", e));
+                }
+            }
+        }
+
+        // Then: buffer contains the file content
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "Line1\nLine2\nLine3");
+
+        // And: cursor is reset to origin
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+
+        // And: message shows the filename
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("open_test.txt"),
+            "Message should contain filename, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_nonexistent_file_when_colon_e_then_error_message_shown() {
+        // Given: a path to a nonexistent file
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("original");
+
+        // When: execute_colon_command with "e /nonexistent/path.txt"
+        let (_, action) =
+            super::execute_colon_command(&mut state, "e /tmp/alfred_nonexistent_08_02.txt");
+
+        // Simulate executing the deferred open action
+        if let super::DeferredAction::OpenFile(ref path_str) = action {
+            let path = std::path::Path::new(path_str);
+            match alfred_core::buffer::Buffer::from_file(path) {
+                Ok(new_buffer) => {
+                    state.buffer = new_buffer;
+                    state.cursor = alfred_core::cursor::new(0, 0);
+                    state.viewport.top_line = 0;
+                }
+                Err(e) => {
+                    state.message = Some(format!("{}", e));
+                }
+            }
+        }
+
+        // Then: error message is shown
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("failed to read file") || msg.contains("error"),
+            "Should show error message for nonexistent file, got: '{}'",
+            msg
+        );
+
+        // And: original buffer is preserved
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "original");
     }
 }
