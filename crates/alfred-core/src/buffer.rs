@@ -478,6 +478,47 @@ pub fn find_backward(
     None
 }
 
+/// Prepends `indent_str` to the given line, returning a new Buffer.
+///
+/// If the line index is out of bounds, the buffer is returned unchanged.
+/// The new buffer has an incremented version and `modified` set to true.
+pub fn indent_line(buffer: &Buffer, line: usize, indent_str: &str) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line >= total_lines {
+        return buffer.clone();
+    }
+
+    let line_content = get_line_content(buffer, line);
+    let indented = format!("{}{}", indent_str, line_content);
+    replace_line(buffer, line, &indented)
+}
+
+/// Removes up to `indent_width` leading whitespace characters (spaces or tabs) from the given line.
+///
+/// If the line index is out of bounds, the buffer is returned unchanged.
+/// Each tab counts as one character removed toward the limit.
+/// The new buffer has an incremented version and `modified` set to true.
+pub fn unindent_line(buffer: &Buffer, line: usize, indent_width: usize) -> Buffer {
+    let total_lines = buffer.rope.len_lines();
+    if line >= total_lines {
+        return buffer.clone();
+    }
+
+    let line_content = get_line_content(buffer, line);
+    let chars_to_remove = line_content
+        .chars()
+        .take(indent_width)
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .count();
+
+    if chars_to_remove == 0 {
+        return buffer.clone();
+    }
+
+    let unindented = &line_content[chars_to_remove..];
+    replace_line(buffer, line, unindented)
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -856,5 +897,69 @@ mod tests {
         let buffer = super::Buffer::from_string("Hello\nWorld");
         let result = super::find_backward(&buffer, 1, 5, "Missing");
         assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: indent_line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_empty_line_when_indent_then_line_becomes_indent_string() {
+        let buffer = super::Buffer::from_string("");
+        let result = super::indent_line(&buffer, 0, "    ");
+        assert_eq!(super::content(&result), "    ");
+    }
+
+    #[test]
+    fn given_line_with_content_when_indent_then_indent_prepended() {
+        let buffer = super::Buffer::from_string("hello\nworld");
+        let result = super::indent_line(&buffer, 0, "    ");
+        assert_eq!(super::content(&result), "    hello\nworld");
+    }
+
+    #[test]
+    fn given_out_of_bounds_line_when_indent_then_buffer_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::indent_line(&buffer, 99, "    ");
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: unindent_line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_with_4_spaces_when_unindent_by_4_then_spaces_removed() {
+        let buffer = super::Buffer::from_string("    hello");
+        let result = super::unindent_line(&buffer, 0, 4);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_line_with_2_spaces_when_unindent_by_4_then_only_2_removed() {
+        let buffer = super::Buffer::from_string("  hello");
+        let result = super::unindent_line(&buffer, 0, 4);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_line_with_no_spaces_when_unindent_then_no_change() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::unindent_line(&buffer, 0, 4);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_out_of_bounds_line_when_unindent_then_buffer_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::unindent_line(&buffer, 99, 4);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_line_with_tab_when_unindent_then_tab_removed() {
+        let buffer = super::Buffer::from_string("\thello");
+        let result = super::unindent_line(&buffer, 0, 4);
+        assert_eq!(super::content(&result), "hello");
     }
 }

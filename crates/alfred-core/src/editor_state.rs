@@ -603,6 +603,29 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Indent / Unindent current line ---
+    crate::command::register(
+        &mut state.commands,
+        "indent-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::indent_line(&s.buffer, s.cursor.line, "    ");
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "unindent-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::unindent_line(&s.buffer, s.cursor.line, 4);
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 /// Executes a character find operation, returning the new cursor position if found.
@@ -1586,5 +1609,55 @@ mod tests {
 
         // Then: next lines joined
         assert_eq!(buffer::content(&state.buffer), "A B C\nD");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: indent-line and unindent-line commands
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_with_content_when_indent_line_command_then_4_spaces_prepended_and_undo_saved() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello\nworld");
+        state.cursor = crate::cursor::new(0, 2);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "indent-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "    hello\nworld");
+        // Undo stack should have an entry
+        assert!(!state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn given_line_with_4_spaces_when_unindent_line_command_then_spaces_removed_and_undo_saved() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("    hello\nworld");
+        state.cursor = crate::cursor::new(0, 5);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "unindent-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "hello\nworld");
+        assert!(!state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn given_line_with_no_indent_when_unindent_line_command_then_buffer_unchanged() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "unindent-line");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "hello");
     }
 }
