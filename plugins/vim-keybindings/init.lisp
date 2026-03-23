@@ -37,6 +37,10 @@
 (define-key "normal-mode" "Ctrl:d" "scroll-half-page-down")
 (define-key "normal-mode" "Ctrl:u" "scroll-half-page-up")
 (define-key "normal-mode" "Char::" "enter-command-mode")
+(define-key "normal-mode" "Up" "cursor-up")
+(define-key "normal-mode" "Down" "cursor-down")
+(define-key "normal-mode" "Left" "cursor-left")
+(define-key "normal-mode" "Right" "cursor-right")
 
 ;; Create insert-mode keymap with Escape, Backspace, and arrow keys
 (make-keymap "insert-mode")
