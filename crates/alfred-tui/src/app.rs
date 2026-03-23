@@ -113,6 +113,9 @@ pub(crate) enum InputState {
     PendingMark,
     /// Waiting for a character key to jump to a mark (`'` + `{a-z}`)
     PendingJumpMark,
+    /// Waiting for a register name character after `"` prefix.
+    /// The next 'a'-'z' selects the named register for the following command.
+    PendingRegister,
 }
 
 /// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
@@ -272,8 +275,8 @@ fn execute_yank_range(
         to.line,
         to.column,
     );
-    state.yank_register = Some(text);
-    state.yank_linewise = false;
+    let reg = state.pending_register.take();
+    alfred_core::editor_state::set_register(state, reg, text, false);
     state.message = Some("yanked".to_string());
 }
 
@@ -287,6 +290,7 @@ fn execute_yank_with_motion(
     motion_cursor: alfred_core::cursor::Cursor,
     motion_kind: MotionKind,
 ) {
+    let reg = state.pending_register.take();
     match motion_kind {
         MotionKind::CharWise => {
             let (from, to) = if (state.cursor.line, state.cursor.column)
@@ -303,8 +307,7 @@ fn execute_yank_with_motion(
                 to.line,
                 to.column,
             );
-            state.yank_register = Some(text);
-            state.yank_linewise = false;
+            alfred_core::editor_state::set_register(state, reg, text, false);
             state.message = Some("yanked".to_string());
         }
         MotionKind::LineWise => {
@@ -315,8 +318,7 @@ fn execute_yank_with_motion(
                 lines.push(alfred_core::buffer::get_line_content(&state.buffer, line));
             }
             let line_count = lines.len();
-            state.yank_register = Some(lines.join("\n"));
-            state.yank_linewise = true;
+            alfred_core::editor_state::set_register(state, reg, lines.join("\n"), true);
             state.message = Some(format!(
                 "{} line{} yanked",
                 line_count,
@@ -471,6 +473,32 @@ pub(crate) fn handle_key_event(
         return (InputState::Normal, DeferredAction::None, None);
     }
 
+    // PendingRegister mode: waiting for a register name character after `"`.
+    // Valid register names are 'a'-'z'. Escape cancels.
+    if let InputState::PendingRegister = input_state {
+        match key.code {
+            KeyCode::Char(ch) if alfred_core::editor_state::is_valid_named_register(ch) => {
+                state.pending_register = Some(ch);
+                return (InputState::Normal, DeferredAction::None, pending_count);
+            }
+            KeyCode::Char('"') => {
+                // `""` explicitly selects the unnamed register (no-op, but valid)
+                state.pending_register = None;
+                return (InputState::Normal, DeferredAction::None, pending_count);
+            }
+            KeyCode::Escape => {
+                // Cancel register prefix
+                state.pending_register = None;
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+            _ => {
+                // Invalid register character -- ignore and cancel
+                state.pending_register = None;
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+        }
+    }
+
     // OperatorPending mode: waiting for a motion key after an operator (d, c, y).
     // Resolve the next key as a motion, compute the range, execute the operator.
     if let InputState::OperatorPending(operator) = input_state {
@@ -512,8 +540,8 @@ pub(crate) fn handle_key_event(
                     // yy = yank entire line
                     let content =
                         alfred_core::buffer::get_line_content(&state.buffer, state.cursor.line);
-                    state.yank_register = Some(content);
-                    state.yank_linewise = true;
+                    let reg = state.pending_register.take();
+                    alfred_core::editor_state::set_register(state, reg, content, true);
                     state.message = Some("1 line yanked".to_string());
                 }
             }
@@ -709,6 +737,11 @@ pub(crate) fn handle_key_event(
             InputState::PendingChar(alfred_core::editor_state::CharFindKind::TilBackward),
             DeferredAction::None,
             None,
+        ),
+        Some(ref cmd) if cmd == "enter-register-prefix" => (
+            InputState::PendingRegister,
+            DeferredAction::None,
+            pending_count,
         ),
         Some(ref cmd) if cmd == "enter-set-mark" => {
             (InputState::PendingMark, DeferredAction::None, None)
@@ -4890,11 +4923,14 @@ mod tests {
         let content = alfred_core::buffer::content(&state.buffer);
         assert_eq!(content, "hello world", "yw should not modify the buffer");
         assert_eq!(
-            state.yank_register,
+            state.registers.get(&'"').map(|e| e.content.clone()),
             Some("hello ".to_string()),
             "yw should yank 'hello ' to register"
         );
-        assert!(!state.yank_linewise, "yw should be character-wise yank");
+        assert!(
+            !state.registers.get(&'"').map_or(false, |e| e.linewise),
+            "yw should be character-wise yank"
+        );
         assert_eq!(state.cursor.line, 0, "yw should not move cursor line");
         assert_eq!(state.cursor.column, 0, "yw should not move cursor column");
         assert_eq!(
@@ -4934,11 +4970,14 @@ mod tests {
             "yy should not modify the buffer"
         );
         assert_eq!(
-            state.yank_register,
+            state.registers.get(&'"').map(|e| e.content.clone()),
             Some("hello world".to_string()),
             "yy should yank entire line content"
         );
-        assert!(state.yank_linewise, "yy should be a line-wise yank");
+        assert!(
+            state.registers.get(&'"').map_or(false, |e| e.linewise),
+            "yy should be a line-wise yank"
+        );
         assert_eq!(
             state.message,
             Some("1 line yanked".to_string()),
@@ -5060,7 +5099,7 @@ mod tests {
         let content = alfred_core::buffer::content(&state.buffer);
         assert_eq!(content, "hello world", "y$ should not modify the buffer");
         assert_eq!(
-            state.yank_register,
+            state.registers.get(&'"').map(|e| e.content.clone()),
             Some(" world".to_string()),
             "y$ should yank from cursor to end of line"
         );
@@ -5449,7 +5488,10 @@ mod tests {
         assert_eq!(state.mode, "normal");
         assert_eq!(state.selection_start, None);
         // Deleted text should be in yank register
-        assert_eq!(state.yank_register, Some("he".to_string()));
+        assert_eq!(
+            state.registers.get(&'"').map(|e| e.content.clone()),
+            Some("he".to_string())
+        );
     }
 
     #[test]
@@ -5482,7 +5524,10 @@ mod tests {
         assert_eq!(state.selection_start, None);
         // w moves cursor to col 6 ('w' of "world"). Visual mode is inclusive,
         // so selection covers cols 0..6 inclusive = "hello w" (7 chars)
-        assert_eq!(state.yank_register, Some("hello w".to_string()));
+        assert_eq!(
+            state.registers.get(&'"').map(|e| e.content.clone()),
+            Some("hello w".to_string())
+        );
     }
 
     #[test]
@@ -5672,8 +5717,11 @@ mod tests {
         assert!(!state.visual_line_mode);
         assert_eq!(state.selection_start, None);
         // Yanked text should be the deleted line content (without trailing newline)
-        assert_eq!(state.yank_register, Some("hello".to_string()));
-        assert!(state.yank_linewise);
+        assert_eq!(
+            state.registers.get(&'"').map(|e| e.content.clone()),
+            Some("hello".to_string())
+        );
+        assert!(state.registers.get(&'"').map_or(false, |e| e.linewise));
     }
 
     #[test]
@@ -5705,7 +5753,7 @@ mod tests {
         assert_eq!(state.mode, "normal");
         assert!(!state.visual_line_mode);
         assert_eq!(state.selection_start, None);
-        assert!(state.yank_linewise);
+        assert!(state.registers.get(&'"').map_or(false, |e| e.linewise));
     }
 
     #[test]
@@ -5739,8 +5787,11 @@ mod tests {
         assert_eq!(state.mode, "normal");
         assert!(!state.visual_line_mode);
         assert_eq!(state.selection_start, None);
-        assert_eq!(state.yank_register, Some("world".to_string()));
-        assert!(state.yank_linewise);
+        assert_eq!(
+            state.registers.get(&'"').map(|e| e.content.clone()),
+            Some("world".to_string())
+        );
+        assert!(state.registers.get(&'"').map_or(false, |e| e.linewise));
     }
 
     #[test]
@@ -5771,8 +5822,11 @@ mod tests {
         assert_eq!(state.mode, "insert");
         assert!(!state.visual_line_mode);
         assert_eq!(state.selection_start, None);
-        assert_eq!(state.yank_register, Some("world".to_string()));
-        assert!(state.yank_linewise);
+        assert_eq!(
+            state.registers.get(&'"').map(|e| e.content.clone()),
+            Some("world".to_string())
+        );
+        assert!(state.registers.get(&'"').map_or(false, |e| e.linewise));
     }
 
     // -----------------------------------------------------------------------

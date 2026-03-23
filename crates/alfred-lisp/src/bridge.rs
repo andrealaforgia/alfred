@@ -348,12 +348,14 @@ fn parse_key_spec(spec: &str) -> Result<alfred_core::key_event::KeyEvent, Runtim
         "PageUp" => KeyCode::PageUp,
         "PageDown" => KeyCode::PageDown,
         "Delete" => KeyCode::Delete,
+        "DoubleQuote" => KeyCode::Char('"'),
+        "SingleQuote" => KeyCode::Char('\''),
         _ => {
             return Err(RuntimeError {
                 msg: format!(
                     "parse_key_spec: unrecognized key-spec \"{}\". \
                      Expected: Up, Down, Left, Right, Enter, Escape, Backspace, Tab, \
-                     Home, End, PageUp, PageDown, Delete, Char:<c>, or Ctrl:<c>",
+                     Home, End, PageUp, PageDown, Delete, DoubleQuote, SingleQuote, Char:<c>, or Ctrl:<c>",
                     spec
                 ),
             });

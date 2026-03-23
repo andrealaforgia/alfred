@@ -44,6 +44,18 @@ pub struct UndoSnapshot {
     pub cursor: Cursor,
 }
 
+/// The unnamed register key, used when no register prefix is specified.
+pub const UNNAMED_REGISTER: char = '"';
+
+/// An entry in a named register, storing both content and whether the yank was line-wise.
+///
+/// Line-wise registers paste on new lines; character-wise registers paste inline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisterEntry {
+    pub content: String,
+    pub linewise: bool,
+}
+
 /// The top-level editor state, aggregating all subsystems.
 ///
 /// This is the single mutable container passed through the event loop.
@@ -60,10 +72,13 @@ pub struct EditorState {
     pub hooks: HookRegistry,
     pub message: Option<String>,
     pub running: bool,
-    pub yank_register: Option<String>,
-    /// Whether the last yank was line-wise (true) or character-wise (false).
-    /// Line-wise yanks paste on a new line; character-wise yanks paste inline.
-    pub yank_linewise: bool,
+    /// Named registers ('a'-'z') and the unnamed register ('"').
+    /// Each register stores content and whether the yank was line-wise.
+    pub registers: HashMap<char, RegisterEntry>,
+    /// The register selected by the `"x` prefix for the next command.
+    /// When `Some('a')`, the next yank/delete/paste uses register 'a'.
+    /// Cleared after use by the consuming command.
+    pub pending_register: Option<char>,
     pub undo_stack: Vec<UndoSnapshot>,
     pub redo_stack: Vec<UndoSnapshot>,
     pub theme: Theme,
@@ -150,6 +165,48 @@ pub fn cursor_shape_for_mode(state: &EditorState) -> &str {
         .get(&state.mode)
         .map(|s| s.as_str())
         .unwrap_or("default")
+}
+
+/// Returns true if the given character is a valid named register ('a'-'z').
+pub fn is_valid_named_register(c: char) -> bool {
+    c.is_ascii_lowercase()
+}
+
+/// Gets the content of the specified register, or the unnamed register if `None`.
+///
+/// Returns `None` if the register has no content.
+pub fn get_register(state: &EditorState, register: Option<char>) -> Option<&RegisterEntry> {
+    let key = register.unwrap_or(UNNAMED_REGISTER);
+    state.registers.get(&key)
+}
+
+/// Sets the content of the specified register (or the unnamed register if `None`).
+///
+/// Also always copies into the unnamed register, matching Vim behavior:
+/// every yank/delete populates both the target and the unnamed register.
+pub fn set_register(
+    state: &mut EditorState,
+    register: Option<char>,
+    content: String,
+    linewise: bool,
+) {
+    let entry = RegisterEntry {
+        content: content.clone(),
+        linewise,
+    };
+    let key = register.unwrap_or(UNNAMED_REGISTER);
+    state.registers.insert(key, entry.clone());
+    // Always update the unnamed register (Vim behavior)
+    if key != UNNAMED_REGISTER {
+        state.registers.insert(UNNAMED_REGISTER, entry);
+    }
+}
+
+/// Convenience: get the yank register content as Option<String> + linewise flag.
+///
+/// Used for backwards-compatible access matching the old `yank_register` + `yank_linewise` API.
+pub fn get_yank_content(state: &EditorState, register: Option<char>) -> Option<(String, bool)> {
+    get_register(state, register).map(|e| (e.content.clone(), e.linewise))
 }
 
 /// Registers built-in native commands for cursor movement and mode switching.
@@ -384,8 +441,8 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         "yank-line".to_string(),
         crate::command::CommandHandler::Native(|s| {
             let content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
-            s.yank_register = Some(content);
-            s.yank_linewise = true;
+            let reg = s.pending_register.take();
+            set_register(s, reg, content, true);
             Ok(())
         }),
     );
@@ -393,21 +450,22 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         &mut state.commands,
         "paste-below".to_string(),
         crate::command::CommandHandler::Native(|s| {
-            if let Some(ref text) = s.yank_register.clone() {
+            let reg = s.pending_register.take();
+            if let Some((text, linewise)) = get_yank_content(s, reg) {
                 push_undo(s);
-                if s.yank_linewise {
+                if linewise {
                     // Line-wise paste: insert on a new line below
                     let current_line = s.cursor.line;
                     let line_len = crate::buffer::get_line(&s.buffer, current_line)
                         .map(|l| l.trim_end_matches('\n').len())
                         .unwrap_or(0);
                     s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
-                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, text);
+                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, &text);
                     s.cursor = crate::cursor::new(current_line + 1, 0);
                 } else {
                     // Character-wise paste: insert after cursor position
                     let col = s.cursor.column + 1;
-                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, text);
+                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, &text);
                     // Cursor moves to end of pasted text - 1 (on last pasted char)
                     let end_col = col + text.len().saturating_sub(1);
                     s.cursor = crate::cursor::new(s.cursor.line, end_col);
@@ -689,14 +747,14 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
+                let reg = s.pending_register.take();
                 push_undo(s);
                 if s.visual_line_mode {
                     // Line-wise: delete entire lines from min_line to max_line
                     let min_line = from.line;
                     let max_line = to.line;
                     let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    s.yank_register = Some(yanked);
-                    s.yank_linewise = true;
+                    set_register(s, reg, yanked, true);
                     let mut buf = s.buffer.clone();
                     for _ in min_line..=max_line {
                         buf = crate::buffer::delete_line(&buf, min_line);
@@ -716,8 +774,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
                         to_exclusive.line,
                         to_exclusive.column,
                     );
-                    s.yank_register = Some(text);
-                    s.yank_linewise = false;
+                    set_register(s, reg, text, false);
                     s.buffer = crate::buffer::delete_char_range(
                         &s.buffer,
                         from.line,
@@ -742,13 +799,13 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
+                let reg = s.pending_register.take();
                 if s.visual_line_mode {
                     // Line-wise: yank entire lines
                     let min_line = from.line;
                     let max_line = to.line;
                     let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    s.yank_register = Some(yanked);
-                    s.yank_linewise = true;
+                    set_register(s, reg, yanked, true);
                     s.cursor = crate::cursor::new(min_line, 0);
                 } else {
                     // Character-wise: inclusive selection
@@ -760,8 +817,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
                         to_exclusive.line,
                         to_exclusive.column,
                     );
-                    s.yank_register = Some(text);
-                    s.yank_linewise = false;
+                    set_register(s, reg, text, false);
                     s.cursor = from;
                 }
                 s.selection_start = None;
@@ -780,14 +836,14 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
+                let reg = s.pending_register.take();
                 push_undo(s);
                 if s.visual_line_mode {
                     // Line-wise: delete line contents but leave an empty line, enter insert
                     let min_line = from.line;
                     let max_line = to.line;
                     let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    s.yank_register = Some(yanked);
-                    s.yank_linewise = true;
+                    set_register(s, reg, yanked, true);
                     // Delete lines from max down to min+1, keeping min_line
                     let mut buf = s.buffer.clone();
                     for _ in (min_line + 1)..=max_line {
@@ -816,8 +872,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
                         to_exclusive.line,
                         to_exclusive.column,
                     );
-                    s.yank_register = Some(text);
-                    s.yank_linewise = false;
+                    set_register(s, reg, text, false);
                     s.buffer = crate::buffer::delete_char_range(
                         &s.buffer,
                         from.line,
@@ -1023,8 +1078,8 @@ pub fn new(width: u16, height: u16) -> EditorState {
         hooks: HookRegistry::new(),
         message: None,
         running: true,
-        yank_register: None,
-        yank_linewise: false,
+        registers: HashMap::new(),
+        pending_register: None,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
         theme: crate::theme::new_theme(),
