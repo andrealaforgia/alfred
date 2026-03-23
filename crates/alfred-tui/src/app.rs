@@ -406,10 +406,24 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             compute_status_content(&state)
         };
 
-        // Update gutter_width on viewport and render
+        // Update viewport dimensions to match actual available area.
+        // Terminal height minus reserved rows (status bar + message line).
         {
             let mut state = state_rc.borrow_mut();
             state.viewport.gutter_width = gutter_width;
+            let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
+            let reserved_rows = {
+                let mut r: u16 = 0;
+                if status_content.is_some() {
+                    r += 1; // status bar
+                }
+                if state.message.is_some() {
+                    r += 1; // message line
+                }
+                r
+            };
+            state.viewport.height = term_height.saturating_sub(reserved_rows);
+            state.viewport.width = term_width;
         }
         renderer::render_frame(
             &mut terminal,
