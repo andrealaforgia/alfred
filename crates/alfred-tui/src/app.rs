@@ -5566,4 +5566,169 @@ mod tests {
             status
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Visual line mode (V) tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_normal_mode_when_shift_v_pressed_then_enters_visual_line_mode() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nfoo", cursor at (0, 2)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nfoo");
+            state.cursor = cursor::new(0, 2);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press 'V' to enter visual line mode
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('V')),
+            super::InputState::Normal,
+        );
+
+        // Then: mode is "visual", visual_line_mode is true, selection_start is set
+        let state = state_rc.borrow();
+        assert_eq!(state.mode, "visual");
+        assert!(state.visual_line_mode);
+        assert_eq!(state.selection_start, Some(cursor::new(0, 2)));
+        assert_eq!(state.active_keymaps, vec!["visual-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_visual_line_mode_when_d_pressed_then_deletes_entire_current_line() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nfoo", cursor at (0, 2)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nfoo");
+            state.cursor = cursor::new(0, 2);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: V then d (select current line, delete)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('V')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        // Then: first line deleted, buffer is "world\nfoo", mode is normal
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "world\nfoo");
+        assert_eq!(state.mode, "normal");
+        assert!(!state.visual_line_mode);
+        assert_eq!(state.selection_start, None);
+        // Yanked text should be the deleted line content (without trailing newline)
+        assert_eq!(state.yank_register, Some("hello".to_string()));
+        assert!(state.yank_linewise);
+    }
+
+    #[test]
+    fn given_visual_line_mode_when_j_then_d_then_deletes_two_lines() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nfoo", cursor at (0, 2)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nfoo");
+            state.cursor = cursor::new(0, 2);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: V, j, d (select two lines, delete)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('V')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('j')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('d')), is);
+
+        // Then: first two lines deleted, buffer is "foo", mode is normal
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "foo");
+        assert_eq!(state.mode, "normal");
+        assert!(!state.visual_line_mode);
+        assert_eq!(state.selection_start, None);
+        assert!(state.yank_linewise);
+    }
+
+    #[test]
+    fn given_visual_line_mode_when_y_pressed_then_yanks_entire_line() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nfoo", cursor at (1, 3)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nfoo");
+            state.cursor = cursor::new(1, 3);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: V then y (select current line, yank)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('V')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('y')), is);
+
+        // Then: buffer unchanged, yank register has line content, mode is normal
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "hello\nworld\nfoo"
+        );
+        assert_eq!(state.mode, "normal");
+        assert!(!state.visual_line_mode);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.yank_register, Some("world".to_string()));
+        assert!(state.yank_linewise);
+    }
+
+    #[test]
+    fn given_visual_line_mode_when_c_pressed_then_deletes_line_and_enters_insert() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer "hello\nworld\nfoo", cursor at (1, 2)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello\nworld\nfoo");
+            state.cursor = cursor::new(1, 2);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: V then c (select current line, change)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('V')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('c')), is);
+
+        // Then: line deleted, buffer has empty line where "world" was, mode is insert
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello\n\nfoo");
+        assert_eq!(state.mode, "insert");
+        assert!(!state.visual_line_mode);
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.yank_register, Some("world".to_string()));
+        assert!(state.yank_linewise);
+    }
 }

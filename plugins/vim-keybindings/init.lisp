@@ -95,6 +95,7 @@
 
 ;; Enter visual mode from normal mode
 (define-key "normal-mode" "Char:v" "enter-visual-mode")
+(define-key "normal-mode" "Char:V" "enter-visual-line-mode")
 
 ;; Define mode-switching commands
 (define-command "enter-insert-mode" (lambda () (set-mode "insert")))

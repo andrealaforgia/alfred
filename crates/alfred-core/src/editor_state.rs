@@ -78,9 +78,12 @@ pub struct EditorState {
     pub last_char_find: Option<(CharFindKind, char)>,
     /// The name of the last buffer-mutating command, for `.` (repeat-last-change).
     pub last_edit_command: Option<String>,
-    /// The anchor point where visual selection started (`v`).
+    /// The anchor point where visual selection started (`v` or `V`).
     /// When `Some`, visual mode is active; the selection spans from this cursor to `self.cursor`.
     pub selection_start: Option<Cursor>,
+    /// Whether the current visual selection is line-wise (`V`) or character-wise (`v`).
+    /// When true, visual operators expand the selection to full lines before acting.
+    pub visual_line_mode: bool,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -649,6 +652,18 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         "enter-visual-mode".to_string(),
         crate::command::CommandHandler::Native(|s| {
             s.selection_start = Some(s.cursor);
+            s.visual_line_mode = false;
+            s.mode = MODE_VISUAL.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_VISUAL)];
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "enter-visual-line-mode".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.selection_start = Some(s.cursor);
+            s.visual_line_mode = true;
             s.mode = MODE_VISUAL.to_string();
             s.active_keymaps = vec![format!("{}-mode", MODE_VISUAL)];
             Ok(())
@@ -659,6 +674,7 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         "exit-visual-mode".to_string(),
         crate::command::CommandHandler::Native(|s| {
             s.selection_start = None;
+            s.visual_line_mode = false;
             s.mode = MODE_NORMAL.to_string();
             s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
             Ok(())
@@ -670,28 +686,46 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
-                // Visual selection is inclusive of the character under the cursor,
-                // so we need to extend `to` by one character for the exclusive range.
-                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
                 push_undo(s);
-                let text = crate::buffer::get_text_range(
-                    &s.buffer,
-                    from.line,
-                    from.column,
-                    to_exclusive.line,
-                    to_exclusive.column,
-                );
-                s.yank_register = Some(text);
-                s.yank_linewise = false;
-                s.buffer = crate::buffer::delete_char_range(
-                    &s.buffer,
-                    from.line,
-                    from.column,
-                    to_exclusive.line,
-                    to_exclusive.column,
-                );
-                s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                if s.visual_line_mode {
+                    // Line-wise: delete entire lines from min_line to max_line
+                    let min_line = from.line;
+                    let max_line = to.line;
+                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
+                    s.yank_register = Some(yanked);
+                    s.yank_linewise = true;
+                    let mut buf = s.buffer.clone();
+                    for _ in min_line..=max_line {
+                        buf = crate::buffer::delete_line(&buf, min_line);
+                    }
+                    s.buffer = buf;
+                    s.cursor = crate::cursor::ensure_within_bounds(
+                        crate::cursor::new(min_line, 0),
+                        &s.buffer,
+                    );
+                } else {
+                    // Character-wise: inclusive selection, extend to by one char
+                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                    let text = crate::buffer::get_text_range(
+                        &s.buffer,
+                        from.line,
+                        from.column,
+                        to_exclusive.line,
+                        to_exclusive.column,
+                    );
+                    s.yank_register = Some(text);
+                    s.yank_linewise = false;
+                    s.buffer = crate::buffer::delete_char_range(
+                        &s.buffer,
+                        from.line,
+                        from.column,
+                        to_exclusive.line,
+                        to_exclusive.column,
+                    );
+                    s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                }
                 s.selection_start = None;
+                s.visual_line_mode = false;
                 s.mode = MODE_NORMAL.to_string();
                 s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
                 s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
@@ -705,18 +739,30 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
-                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
-                let text = crate::buffer::get_text_range(
-                    &s.buffer,
-                    from.line,
-                    from.column,
-                    to_exclusive.line,
-                    to_exclusive.column,
-                );
-                s.yank_register = Some(text);
-                s.yank_linewise = false;
-                s.cursor = from;
+                if s.visual_line_mode {
+                    // Line-wise: yank entire lines
+                    let min_line = from.line;
+                    let max_line = to.line;
+                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
+                    s.yank_register = Some(yanked);
+                    s.yank_linewise = true;
+                    s.cursor = crate::cursor::new(min_line, 0);
+                } else {
+                    // Character-wise: inclusive selection
+                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                    let text = crate::buffer::get_text_range(
+                        &s.buffer,
+                        from.line,
+                        from.column,
+                        to_exclusive.line,
+                        to_exclusive.column,
+                    );
+                    s.yank_register = Some(text);
+                    s.yank_linewise = false;
+                    s.cursor = from;
+                }
                 s.selection_start = None;
+                s.visual_line_mode = false;
                 s.mode = MODE_NORMAL.to_string();
                 s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
                 s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
@@ -731,26 +777,55 @@ pub fn register_builtin_commands(state: &mut EditorState) {
         crate::command::CommandHandler::Native(|s| {
             if let Some(anchor) = s.selection_start {
                 let (from, to) = selection_range(anchor, s.cursor);
-                let to_exclusive = advance_cursor_by_one(to, &s.buffer);
                 push_undo(s);
-                let text = crate::buffer::get_text_range(
-                    &s.buffer,
-                    from.line,
-                    from.column,
-                    to_exclusive.line,
-                    to_exclusive.column,
-                );
-                s.yank_register = Some(text);
-                s.yank_linewise = false;
-                s.buffer = crate::buffer::delete_char_range(
-                    &s.buffer,
-                    from.line,
-                    from.column,
-                    to_exclusive.line,
-                    to_exclusive.column,
-                );
-                s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                if s.visual_line_mode {
+                    // Line-wise: delete line contents but leave an empty line, enter insert
+                    let min_line = from.line;
+                    let max_line = to.line;
+                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
+                    s.yank_register = Some(yanked);
+                    s.yank_linewise = true;
+                    // Delete lines from max down to min+1, keeping min_line
+                    let mut buf = s.buffer.clone();
+                    for _ in (min_line + 1)..=max_line {
+                        buf = crate::buffer::delete_line(&buf, min_line + 1);
+                    }
+                    // Clear the remaining line's content (replace with empty)
+                    let line_content = crate::buffer::get_line_content(&buf, min_line);
+                    if !line_content.is_empty() {
+                        buf = crate::buffer::delete_char_range(
+                            &buf,
+                            min_line,
+                            0,
+                            min_line,
+                            line_content.len(),
+                        );
+                    }
+                    s.buffer = buf;
+                    s.cursor = crate::cursor::new(min_line, 0);
+                } else {
+                    // Character-wise: inclusive selection
+                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
+                    let text = crate::buffer::get_text_range(
+                        &s.buffer,
+                        from.line,
+                        from.column,
+                        to_exclusive.line,
+                        to_exclusive.column,
+                    );
+                    s.yank_register = Some(text);
+                    s.yank_linewise = false;
+                    s.buffer = crate::buffer::delete_char_range(
+                        &s.buffer,
+                        from.line,
+                        from.column,
+                        to_exclusive.line,
+                        to_exclusive.column,
+                    );
+                    s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
+                }
                 s.selection_start = None;
+                s.visual_line_mode = false;
                 s.mode = MODE_INSERT.to_string();
                 s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
                 s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
@@ -799,6 +874,21 @@ fn advance_cursor_by_one(
             crate::cursor::new(cursor.line, line_len)
         }
     }
+}
+
+/// Collects the content of lines from `min_line` to `max_line` (inclusive),
+/// joining them with newlines. Each line's trailing newline is stripped.
+///
+/// Used by line-wise visual operators to build the yank register content.
+fn collect_lines_content(
+    buffer: &crate::buffer::Buffer,
+    min_line: usize,
+    max_line: usize,
+) -> String {
+    (min_line..=max_line)
+        .map(|line| crate::buffer::get_line_content(buffer, line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Executes a character find operation, returning the new cursor position if found.
@@ -905,6 +995,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         last_char_find: None,
         last_edit_command: None,
         selection_start: None,
+        visual_line_mode: false,
     }
 }
 
