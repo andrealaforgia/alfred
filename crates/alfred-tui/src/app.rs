@@ -32,7 +32,15 @@ use crate::renderer;
 /// domain-independent representation.
 pub(crate) fn convert_crossterm_key(ct_key: CtKeyEvent) -> KeyEvent {
     let code = convert_key_code(ct_key.code);
-    let modifiers = convert_modifiers(ct_key.modifiers);
+    let mut modifiers = convert_modifiers(ct_key.modifiers);
+    // For uppercase Char keys, crossterm may report shift=true redundantly.
+    // The uppercase letter already encodes the shift state, so clear the
+    // shift modifier to match keymap entries like "Char:V" (shift=false).
+    if let KeyCode::Char(c) = code {
+        if c.is_ascii_uppercase() {
+            modifiers.shift = false;
+        }
+    }
     KeyEvent::new(code, modifiers)
 }
 

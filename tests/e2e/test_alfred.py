@@ -1177,43 +1177,52 @@ class TestVisualMode:
         assert "EFGH" in content, f"Expected 'EFGH' to remain, got: {repr(content)}"
         os.unlink(path)
 
-    @pytest.mark.skip(reason="Uppercase V in PTY causes char loss — known pexpect limitation")
     def test_V_select_line_and_delete(self):
-        """V + d — delete entire current line (uppercase V needs extra delay)."""
+        """V + d — delete entire current line.
+
+        Uses :q! instead of :wq since visual-line-delete might leave
+        the buffer in an unexpected modified state. Verifies via :w first.
+        """
         path = create_temp_file("first\nsecond\nthird")
         child = spawn_alfred(path)
 
-        # V is uppercase — send with extra delay for PTY processing
-        child.send("V")
-        time.sleep(1.0)
-        send_keys(child, "d")
+        # Send V as a raw byte with generous delay
+        send_keys(child, "V", delay=0.15)
+        time.sleep(0.5)
+        send_keys(child, "d", delay=0.15)
         time.sleep(0.5)
 
-        send_colon_command(child, "wq")
-        wait_for_exit(child)
+        # Save explicitly, then force quit to avoid unsaved-changes prompt
+        send_colon_command(child, "w")
+        time.sleep(0.5)
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
 
         content = read_file(path)
+        assert exit_code == 0, f"Expected exit 0, got {exit_code}"
         assert "first" not in content, f"'first' should be deleted, got: {repr(content)}"
         assert "second" in content, f"'second' should remain, got: {repr(content)}"
         os.unlink(path)
 
-    @pytest.mark.skip(reason="Uppercase V in PTY causes char loss — known pexpect limitation")
     def test_V_select_two_lines_and_delete(self):
         """V + j + d — delete two lines."""
         path = create_temp_file("aaa\nbbb\nccc\nddd")
         child = spawn_alfred(path)
 
-        child.send("V")
-        time.sleep(1.0)
-        send_keys(child, "j")
+        send_keys(child, "V", delay=0.15)
+        time.sleep(0.5)
+        send_keys(child, "j", delay=0.15)
         time.sleep(0.3)
-        send_keys(child, "d")
+        send_keys(child, "d", delay=0.15)
         time.sleep(0.5)
 
-        send_colon_command(child, "wq")
-        wait_for_exit(child)
+        send_colon_command(child, "w")
+        time.sleep(0.5)
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
 
         content = read_file(path)
+        assert exit_code == 0, f"Expected exit 0, got {exit_code}"
         assert "aaa" not in content, f"'aaa' should be deleted, got: {repr(content)}"
         assert "bbb" not in content, f"'bbb' should be deleted, got: {repr(content)}"
         assert "ccc" in content, f"'ccc' should remain, got: {repr(content)}"
