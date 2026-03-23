@@ -1,7 +1,0 @@
-target/
-.git/
-docs/
-mutants.out/
-mutants.out.old/
-.nwave/
-memory/
