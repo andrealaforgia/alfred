@@ -2412,4 +2412,266 @@ mod tests {
             status_str
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Capstone integration test (07-04): full modal editing workflow
+    // Proves the architecture thesis: a complex, stateful feature (vim modal
+    // editing) works entirely as a Lisp plugin with zero hardcoded key handling.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_vim_plugin_loaded_when_full_modal_editing_workflow_then_all_modes_and_commands_work_via_plugin(
+    ) {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // ---- Setup: multi-line buffer with vim-keybindings plugin ----
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("First line\nSecond line\nThird line");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // ---- Step 1: Verify initial state (normal mode) ----
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.mode, "normal", "Should start in normal mode");
+            assert_eq!(
+                state.active_keymaps,
+                vec!["normal-mode".to_string()],
+                "Should have normal-mode keymap active"
+            );
+            let status = super::compute_status_content(&state).unwrap();
+            assert!(
+                status.contains("NORMAL"),
+                "Status should show NORMAL, got: '{}'",
+                status
+            );
+        }
+
+        // ---- Step 2: hjkl navigation in normal mode ----
+        // j moves down
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('j')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.cursor.line, 1, "j should move cursor down to line 1");
+            assert_eq!(state.cursor.column, 0);
+        }
+
+        // l moves right (3 times to reach column 3)
+        let mut is = super::InputState::Normal;
+        for _ in 0..3 {
+            is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('l')), is);
+        }
+        {
+            let state = state_rc.borrow();
+            assert_eq!(
+                state.cursor.column, 3,
+                "l x3 should move cursor to column 3"
+            );
+            assert_eq!(state.cursor.line, 1);
+        }
+
+        // k moves up
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('k')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.cursor.line, 0, "k should move cursor up to line 0");
+            assert_eq!(state.cursor.column, 3);
+        }
+
+        // h moves left
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('h')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(
+                state.cursor.column, 2,
+                "h should move cursor left to column 2"
+            );
+            assert_eq!(state.cursor.line, 0);
+        }
+
+        // ---- Step 3: Enter insert mode, type text, verify buffer ----
+        // Move to end of first line first
+        {
+            let mut state = state_rc.borrow_mut();
+            state.cursor = cursor::new(0, 10); // end of "First line"
+        }
+
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.mode, "insert", "After 'i', mode should be insert");
+            assert_eq!(
+                state.active_keymaps,
+                vec!["insert-mode".to_string()],
+                "After 'i', keymap should be insert-mode"
+            );
+            let status = super::compute_status_content(&state).unwrap();
+            assert!(
+                status.contains("INSERT"),
+                "Status should show INSERT, got: '{}'",
+                status
+            );
+        }
+
+        // Type " added" in insert mode
+        is = super::InputState::Normal;
+        for ch in " added".chars() {
+            is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char(ch)), is);
+        }
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                content.starts_with("First line added"),
+                "Typed text should appear in buffer, got: '{}'",
+                content
+            );
+        }
+
+        // ---- Step 4: Press Escape to return to normal mode ----
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Escape), is);
+        {
+            let state = state_rc.borrow();
+            assert_eq!(
+                state.mode, "normal",
+                "After Escape, should be in normal mode"
+            );
+            assert_eq!(
+                state.active_keymaps,
+                vec!["normal-mode".to_string()],
+                "After Escape, keymap should be normal-mode"
+            );
+            let status = super::compute_status_content(&state).unwrap();
+            assert!(
+                status.contains("NORMAL"),
+                "Status should show NORMAL after Escape, got: '{}'",
+                status
+            );
+        }
+
+        // Verify: typing in normal mode does NOT insert
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('z')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                !content.contains('z'),
+                "Normal mode should not self-insert, got: '{}'",
+                content
+            );
+        }
+
+        // ---- Step 5: Navigate to second line and delete it with d ----
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('j')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(
+                state.cursor.line, 1,
+                "j should move to line 1 (Second line)"
+            );
+        }
+
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                !content.contains("Second line"),
+                "d should delete 'Second line', got: '{}'",
+                content
+            );
+            assert!(
+                content.contains("First line added"),
+                "First line should remain, got: '{}'",
+                content
+            );
+            assert!(
+                content.contains("Third line"),
+                "Third line should remain, got: '{}'",
+                content
+            );
+        }
+
+        // ---- Step 6: Delete char at cursor with x ----
+        // Cursor should be on "Third line" now (line 1 after deletion).
+        // Move to column 0 to target 'T'.
+        {
+            let mut state = state_rc.borrow_mut();
+            state.cursor = cursor::new(state.cursor.line, 0);
+        }
+        dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+        {
+            let state = state_rc.borrow();
+            let content = alfred_core::buffer::content(&state.buffer);
+            assert!(
+                content.contains("hird line"),
+                "x should delete char at cursor ('T'), got: '{}'",
+                content
+            );
+            assert!(
+                !content.contains("Third line"),
+                "Original 'Third line' should have 'T' removed, got: '{}'",
+                content
+            );
+        }
+
+        // ---- Step 7: Use : to enter command mode, type :q to quit ----
+        is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        assert!(
+            matches!(is, super::InputState::Command(_)),
+            "Colon should enter command mode"
+        );
+        {
+            let state = state_rc.borrow();
+            assert_eq!(state.message, Some(":".to_string()));
+        }
+
+        // Type 'q' and press Enter
+        is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('q')), is);
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Enter), is);
+        {
+            let state = state_rc.borrow();
+            assert!(!state.running, ":q should quit the editor");
+        }
+    }
 }
