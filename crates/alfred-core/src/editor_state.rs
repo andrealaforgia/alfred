@@ -927,6 +927,57 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Increment / Decrement number under cursor (vim Ctrl-a / Ctrl-x) ---
+    crate::command::register(
+        &mut state.commands,
+        "increment-number".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some((start, end, value)) =
+                crate::buffer::find_number_at_cursor(&s.buffer, s.cursor.line, s.cursor.column)
+            {
+                push_undo(s);
+                let new_value = value.saturating_add(1);
+                s.buffer = crate::buffer::replace_number_in_line(
+                    &s.buffer,
+                    s.cursor.line,
+                    start,
+                    end,
+                    new_value,
+                );
+                // Position cursor on the last digit of the new number
+                let new_num_str = new_value.to_string();
+                let new_end = start + new_num_str.len();
+                s.cursor = crate::cursor::new(s.cursor.line, new_end.saturating_sub(1));
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "decrement-number".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some((start, end, value)) =
+                crate::buffer::find_number_at_cursor(&s.buffer, s.cursor.line, s.cursor.column)
+            {
+                push_undo(s);
+                let new_value = value.saturating_sub(1);
+                s.buffer = crate::buffer::replace_number_in_line(
+                    &s.buffer,
+                    s.cursor.line,
+                    start,
+                    end,
+                    new_value,
+                );
+                // Position cursor on the last digit of the new number
+                let new_num_str = new_value.to_string();
+                let new_end = start + new_num_str.len();
+                s.cursor = crate::cursor::new(s.cursor.line, new_end.saturating_sub(1));
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -2258,5 +2309,147 @@ mod tests {
         // Undo: should restore to "hello"
         command::execute(&mut state, "undo").unwrap();
         assert_eq!(buffer::content(&state.buffer), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: increment-number and decrement-number commands
+    // Test Budget: 9 behaviors x 2 = 18 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_cursor_on_number_when_increment_then_number_increases_by_one() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("count=42");
+        state.cursor = crate::cursor::new(0, 6);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "increment-number");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "count=43");
+    }
+
+    #[test]
+    fn given_cursor_on_number_when_decrement_then_number_decreases_by_one() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("count=42");
+        state.cursor = crate::cursor::new(0, 6);
+        editor_state::register_builtin_commands(&mut state);
+
+        let result = command::execute(&mut state, "decrement-number");
+        assert!(result.is_ok());
+        assert_eq!(buffer::content(&state.buffer), "count=41");
+    }
+
+    #[test]
+    fn given_zero_when_increment_then_becomes_one() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("0");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "1");
+    }
+
+    #[test]
+    fn given_zero_when_decrement_then_becomes_negative_one() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("0");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "decrement-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "-1");
+    }
+
+    #[test]
+    fn given_negative_number_when_increment_then_moves_toward_zero() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("-5");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "-4");
+    }
+
+    #[test]
+    fn given_cursor_before_number_when_increment_then_finds_and_increments() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("count=42");
+        state.cursor = crate::cursor::new(0, 0); // cursor at 'c', before the number
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "count=43");
+    }
+
+    #[test]
+    fn given_no_number_on_line_when_increment_then_no_change() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello world");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hello world");
+        // No undo snapshot pushed when nothing changed
+        assert!(state.undo_stack.is_empty());
+    }
+
+    #[test]
+    fn given_number_at_start_of_line_when_increment_then_works() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("42 apples");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "43 apples");
+    }
+
+    #[test]
+    fn given_number_at_end_of_line_when_increment_then_works() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("apples 42");
+        state.cursor = crate::cursor::new(0, 7);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "apples 43");
+    }
+
+    #[test]
+    fn given_increment_when_undo_then_original_restored() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("count=42");
+        state.cursor = crate::cursor::new(0, 6);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "increment-number").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "count=43");
+
+        command::execute(&mut state, "undo").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "count=42");
     }
 }

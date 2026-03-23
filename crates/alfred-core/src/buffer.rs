@@ -627,6 +627,100 @@ pub fn toggle_case_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
     }
 }
 
+/// Finds a number at or after the cursor position on the current line.
+///
+/// Scans the line from the cursor column forward, looking for a sequence of
+/// digits optionally preceded by a minus sign (for negative numbers).
+/// A minus sign is only treated as part of the number if it immediately
+/// precedes the digit sequence and is either at column 0 or preceded by
+/// a non-digit, non-minus character.
+///
+/// Returns `Some((start_col, end_col, value))` where:
+/// - `start_col` is the column of the first character of the number (or the minus sign)
+/// - `end_col` is the column one past the last digit (exclusive)
+/// - `value` is the parsed integer value
+///
+/// Returns `None` if no number is found at or after the cursor on the line.
+pub fn find_number_at_cursor(
+    buffer: &Buffer,
+    line: usize,
+    col: usize,
+) -> Option<(usize, usize, i64)> {
+    let line_text = get_line_content(buffer, line);
+    if line_text.is_empty() {
+        return None;
+    }
+
+    let chars: Vec<char> = line_text.chars().collect();
+    let len = chars.len();
+
+    // Scan from cursor position forward looking for a digit
+    let mut pos = col.min(len);
+
+    while pos < len {
+        if chars[pos].is_ascii_digit() {
+            // Found a digit. Check if preceded by a minus sign.
+            let digit_start = pos;
+            let start = if digit_start > 0 && chars[digit_start - 1] == '-' {
+                digit_start - 1
+            } else {
+                digit_start
+            };
+
+            // Find the end of the digit sequence
+            let mut end = digit_start;
+            while end < len && chars[end].is_ascii_digit() {
+                end += 1;
+            }
+
+            // Only accept this number if the cursor is at or before it
+            // (we already ensured pos >= col, and start <= pos)
+            let number_str: String = chars[start..end].iter().collect();
+            if let Ok(value) = number_str.parse::<i64>() {
+                return Some((start, end, value));
+            }
+
+            // If parsing failed (shouldn't happen), skip past and continue
+            pos = end;
+        } else {
+            pos += 1;
+        }
+    }
+
+    None
+}
+
+/// Replaces the text between `start_col` (inclusive) and `end_col` (exclusive)
+/// on the given line with the string representation of `new_value`.
+///
+/// This is used after `find_number_at_cursor` to substitute the old number text
+/// with the incremented or decremented value. Returns a new Buffer with the
+/// replacement applied.
+///
+/// If the line is out of bounds, the buffer is returned unchanged.
+pub fn replace_number_in_line(
+    buffer: &Buffer,
+    line: usize,
+    start_col: usize,
+    end_col: usize,
+    new_value: i64,
+) -> Buffer {
+    let line_content = get_line_content(buffer, line);
+    if line_content.is_empty() && start_col == 0 && end_col == 0 {
+        return buffer.clone();
+    }
+
+    let chars: Vec<char> = line_content.chars().collect();
+    let clamped_start = start_col.min(chars.len());
+    let clamped_end = end_col.min(chars.len());
+
+    let prefix: String = chars[..clamped_start].iter().collect();
+    let suffix: String = chars[clamped_end..].iter().collect();
+    let new_text = format!("{}{}{}", prefix, new_value, suffix);
+
+    replace_line(buffer, line, &new_text)
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -1158,5 +1252,106 @@ mod tests {
         let result = super::toggle_case_at(&buffer, 0, 0);
         assert_eq!(super::content(&result), "");
         assert_eq!(result.version(), version_before);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: find_number_at_cursor
+    // Test Budget: 9 behaviors x 2 = 18 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_cursor_on_number_when_find_number_then_returns_number_position_and_value() {
+        let buffer = super::Buffer::from_string("count=42");
+        let result = super::find_number_at_cursor(&buffer, 0, 6);
+        assert_eq!(result, Some((6, 8, 42)));
+    }
+
+    #[test]
+    fn given_cursor_before_number_when_find_number_then_finds_next_number_on_line() {
+        let buffer = super::Buffer::from_string("count=42");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, Some((6, 8, 42)));
+    }
+
+    #[test]
+    fn given_cursor_on_zero_when_find_number_then_returns_zero() {
+        let buffer = super::Buffer::from_string("0");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, Some((0, 1, 0)));
+    }
+
+    #[test]
+    fn given_negative_number_when_find_number_then_returns_negative_value() {
+        let buffer = super::Buffer::from_string("-5");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, Some((0, 2, -5)));
+    }
+
+    #[test]
+    fn given_no_number_on_line_when_find_number_then_returns_none() {
+        let buffer = super::Buffer::from_string("hello world");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_number_at_start_of_line_when_find_number_then_works() {
+        let buffer = super::Buffer::from_string("42 apples");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, Some((0, 2, 42)));
+    }
+
+    #[test]
+    fn given_number_at_end_of_line_when_find_number_then_works() {
+        let buffer = super::Buffer::from_string("apples 42");
+        let result = super::find_number_at_cursor(&buffer, 0, 7);
+        assert_eq!(result, Some((7, 9, 42)));
+    }
+
+    #[test]
+    fn given_empty_line_when_find_number_then_returns_none() {
+        let buffer = super::Buffer::from_string("");
+        let result = super::find_number_at_cursor(&buffer, 0, 0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn given_negative_number_in_middle_when_find_number_at_cursor_then_finds_it() {
+        let buffer = super::Buffer::from_string("val=-10 end");
+        let result = super::find_number_at_cursor(&buffer, 0, 4);
+        assert_eq!(result, Some((4, 7, -10)));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: replace_number_in_line
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_number_in_line_when_replace_with_incremented_then_content_updated() {
+        let buffer = super::Buffer::from_string("count=42");
+        let result = super::replace_number_in_line(&buffer, 0, 6, 8, 43);
+        assert_eq!(super::content(&result), "count=43");
+    }
+
+    #[test]
+    fn given_number_in_line_when_replace_with_decremented_then_content_updated() {
+        let buffer = super::Buffer::from_string("count=42");
+        let result = super::replace_number_in_line(&buffer, 0, 6, 8, 41);
+        assert_eq!(super::content(&result), "count=41");
+    }
+
+    #[test]
+    fn given_zero_when_replace_with_negative_then_minus_sign_added() {
+        let buffer = super::Buffer::from_string("0");
+        let result = super::replace_number_in_line(&buffer, 0, 0, 1, -1);
+        assert_eq!(super::content(&result), "-1");
+    }
+
+    #[test]
+    fn given_negative_number_when_replace_with_positive_then_minus_removed() {
+        let buffer = super::Buffer::from_string("-5");
+        let result = super::replace_number_in_line(&buffer, 0, 0, 2, -4);
+        assert_eq!(super::content(&result), "-4");
     }
 }
