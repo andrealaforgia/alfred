@@ -56,7 +56,9 @@ pub fn render_frame<B: Backend>(
 
         if let Some(status) = status_line {
             let status_area = compute_status_area(area, state.message.is_some());
-            let status_style = Style::default().bg(Color::DarkGray).fg(Color::White);
+            let status_bg = resolve_theme_color(state, "status-bar-bg", Color::DarkGray);
+            let status_fg = resolve_theme_color(state, "status-bar-fg", Color::White);
+            let status_style = Style::default().bg(status_bg).fg(status_fg);
             let status_widget = Paragraph::new(status).style(status_style);
             frame.render_widget(status_widget, status_area);
         }
@@ -176,6 +178,42 @@ fn collect_gutter_lines(gutter_lines: &[String], visible_height: usize) -> Vec<L
             Line::raw(content.to_string())
         })
         .collect()
+}
+
+/// Resolves a theme color from EditorState by slot name, with a fallback.
+///
+/// Looks up the color key in `state.theme`, converts the ThemeColor
+/// to a `ratatui::Color`. If the key is not found, returns the fallback color.
+pub fn resolve_theme_color(state: &EditorState, key: &str, fallback: Color) -> Color {
+    match state.theme.get(key) {
+        Some(theme_color) => theme_color_to_ratatui(*theme_color),
+        None => fallback,
+    }
+}
+
+/// Converts a pure ThemeColor domain type to a ratatui::Color for rendering.
+fn theme_color_to_ratatui(color: alfred_core::theme::ThemeColor) -> Color {
+    use alfred_core::theme::{NamedColor, ThemeColor};
+    match color {
+        ThemeColor::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        ThemeColor::Named(named) => match named {
+            NamedColor::Black => Color::Black,
+            NamedColor::Red => Color::Red,
+            NamedColor::Green => Color::Green,
+            NamedColor::Yellow => Color::Yellow,
+            NamedColor::Blue => Color::Blue,
+            NamedColor::Magenta => Color::Magenta,
+            NamedColor::Cyan => Color::Cyan,
+            NamedColor::White => Color::White,
+            NamedColor::DarkGray => Color::DarkGray,
+            NamedColor::LightRed => Color::LightRed,
+            NamedColor::LightGreen => Color::LightGreen,
+            NamedColor::LightYellow => Color::LightYellow,
+            NamedColor::LightBlue => Color::LightBlue,
+            NamedColor::LightMagenta => Color::LightMagenta,
+            NamedColor::LightCyan => Color::LightCyan,
+        },
+    }
 }
 
 /// Computes the terminal cursor position from the editor state.
@@ -751,5 +789,107 @@ mod tests {
         assert!(row0.starts_with("Hello"), "Row 0 was: '{}'", row0);
         let row1 = extract_row_text(rendered.buffer(), 1);
         assert!(row1.starts_with("World"), "Row 1 was: '{}'", row1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (10-02): theme color resolution for status bar
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_theme_color_set_when_status_bar_rendered_then_themed_color_used() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with a custom status-bar-bg theme color
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello");
+        state
+            .theme
+            .insert("status-bar-bg".to_string(), ThemeColor::Rgb(255, 0, 0));
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with a status line
+        super::render_frame(&mut terminal, &state, &[], Some("status")).unwrap();
+
+        // Then: the status bar row uses the themed background color (red RGB)
+        let rendered = terminal.backend();
+        let status_row = 4u16; // last row, no message
+        let cell = &rendered.buffer()[(0, status_row)];
+        assert_eq!(
+            cell.bg,
+            Color::Rgb(255, 0, 0),
+            "Status bar bg should be themed RGB(255,0,0) but was: {:?}",
+            cell.bg
+        );
+    }
+
+    #[test]
+    fn given_no_theme_color_when_status_bar_rendered_then_fallback_color_used() {
+        use ratatui::style::Color;
+
+        // Given: an EditorState with no theme colors set (empty theme)
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello");
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render with a status line
+        super::render_frame(&mut terminal, &state, &[], Some("status")).unwrap();
+
+        // Then: the status bar row uses the default DarkGray background
+        let rendered = terminal.backend();
+        let status_row = 4u16; // last row, no message
+        let cell = &rendered.buffer()[(0, status_row)];
+        assert_eq!(
+            cell.bg,
+            Color::DarkGray,
+            "Status bar bg should be default DarkGray but was: {:?}",
+            cell.bg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test (10-02): resolve_theme_color pure function
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_theme_with_key_when_resolve_then_returns_themed_color() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        let mut state = editor_state::new(20, 5);
+        state
+            .theme
+            .insert("text-fg".to_string(), ThemeColor::Rgb(100, 200, 50));
+
+        let result = super::resolve_theme_color(&state, "text-fg", Color::Reset);
+        assert_eq!(result, Color::Rgb(100, 200, 50));
+    }
+
+    #[test]
+    fn given_theme_without_key_when_resolve_then_returns_fallback() {
+        use ratatui::style::Color;
+
+        let state = editor_state::new(20, 5);
+
+        let result = super::resolve_theme_color(&state, "nonexistent-key", Color::Yellow);
+        assert_eq!(result, Color::Yellow);
+    }
+
+    #[test]
+    fn given_theme_with_named_color_when_resolve_then_returns_ratatui_color() {
+        use alfred_core::theme::{NamedColor, ThemeColor};
+        use ratatui::style::Color;
+
+        let mut state = editor_state::new(20, 5);
+        state
+            .theme
+            .insert("gutter-fg".to_string(), ThemeColor::Named(NamedColor::Cyan));
+
+        let result = super::resolve_theme_color(&state, "gutter-fg", Color::Reset);
+        assert_eq!(result, Color::Cyan);
     }
 }

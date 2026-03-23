@@ -12,6 +12,7 @@ use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
 use crate::hook::HookRegistry;
 use crate::key_event::KeyEvent;
+use crate::theme::Theme;
 use crate::viewport::Viewport;
 
 /// A keymap maps key events to command names.
@@ -50,6 +51,7 @@ pub struct EditorState {
     pub yank_register: Option<String>,
     pub undo_stack: Vec<UndoSnapshot>,
     pub redo_stack: Vec<UndoSnapshot>,
+    pub theme: Theme,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -492,6 +494,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         yank_register: None,
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
+        theme: crate::theme::new_theme(),
     }
 }
 
