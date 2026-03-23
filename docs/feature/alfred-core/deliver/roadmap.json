@@ -1,75 +1,59 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-23T12:00:00Z",
-    "total_steps": 4
+    "created_at": "2026-03-23T14:00:00Z",
+    "total_steps": 3
   },
   "phases": [
     {
-      "id": "07",
-      "name": "M7 Vim Keybindings Plugin",
+      "id": "08",
+      "name": "M8 File Save and Open",
       "steps": [
         {
-          "id": "07-01",
-          "name": "Mode switching primitives and set-mode bridge",
+          "id": "08-01",
+          "name": "Buffer save to file and save primitives",
           "criteria": [
-            "set-mode primitive changes the current editor mode",
-            "Mode change triggers active keymap switch",
-            "current-mode reflects the new mode after switch",
-            "Invalid mode name returns error message",
-            "Mode stored as string in EditorState"
+            "buffer save_to_file writes content to disk",
+            "save-buffer Lisp primitive saves current buffer",
+            "Modified flag resets to false after save",
+            "Save to nonexistent directory returns error",
+            "Saving preserves original file encoding"
           ],
           "files_to_modify": [
-            "crates/alfred-lisp/src/bridge.rs",
-            "crates/alfred-core/src/editor_state.rs"
+            "crates/alfred-core/src/buffer.rs",
+            "crates/alfred-lisp/src/bridge.rs"
           ]
         },
         {
-          "id": "07-02",
-          "name": "Vim normal mode keybindings plugin",
+          "id": "08-02",
+          "name": "Colon commands for save and open",
           "criteria": [
-            "Plugin creates normal-mode and insert-mode keymaps",
-            "Normal mode: h j k l for navigation",
-            "Normal mode: i enters insert mode",
-            "Normal mode: x deletes char under cursor",
-            "Normal mode: dd deletes current line"
+            "Colon w saves current buffer to its file",
+            "Colon w filename saves to specified path",
+            "Colon e filename opens a new file",
+            "Save with no filename shows error message",
+            "Open nonexistent file shows error message"
           ],
           "files_to_modify": [
-            "plugins/vim-keybindings/init.lisp",
-            "crates/alfred-lisp/src/bridge.rs"
+            "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["07-01"]
+          "deps": ["08-01"]
         },
         {
-          "id": "07-03",
-          "name": "Vim insert mode and Escape to normal",
+          "id": "08-03",
+          "name": "Vim plugin save and quit bindings",
           "criteria": [
-            "Insert mode: typing inserts characters",
-            "Insert mode: Escape returns to normal mode",
-            "Mode transition updates the active keymap",
-            "Status bar reflects current mode change",
-            "Backspace works in insert mode"
+            "Colon wq saves and quits",
+            "Normal mode ZZ saves and quits",
+            "Status bar shows saved confirmation",
+            "Modified indicator clears after save",
+            "Unsaved changes warning on quit attempt"
           ],
           "files_to_modify": [
             "plugins/vim-keybindings/init.lisp",
             "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["07-02"]
-        },
-        {
-          "id": "07-04",
-          "name": "Integration test proving full modal editing",
-          "criteria": [
-            "Start in normal mode with hjkl navigation",
-            "Press i to enter insert mode and type text",
-            "Press Escape to return to normal mode",
-            "dd deletes current line in normal mode",
-            "All behavior driven by Lisp plugin not Rust code"
-          ],
-          "files_to_modify": [
-            "crates/alfred-tui/src/app.rs"
-          ],
-          "deps": ["07-03"]
+          "deps": ["08-02"]
         }
       ]
     }
