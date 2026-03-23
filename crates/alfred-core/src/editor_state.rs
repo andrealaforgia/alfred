@@ -84,6 +84,9 @@ pub struct EditorState {
     /// Whether the current visual selection is line-wise (`V`) or character-wise (`v`).
     /// When true, visual operators expand the selection to full lines before acting.
     pub visual_line_mode: bool,
+    /// Named marks ('a'-'z') mapping to cursor positions.
+    /// Users set marks with `m{a-z}` and jump to them with `'{a-z}`.
+    pub marks: HashMap<char, Cursor>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -922,6 +925,43 @@ pub fn reverse_char_find_kind(kind: CharFindKind) -> CharFindKind {
     }
 }
 
+/// Returns true if the given character is a valid mark name ('a'-'z').
+///
+/// Marks are lowercase ASCII letters only; digits and other characters are rejected.
+pub fn is_valid_mark_char(c: char) -> bool {
+    c.is_ascii_lowercase()
+}
+
+/// Sets a named mark at the current cursor position.
+///
+/// If the mark already exists, its position is overwritten.
+/// Only valid mark characters ('a'-'z') are accepted; invalid characters
+/// are silently ignored.
+pub fn set_mark(state: &mut EditorState, mark_char: char) {
+    if is_valid_mark_char(mark_char) {
+        state.marks.insert(mark_char, state.cursor);
+    }
+}
+
+/// Jumps the cursor to the position stored in the named mark.
+///
+/// Returns `Ok(())` if the mark exists and the cursor was moved.
+/// Returns `Err(message)` if the mark is not set, leaving the cursor unchanged.
+/// Invalid mark characters produce an error message.
+pub fn jump_to_mark(state: &mut EditorState, mark_char: char) -> Result<(), String> {
+    if !is_valid_mark_char(mark_char) {
+        return Err(format!("Invalid mark character: '{}'", mark_char));
+    }
+    match state.marks.get(&mark_char) {
+        Some(&cursor_pos) => {
+            state.cursor = cursor_pos;
+            state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+            Ok(())
+        }
+        None => Err(format!("Mark '{}' not set", mark_char)),
+    }
+}
+
 /// Saves a snapshot of the current buffer and cursor onto the undo stack.
 ///
 /// Clears the redo stack (any redo history is lost when a new edit is made).
@@ -996,6 +1036,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         last_edit_command: None,
         selection_start: None,
         visual_line_mode: false,
+        marks: HashMap::new(),
     }
 }
 
@@ -1926,5 +1967,99 @@ mod tests {
         let result = command::execute(&mut state, "unindent-line");
         assert!(result.is_ok());
         assert_eq!(buffer::content(&state.buffer), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Marks: pure domain function tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_valid_lowercase_letter_when_is_valid_mark_char_then_true() {
+        assert!(editor_state::is_valid_mark_char('a'));
+        assert!(editor_state::is_valid_mark_char('m'));
+        assert!(editor_state::is_valid_mark_char('z'));
+    }
+
+    #[test]
+    fn given_invalid_chars_when_is_valid_mark_char_then_false() {
+        assert!(!editor_state::is_valid_mark_char('A'));
+        assert!(!editor_state::is_valid_mark_char('1'));
+        assert!(!editor_state::is_valid_mark_char(' '));
+        assert!(!editor_state::is_valid_mark_char('!'));
+    }
+
+    #[test]
+    fn given_editor_when_set_mark_then_mark_stored_at_cursor_position() {
+        let mut state = editor_state::new(80, 24);
+        state.cursor = crate::cursor::new(5, 10);
+
+        editor_state::set_mark(&mut state, 'a');
+
+        assert_eq!(state.marks.get(&'a'), Some(&crate::cursor::new(5, 10)));
+    }
+
+    #[test]
+    fn given_existing_mark_when_set_mark_same_char_then_position_overwritten() {
+        let mut state = editor_state::new(80, 24);
+        state.cursor = crate::cursor::new(1, 2);
+        editor_state::set_mark(&mut state, 'a');
+
+        state.cursor = crate::cursor::new(3, 4);
+        editor_state::set_mark(&mut state, 'a');
+
+        assert_eq!(state.marks.get(&'a'), Some(&crate::cursor::new(3, 4)));
+    }
+
+    #[test]
+    fn given_invalid_char_when_set_mark_then_nothing_stored() {
+        let mut state = editor_state::new(80, 24);
+        state.cursor = crate::cursor::new(1, 2);
+
+        editor_state::set_mark(&mut state, '1');
+
+        assert!(state.marks.is_empty());
+    }
+
+    #[test]
+    fn given_existing_mark_when_jump_to_mark_then_cursor_moved() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("aaa\nbbb\nccc");
+        state.cursor = crate::cursor::new(2, 1);
+        editor_state::set_mark(&mut state, 'b');
+
+        state.cursor = crate::cursor::new(0, 0);
+        let result = editor_state::jump_to_mark(&mut state, 'b');
+
+        assert!(result.is_ok());
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_unset_mark_when_jump_to_mark_then_error_returned() {
+        let mut state = editor_state::new(80, 24);
+        state.cursor = crate::cursor::new(0, 0);
+
+        let result = editor_state::jump_to_mark(&mut state, 'x');
+
+        assert_eq!(result, Err("Mark 'x' not set".to_string()));
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_invalid_char_when_jump_to_mark_then_error_returned() {
+        let mut state = editor_state::new(80, 24);
+        state.cursor = crate::cursor::new(0, 0);
+
+        let result = editor_state::jump_to_mark(&mut state, '1');
+
+        assert_eq!(result, Err("Invalid mark character: '1'".to_string()));
+    }
+
+    #[test]
+    fn given_new_editor_when_created_then_marks_empty() {
+        let state = editor_state::new(80, 24);
+        assert!(state.marks.is_empty());
     }
 }

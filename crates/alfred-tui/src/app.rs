@@ -109,6 +109,10 @@ pub(crate) enum InputState {
     OperatorPending(Operator),
     /// Waiting for a text object type key after operator + modifier (e.g., `di` + `w`, `ca` + `"`)
     TextObject(Operator, alfred_core::text_object::TextObjectModifier),
+    /// Waiting for a character key to set a mark (`m` + `{a-z}`)
+    PendingMark,
+    /// Waiting for a character key to jump to a mark (`'` + `{a-z}`)
+    PendingJumpMark,
 }
 
 /// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
@@ -442,6 +446,31 @@ pub(crate) fn handle_key_event(
         return (InputState::Normal, DeferredAction::None, None);
     }
 
+    // PendingMark mode: waiting for a character key after `m`.
+    // Store the mark at the current cursor position, return to Normal.
+    if let InputState::PendingMark = input_state {
+        if let KeyCode::Char(ch) = key.code {
+            if alfred_core::editor_state::is_valid_mark_char(ch) {
+                alfred_core::editor_state::set_mark(state, ch);
+            }
+            // Invalid mark characters (digits, uppercase, etc.) are silently ignored.
+        }
+        // Any non-Char key (e.g., Escape) just cancels the pending mark.
+        return (InputState::Normal, DeferredAction::None, None);
+    }
+
+    // PendingJumpMark mode: waiting for a character key after `'`.
+    // Jump cursor to the stored mark position, or show error if not set.
+    if let InputState::PendingJumpMark = input_state {
+        if let KeyCode::Char(ch) = key.code {
+            if let Err(msg) = alfred_core::editor_state::jump_to_mark(state, ch) {
+                state.message = Some(msg);
+            }
+        }
+        // Any non-Char key (e.g., Escape) just cancels the pending jump.
+        return (InputState::Normal, DeferredAction::None, None);
+    }
+
     // OperatorPending mode: waiting for a motion key after an operator (d, c, y).
     // Resolve the next key as a motion, compute the range, execute the operator.
     if let InputState::OperatorPending(operator) = input_state {
@@ -681,6 +710,12 @@ pub(crate) fn handle_key_event(
             DeferredAction::None,
             None,
         ),
+        Some(ref cmd) if cmd == "enter-set-mark" => {
+            (InputState::PendingMark, DeferredAction::None, None)
+        }
+        Some(ref cmd) if cmd == "enter-jump-mark" => {
+            (InputState::PendingJumpMark, DeferredAction::None, None)
+        }
         Some(ref cmd) if cmd == "enter-operator-delete" => (
             InputState::OperatorPending(Operator::Delete),
             DeferredAction::None,
@@ -5738,5 +5773,276 @@ mod tests {
         assert_eq!(state.selection_start, None);
         assert_eq!(state.yank_register, Some("world".to_string()));
         assert!(state.yank_linewise);
+    }
+
+    // -----------------------------------------------------------------------
+    // Marks: m{a-z} to set, '{a-z} to jump
+    // -----------------------------------------------------------------------
+
+    fn setup_mark_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('m')),
+            "enter-set-mark".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('\'')),
+            "enter-jump-mark".to_string(),
+        );
+    }
+
+    #[test]
+    fn given_cursor_at_position_when_set_mark_a_and_jump_back_then_cursor_restored() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two\nline three");
+        state.cursor = cursor::new(2, 5);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Set mark 'a' at (2, 5)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMark);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Move cursor away
+        state.cursor = cursor::new(0, 0);
+
+        // Jump to mark 'a'
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingJumpMark);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 5);
+    }
+
+    #[test]
+    fn given_unset_mark_when_jump_then_error_message_and_cursor_unchanged() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello\nworld");
+        state.cursor = cursor::new(1, 3);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Jump to unset mark 'b'
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Cursor unchanged
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 3);
+        // Error message shown
+        assert_eq!(state.message, Some("Mark 'b' not set".to_string()));
+    }
+
+    #[test]
+    fn given_existing_mark_when_set_same_mark_again_then_position_overwritten() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("aaa\nbbb\nccc\nddd");
+        state.cursor = cursor::new(1, 2);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Set mark 'a' at (1, 2)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        // Move and set mark 'a' again at (3, 1)
+        state.cursor = cursor::new(3, 1);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        // Move away and jump to 'a' -- should be at the new position (3, 1)
+        state.cursor = cursor::new(0, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        assert_eq!(state.cursor.line, 3);
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_mark_set_when_buffer_edited_then_mark_position_preserved() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello\nworld\nfoo");
+        state.cursor = cursor::new(2, 1);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Set mark 'c' at (2, 1)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('c')), is);
+
+        // Edit the buffer (insert text on line 0)
+        state.cursor = cursor::new(0, 5);
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 5, " there");
+
+        // Jump to mark 'c' -- position is preserved as stored
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('c')), is);
+
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_mark_z_when_set_and_jump_then_works() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("alpha\nbeta\ngamma");
+        state.cursor = cursor::new(1, 3);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Set mark 'z' (last valid mark)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+
+        // Move away
+        state.cursor = cursor::new(0, 0);
+
+        // Jump to mark 'z'
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 3);
+    }
+
+    #[test]
+    fn given_invalid_mark_char_when_set_mark_then_ignored() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 3);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Try to set mark '1' (invalid -- digits not allowed)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('1')), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // No mark stored
+        assert!(state.marks.is_empty());
+    }
+
+    #[test]
+    fn given_invalid_mark_char_when_jump_then_error_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 2);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Try to jump to mark '1' (invalid character)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('1')), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Cursor unchanged
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 2);
+        // Error message shown
+        assert_eq!(
+            state.message,
+            Some("Invalid mark character: '1'".to_string())
+        );
+    }
+
+    #[test]
+    fn given_pending_mark_when_escape_pressed_then_cancelled() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Press 'm' then Escape
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMark);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // No mark set
+        assert!(state.marks.is_empty());
+    }
+
+    #[test]
+    fn given_pending_jump_mark_when_escape_pressed_then_cancelled() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_mark_keymaps(&mut state);
+
+        // Press "'" then Escape
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingJumpMark);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Cursor unchanged, no error message
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
     }
 }
