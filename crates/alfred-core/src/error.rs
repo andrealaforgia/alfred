@@ -15,6 +15,13 @@ pub enum AlfredError {
         source: std::io::Error,
     },
 
+    /// Failed to write a file to disk.
+    #[error("failed to write file '{path}': {source}")]
+    FileWriteError {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
     /// Command not found in the registry.
     #[error("command not found: '{name}'")]
     CommandNotFound { name: String },

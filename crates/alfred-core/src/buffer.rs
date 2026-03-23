@@ -4,7 +4,7 @@
 //! It wraps a `ropey::Rope` and carries metadata (id, filename, modified flag, version).
 //! All operations are pure: modifications return new Buffer instances.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ropey::Rope;
@@ -25,6 +25,7 @@ fn next_id() -> u64 {
 /// - `id`: unique identifier for this buffer
 /// - `rope`: the underlying text storage (ropey::Rope)
 /// - `filename`: optional filename (the file's name component, not full path)
+/// - `file_path`: optional full path to the file on disk
 /// - `modified`: whether the buffer has been changed since loading
 /// - `version`: monotonically increasing version counter
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ pub struct Buffer {
     id: u64,
     rope: Rope,
     filename: Option<String>,
+    file_path: Option<PathBuf>,
     modified: bool,
     version: u64,
 }
@@ -46,6 +48,7 @@ impl Buffer {
             id: next_id(),
             rope: Rope::from_str(text),
             filename: None,
+            file_path: None,
             modified: false,
             version: 1,
         }
@@ -71,6 +74,7 @@ impl Buffer {
             id: next_id(),
             rope: Rope::from_str(&content),
             filename,
+            file_path: Some(path.to_path_buf()),
             modified: false,
             version: 1,
         })
@@ -84,6 +88,11 @@ impl Buffer {
     /// Returns the filename (just the name component), or None if unnamed.
     pub fn filename(&self) -> Option<&str> {
         self.filename.as_deref()
+    }
+
+    /// Returns the full file path, or None if the buffer was not loaded from a file.
+    pub fn file_path(&self) -> Option<&Path> {
+        self.file_path.as_deref()
     }
 
     /// Returns whether the buffer has been modified since loading.
@@ -136,6 +145,7 @@ pub fn insert_at(buffer: &Buffer, line: usize, column: usize, text: &str) -> Buf
         id: buffer.id,
         rope,
         filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
         modified: true,
         version: buffer.version + 1,
     }
@@ -160,6 +170,7 @@ pub fn delete_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
         id: buffer.id,
         rope,
         filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
         modified: true,
         version: buffer.version + 1,
     }
@@ -209,9 +220,32 @@ pub fn delete_line(buffer: &Buffer, line: usize) -> Buffer {
         id: buffer.id,
         rope,
         filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
         modified: true,
         version: buffer.version + 1,
     }
+}
+
+/// Saves the buffer's content to the given path, returning a new Buffer with `modified` set to false.
+///
+/// Writes the full buffer content as UTF-8 text. Returns an error if the file
+/// cannot be written (e.g., directory does not exist, permission denied).
+/// The returned buffer is identical to the input except `modified` is `false`.
+pub fn save_to_file(buffer: &Buffer, path: &Path) -> Result<Buffer> {
+    let text = content(buffer);
+    std::fs::write(path, &text).map_err(|source| AlfredError::FileWriteError {
+        path: path.to_path_buf(),
+        source,
+    })?;
+
+    Ok(Buffer {
+        id: buffer.id,
+        rope: buffer.rope.clone(),
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: false,
+        version: buffer.version,
+    })
 }
 
 /// Converts a (line, column) position to a character index in the rope.
@@ -354,5 +388,86 @@ mod tests {
 
         // Then: version starts at 1 (initial loaded state)
         assert_eq!(buffer.version(), 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: Buffer save_to_file writes content and resets modified
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_modified_buffer_when_saved_to_file_then_file_contains_content_and_modified_resets() {
+        // Given: a buffer loaded from a file, then modified
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("save_test.txt");
+        fs::write(&file_path, "Original").unwrap();
+
+        let buffer = super::Buffer::from_file(&file_path).unwrap();
+        let buffer = super::insert_at(&buffer, 0, 8, " content");
+
+        // Precondition: buffer is modified
+        assert!(buffer.is_modified());
+
+        // When: save_to_file is called
+        let saved_buffer = super::save_to_file(&buffer, &file_path).unwrap();
+
+        // Then: the file on disk contains the updated content
+        let on_disk = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(on_disk, "Original content");
+
+        // And: the returned buffer has modified=false
+        assert!(!saved_buffer.is_modified());
+
+        // And: content is preserved in the buffer
+        assert_eq!(super::content(&saved_buffer), "Original content");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: save_to_file behaviors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_saved_to_nonexistent_directory_then_returns_error() {
+        // Given: a buffer and a path in a directory that does not exist
+        let buffer = super::Buffer::from_string("some text");
+        let bad_path = std::path::Path::new("/tmp/nonexistent_dir_alfred_test/save.txt");
+
+        // When: save_to_file is called
+        let result = super::save_to_file(&buffer, bad_path);
+
+        // Then: it returns an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn given_buffer_with_utf8_content_when_saved_then_file_preserves_encoding() {
+        // Given: a buffer containing multi-byte UTF-8 characters
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("utf8_test.txt");
+        let utf8_content = "Hello \u{1F600} world \u{00E9}\u{00E8}\u{00EA}";
+        let buffer = super::Buffer::from_string(utf8_content);
+
+        // When: saved to file
+        let _saved = super::save_to_file(&buffer, &file_path).unwrap();
+
+        // Then: the file content preserves UTF-8 encoding exactly
+        let on_disk = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(on_disk, utf8_content);
+    }
+
+    #[test]
+    fn given_unmodified_buffer_when_saved_then_modified_remains_false() {
+        // Given: a freshly created buffer (not modified)
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("unmodified_save.txt");
+        let buffer = super::Buffer::from_string("clean");
+
+        // Precondition: buffer is not modified
+        assert!(!buffer.is_modified());
+
+        // When: saved to file
+        let saved_buffer = super::save_to_file(&buffer, &file_path).unwrap();
+
+        // Then: modified is still false
+        assert!(!saved_buffer.is_modified());
     }
 }

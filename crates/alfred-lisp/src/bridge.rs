@@ -56,6 +56,7 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(set-mode name)` -- set the editor mode and switch active keymap
 /// - `(buffer-filename)` -- return the buffer's filename or empty string if unnamed
 /// - `(buffer-modified?)` -- return T if buffer modified, F otherwise
+/// - `(save-buffer)` -- save buffer to its file path; `(save-buffer "path")` saves to explicit path
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -68,6 +69,7 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_current_mode(env.clone(), state.clone());
     register_buffer_filename(env.clone(), state.clone());
     register_buffer_modified(env.clone(), state.clone());
+    register_save_buffer(env.clone(), state.clone());
     register_set_mode(env, state);
 }
 
@@ -586,6 +588,50 @@ fn register_buffer_modified(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
     define_native_closure(&env, "buffer-modified?", move |_env, _args| {
         let editor = state.borrow();
         Ok(Value::from(editor.buffer.is_modified()))
+    });
+}
+
+/// Registers `save-buffer`: saves the current buffer to disk.
+///
+/// Usage:
+/// - `(save-buffer)` -- saves to the buffer's original file path (error if no path)
+/// - `(save-buffer "path")` -- saves to the specified path
+///
+/// Returns NIL on success. Resets the buffer's modified flag to false.
+fn register_save_buffer(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "save-buffer", move |_env, args| {
+        let save_path = match args.first() {
+            Some(Value::String(path_str)) => std::path::PathBuf::from(path_str),
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("save-buffer: expected string path argument, got {}", other),
+                });
+            }
+            None => {
+                // No argument: use buffer's file_path
+                let editor = state.borrow();
+                match editor.buffer.file_path() {
+                    Some(path) => path.to_path_buf(),
+                    None => {
+                        return Err(RuntimeError {
+                            msg: "save-buffer: buffer has no file path; provide a path argument"
+                                .to_string(),
+                        });
+                    }
+                }
+            }
+        };
+
+        let mut editor = state.borrow_mut();
+        match buffer::save_to_file(&editor.buffer, &save_path) {
+            Ok(saved_buffer) => {
+                editor.buffer = saved_buffer;
+                Ok(Value::NIL)
+            }
+            Err(e) => Err(RuntimeError {
+                msg: format!("save-buffer: {}", e),
+            }),
+        }
     });
 }
 
@@ -1671,5 +1717,97 @@ mod tests {
             alfred_core::command::lookup(&editor.commands, "enter-normal-mode").is_some(),
             "enter-normal-mode command should be registered"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (08-01): save-buffer writes file and resets modified
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_modified_buffer_with_filename_when_save_buffer_evaluated_then_file_written_and_modified_reset(
+    ) {
+        // Given: an editor state with a buffer loaded from a temp file, then modified
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("save_bridge_test.txt");
+        std::fs::write(&file_path, "Original").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_file(&file_path).unwrap();
+            // Modify the buffer by inserting text
+            editor.buffer = alfred_core::buffer::insert_at(&editor.buffer, 0, 8, " modified");
+        }
+
+        // Precondition: buffer is modified
+        assert!(state.borrow().buffer.is_modified());
+
+        // And: a runtime with bridge primitives registered
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // When: save-buffer is evaluated (no args -> saves to buffer's filename)
+        runtime.eval("(save-buffer)").unwrap();
+
+        // Then: the file on disk contains the updated content
+        let on_disk = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(on_disk, "Original modified");
+
+        // And: the buffer's modified flag is reset
+        assert!(!state.borrow().buffer.is_modified());
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (08-01): save-buffer primitive
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_without_filename_when_save_buffer_no_args_then_returns_error() {
+        // Given: a buffer with no filename (from_string)
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("content");
+        }
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // When: save-buffer is called with no arguments
+        let result = runtime.eval("(save-buffer)");
+
+        // Then: it returns an error (no filename to save to)
+        assert!(
+            result.is_err(),
+            "save-buffer with no filename and no args should fail"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_save_buffer_with_path_arg_then_saves_to_specified_path() {
+        // Given: a buffer with some content (no filename)
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let save_path = temp_dir.path().join("explicit_save.txt");
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("save me here");
+        }
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // When: save-buffer is called with an explicit path
+        let expr = format!("(save-buffer \"{}\")", save_path.display());
+        runtime.eval(&expr).unwrap();
+
+        // Then: the file is written at the specified path
+        let on_disk = std::fs::read_to_string(&save_path).unwrap();
+        assert_eq!(on_disk, "save me here");
+
+        // And: modified flag is reset
+        assert!(!state.borrow().buffer.is_modified());
     }
 }
