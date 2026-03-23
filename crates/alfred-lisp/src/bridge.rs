@@ -53,6 +53,8 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(cursor-move direction [count])` -- move cursor by direction and optional count
 /// - `(message text)` -- set the editor message line
 /// - `(current-mode)` -- return the current mode name as a string
+/// - `(buffer-filename)` -- return the buffer's filename or empty string if unnamed
+/// - `(buffer-modified?)` -- return T if buffer modified, F otherwise
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -62,7 +64,9 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_cursor_position(env.clone(), state.clone());
     register_cursor_move(env.clone(), state.clone());
     register_message(env.clone(), state.clone());
-    register_current_mode(env, state);
+    register_current_mode(env.clone(), state.clone());
+    register_buffer_filename(env.clone(), state.clone());
+    register_buffer_modified(env, state);
 }
 
 /// Registers the `define-command` Lisp primitive.
@@ -418,6 +422,27 @@ fn register_message(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
         let mut editor = state.borrow_mut();
         editor.message = Some(text);
         Ok(Value::NIL)
+    });
+}
+
+/// Registers `buffer-filename`: returns the current buffer's filename or empty string.
+///
+/// Usage: `(buffer-filename)` -- returns the filename as a string, or `""` if unnamed.
+fn register_buffer_filename(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "buffer-filename", move |_env, _args| {
+        let editor = state.borrow();
+        let filename = editor.buffer.filename().unwrap_or("").to_string();
+        Ok(Value::String(filename))
+    });
+}
+
+/// Registers `buffer-modified?`: returns whether the buffer has been modified.
+///
+/// Usage: `(buffer-modified?)` -- returns `T` if modified, `F` if not.
+fn register_buffer_modified(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "buffer-modified?", move |_env, _args| {
+        let editor = state.borrow();
+        Ok(Value::from(editor.buffer.is_modified()))
     });
 }
 
@@ -1006,6 +1031,83 @@ mod tests {
                 inner
             ),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: buffer-filename and buffer-modified? status bar primitives
+    // (step 05-02)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_filename_when_buffer_filename_evaluated_then_returns_filename() {
+        // Given: an editor state with a buffer loaded from a file (simulated via filename)
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("some content");
+            // We need a buffer with a filename -- use from_file or set manually
+            // Since from_string doesn't set filename, we'll create one from a temp file
+        }
+
+        // Use a temp file to get a buffer with a filename
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join("test_file.txt");
+        std::fs::write(&temp_file, "hello").unwrap();
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_file(&temp_file).unwrap();
+        }
+
+        // And: a runtime with bridge primitives registered
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // When: buffer-filename is evaluated
+        let result = runtime.eval("(buffer-filename)").unwrap();
+
+        // Then: returns the filename as a string
+        assert_eq!(result.as_string(), Some("test_file.txt".to_string()));
+
+        // Cleanup
+        let _ = std::fs::remove_file(&temp_file);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: buffer-filename and buffer-modified? primitives (step 05-02)
+    // Test Budget: 4 behaviors x 2 = 8 max unit tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_without_filename_when_buffer_filename_evaluated_then_returns_empty_string() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(buffer-filename)").unwrap();
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    #[test]
+    fn given_unmodified_buffer_when_buffer_modified_evaluated_then_returns_false() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(buffer-modified?)").unwrap();
+        assert_eq!(*result.inner(), Value::False);
+    }
+
+    #[test]
+    fn given_modified_buffer_when_buffer_modified_evaluated_then_returns_true() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // Modify the buffer via the bridge primitive
+        runtime.eval("(buffer-insert \"text\")").unwrap();
+
+        let result = runtime.eval("(buffer-modified?)").unwrap();
+        assert_eq!(*result.inner(), Value::True);
     }
 
     #[test]
