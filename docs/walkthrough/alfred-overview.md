@@ -2,201 +2,211 @@
 marp: true
 theme: default
 paginate: true
+header: "Alfred Editor -- Quick Overview (M9)"
+footer: "2026-03-23 | Tier 1 Overview"
 style: |
-  section {
-    font-size: 26px;
-  }
-  h1 {
-    font-size: 38px;
-  }
-  h2 {
-    font-size: 32px;
-  }
+  section { font-size: 24px; }
+  h1 { font-size: 38px; }
+  h2 { font-size: 30px; }
+  pre { font-size: 16px; }
 ---
 
-<!-- Slide 1 -->
-# Alfred Editor: Quick Overview
+# Alfred Editor -- Quick Overview
 
-**Emacs-inspired text editor in Rust with Lisp plugin architecture**
+**An Emacs-inspired text editor proving plugin-first architecture**
 
-5-crate workspace | Functional core / Imperative shell | M2 of 7 complete
+Rust | 5 crates | 11,071 lines | 254 tests | Vim modal editing as 52 lines of Lisp
 
 <!--
-Presenter notes:
-Quick 10-minute overview for anyone needing context on the Alfred project.
-For deep-dives into specific areas, see the full walkthrough deck.
+Tier 1 overview deck: ~12 slides covering purpose, architecture,
+key components, design decisions, and getting started.
 -->
 
 ---
 
-<!-- Slide 2 -->
-# The Thesis
+# The Problem
 
-> Everything beyond core primitives is a Lisp plugin.
+> Can complex features like modal editing work entirely as plugins in an extension language?
 
-**Walking skeleton goal**: Modal editing (Vim-style) works entirely as a Lisp plugin on a thin Rust kernel.
+**Evidence informing the design**:
+- Emacs: ~70% Lisp proves plugin-first works at scale
+- Helix: no plugin system is its most-cited limitation
+- Xi editor: multi-process architecture was "not a good idea" (author's post-mortem)
 
-**Milestones**: M1 Kernel (done) -> M2 Lisp (done) -> M3 Plugin System -> M4 Line Numbers -> M5 Status Bar -> M6 Keybindings -> **M7 Vim Mode**
+**Alfred's answer**: Yes. Vim modal editing (36 keybindings, 2 modes) is 52 lines of Lisp.
 
 ---
 
-<!-- Slide 3 -->
-# Architecture at a Glance
+# System Context
 
 ```mermaid
-graph TD
-    BIN["alfred-bin<br/><i>Entry point</i>"]
-    TUI["alfred-tui<br/><i>Event loop + rendering</i>"]
-    LISP["alfred-lisp<br/><i>Lisp interpreter + FFI bridge</i>"]
-    CORE["alfred-core<br/><i>Pure domain: buffer, cursor, viewport, commands</i>"]
-    PLUGIN["alfred-plugin<br/><i>Plugin system (stub)</i>"]
+C4Context
+    title System Context
 
-    BIN --> TUI
-    BIN --> LISP
-    BIN --> PLUGIN
-    TUI --> CORE
-    TUI --> LISP
-    LISP --> CORE
+    Person(user, "Developer", "Edits files in terminal")
+    System(alfred, "Alfred Editor", "Lisp-extensible text editor")
+    System_Ext(terminal, "Terminal", "stdin/stdout")
+    System_Ext(fs, "File System", "Source files")
 
-    style CORE fill:#d4edda,stroke:#28a745
+    Rel(user, terminal, "Keystrokes")
+    Rel(terminal, alfred, "crossterm events")
+    Rel(alfred, fs, "Read/write files")
+    Rel(alfred, terminal, "ratatui rendering")
 ```
-
-**Key rule**: All dependencies point inward toward alfred-core. Enforced by Cargo at compile time.
 
 ---
 
-<!-- Slide 4 -->
+# 5-Crate Architecture
+
+```mermaid
+C4Container
+    title Cargo Workspace (5 crates)
+
+    Container(bin, "alfred-bin", "Binary", "Entry point, wiring")
+    Container(tui, "alfred-tui", "Library", "Event loop, rendering")
+    Container(plugin, "alfred-plugin", "Library", "Discovery, registry")
+    Container(lisp, "alfred-lisp", "Library", "Lisp runtime, bridge")
+    Container(core, "alfred-core", "Library", "Pure domain: buffer, cursor, commands, hooks")
+
+    Rel(bin, tui, "runs")
+    Rel(bin, plugin, "loads plugins")
+    Rel(bin, lisp, "creates runtime")
+    Rel(tui, core, "reads state")
+    Rel(lisp, core, "mutates state")
+    Rel(plugin, lisp, "evals init.lisp")
+```
+
+**Key rule**: `alfred-core` has ZERO dependencies on other Alfred crates (Cargo-enforced).
+
+---
+
 # Functional Core / Imperative Shell
 
-| Layer | Crates | Characteristics |
-|-------|--------|----------------|
-| **Pure core** | alfred-core | No I/O; free functions; `(input) -> output`; testable without mocking |
-| **Imperative shell** | alfred-tui, alfred-bin | Event loop, terminal I/O, `Rc<RefCell<EditorState>>` |
-| **Bridge** | alfred-lisp | Connects Lisp interpreter to core via registered closures |
+| Layer | Crate | Character |
+|-------|-------|-----------|
+| **Pure core** | alfred-core | Buffer, cursor, viewport as pure functions. No I/O. |
+| **Bridge** | alfred-lisp | Connects Lisp to Rust via 14 native closures |
+| **Plugin system** | alfred-plugin | Discovery, topological sort, lifecycle |
+| **Imperative shell** | alfred-tui | Event loop, terminal I/O, rendering |
+| **Composition root** | alfred-bin | Wires everything together |
 
-Documented in ADR-005.
-
----
-
-<!-- Slide 5 -->
-# The Lisp Bridge
-
-**7 primitives** registered at startup as Rust closures in the Lisp environment:
-
-| Primitive | Does |
-|-----------|------|
-| `(buffer-insert text)` | Insert text at cursor |
-| `(buffer-delete)` | Delete char at cursor |
-| `(buffer-content)` | Return buffer as string |
-| `(cursor-position)` | Return `(line column)` |
-| `(cursor-move dir [n])` | Move cursor |
-| `(message text)` | Set status message |
-| `(current-mode)` | Return mode name |
-
-All eval under 1ms. Documented kill signal: if >1ms, switch to Janet.
+All domain logic is testable without a terminal, Lisp runtime, or file system.
 
 ---
 
-<!-- Slide 6 -->
-# Key Design Decisions (6 ADRs)
+# The Plugin Proof
 
-| Decision | Chosen | Over |
-|----------|--------|------|
-| Adopt Lisp interpreter | rust_lisp | Build custom, Janet, Lua |
-| Plugin-first architecture | Thin kernel + Lisp plugins | Full-featured kernel, balanced split |
-| Execution model | Single-process synchronous | Multi-process, async, thread pool |
-| Lisp interpreter | rust_lisp (native Rust) | Janet (C FFI) |
-| Development paradigm | Functional core / imperative shell | Pure FP, Pure OOP |
-| Code organization | 5-crate Cargo workspace | Single crate, 6+ crates |
+## Vim modal editing in 52 lines of Lisp
 
----
+```lisp
+(make-keymap "normal-mode")
+(define-key "normal-mode" "Char:h" "cursor-left")
+(define-key "normal-mode" "Char:j" "cursor-down")
+;; ... 33 more bindings (w/b/e, J/y/p, undo/redo, etc.)
 
-<!-- Slide 7 -->
-# Codebase by the Numbers
+(make-keymap "insert-mode")
+(define-key "insert-mode" "Escape" "enter-normal-mode")
+(define-key "insert-mode" "Backspace" "delete-backward")
 
-| Metric | Value |
-|--------|-------|
-| Source files | 16 (.rs) |
-| Total lines (Rust) | ~3,700 |
-| Tests | 131 |
-| Assertions | 225 |
-| ADRs | 6 |
-| Design documents | 5 |
-| External dependencies | ropey, rust_lisp, crossterm, ratatui, thiserror |
+(define-command "enter-insert-mode" (lambda () (set-mode "insert")))
+(define-command "enter-normal-mode" (lambda () (set-mode "normal")))
 
----
-
-<!-- Slide 8 -->
-# What Works Today (M1 + M2)
-
-- Open a file from CLI, render in terminal
-- Navigate with arrow keys (cursor movement, viewport scrolling)
-- Quit with `:q` or `:quit`
-- Evaluate Lisp expressions with `:eval (expression)`
-- Lisp can insert/delete text, move cursor, set messages
-- Errors display as messages, never crash the editor
-
----
-
-<!-- Slide 9 -->
-# What Comes Next (M3-M7)
-
-```
-M3: Plugin discovery, loading, lifecycle    (2 weeks)
-M4: Line numbers as first real Lisp plugin  (1 week)
-M5: Status bar plugin with dynamic state    (1 week)
-M6: Keybindings as plugin -- removes ALL    (2 weeks)
-    hardcoded keys from Rust
-M7: Vim modal editing as a Lisp plugin      (2-3 weeks)
+(set-active-keymap "normal-mode")
+(set-mode "normal")
 ```
 
-**M6 is the inflection point**: after M6, no key handling in Rust.
-
-**M7 is the proof**: modal editing as a plugin validates the architecture.
+5 plugins total: vim-keybindings, basic-keybindings, line-numbers, status-bar, test-plugin.
 
 ---
 
-<!-- Slide 10 -->
-# Top Risks
+# Key Capabilities (M9)
 
-| Risk | Impact | Notes |
-|------|--------|-------|
-| Plugin API insufficient for modal editing | High | M7 is the test |
-| app.rs (861 lines) grows into god-file | Medium | Needs extraction before M6 |
-| rust_lisp maintenance stalls | Medium | Simple enough to fork |
-| `Rc<RefCell>` panics at runtime | Low | Confined to event loop |
+| Feature | Implementation |
+|---------|---------------|
+| Modal editing (normal/insert) | Lisp plugin (vim-keybindings) |
+| Extended vim motions (w b e 0 $ ^ gg G H M L) | 32 built-in commands + Lisp bindings |
+| Editing commands (J yy p cc C u Ctrl-r) | Built-in commands with undo/redo |
+| Half-page scroll (Ctrl-d, Ctrl-u) | Built-in commands |
+| File save (:w :wq :q!) | Colon command system |
+| File open (:e path) | Colon command system |
+| Line numbers | Lisp plugin (hook-based) |
+| Status bar | Lisp plugin (hook-based) |
+| Undo/redo | Rope snapshots (O(1) clone) |
+| Lisp REPL | `:eval expression` |
 
 ---
 
-<!-- Slide 11 -->
+# 6 Architectural Decisions (Documented)
+
+| ADR | Decision | One-line rationale |
+|-----|----------|--------------------|
+| 001 | Adopt existing Lisp | Interpreter is means, not end |
+| 002 | Plugin-first architecture | Strongest proof of extensibility |
+| 003 | Single-process synchronous | Xi post-mortem lesson |
+| 004 | rust_lisp over Janet | Integration quality > language features |
+| 005 | Functional core / imperative shell | Pure core is testable without mocking |
+| 006 | 5-crate Cargo workspace | Compile-time boundary enforcement |
+
+---
+
+# Test Architecture
+
+**254 tests across 4 crates** (Farley Index 8.3)
+
+| Crate | Tests | Strategy |
+|-------|-------|---------|
+| alfred-core | 94 | Table-driven parametrization, pure function testing |
+| alfred-lisp | 59 | Runtime eval, bridge primitives, performance baselines |
+| alfred-plugin | 25 | Discovery integration, topological sort, lifecycle |
+| alfred-tui | 76 | Key dispatch, ratatui TestBackend rendering |
+
+- Given/When/Then naming convention
+- Test budget discipline (behaviors x 2 maximum)
+- No mocking in core tests
+- Performance baseline tests (1ms kill signal threshold)
+
+---
+
+# Hotspot Analysis
+
+| File | Lines | Changes | Risk |
+|------|-------|---------|------|
+| app.rs | 3,301 | 24 | High (but ~2,700 are tests) |
+| editor_state.rs | 1,203 | 14 | High (aggregation root + 32 commands) |
+| bridge.rs | 1,813 | 13 | Medium |
+| cursor.rs | 727 | 7 | Medium |
+| buffer.rs | 672 | 6 | Low (stable) |
+
+**Top recommendation**: Consider extracting command dispatch from app.rs into a dedicated module.
+
+---
+
 # Getting Started
 
 ```bash
-# Build
-cargo build
+# Build and test
+cargo build --workspace
+cargo test --workspace
 
-# Run
-cargo run --bin alfred -- some_file.txt
-
-# Inside Alfred
-# Arrow keys: navigate
-# :q Enter:   quit
-# :eval (+ 1 2) Enter: Lisp eval
-
-# Test
-cargo test                  # all
-cargo test -p alfred-core   # just core
+# Run the editor
+cargo run --bin alfred              # Empty buffer
+cargo run --bin alfred myfile.txt   # Open a file
 ```
+
+**Read first**:
+1. `CLAUDE.md` -- Project conventions
+2. `docs/adrs/` -- Architectural decisions (6 ADRs)
+3. `crates/alfred-core/src/editor_state.rs` -- Domain root
+4. `plugins/vim-keybindings/init.lisp` -- Architecture proof
 
 ---
 
-<!-- Slide 12 -->
 # Summary
 
-**Alfred is a well-documented, cleanly-separated proof-of-concept at M2.**
+**Alfred** = Emacs-inspired editor proving plugin-first architecture
 
-The architecture is sound. The decisions are recorded. The test suite is thorough.
-
-The remaining 5 milestones will determine if the plugin-first thesis holds when faced with real features.
-
-**Read more**: `docs/adrs/`, `docs/feature/alfred-core/design/`, `docs/walkthrough/alfred-walkthrough.md`
+- 5-crate Rust workspace, functional core / imperative shell
+- Vim modal editing as 52 lines of Lisp (the architectural proof)
+- 254 tests, 6 ADRs, Farley Index 8.3
+- 69 commits, 11,071 lines of Rust, 97 lines of Lisp
+- Walking skeleton complete (M1-M7) + file ops (M8) + extended vim (M9)

@@ -2,330 +2,246 @@
 marp: true
 theme: default
 paginate: true
+header: "Alfred Editor -- System Walkthrough (M9)"
+footer: "2026-03-23 | 5-crate Cargo workspace | 254 tests | Plugin-first architecture"
 style: |
-  section {
-    font-size: 24px;
-  }
-  h1 {
-    font-size: 36px;
-  }
-  h2 {
-    font-size: 30px;
-  }
-  code {
-    font-size: 20px;
-  }
-  pre {
-    font-size: 18px;
-  }
-  .small {
-    font-size: 18px;
-  }
-  mermaid {
-    font-size: 14px;
-  }
+  section { font-size: 22px; }
+  h1 { font-size: 36px; }
+  h2 { font-size: 28px; }
+  pre { font-size: 16px; }
+  mermaid { font-size: 14px; }
+  .columns { display: flex; gap: 1em; }
+  .col { flex: 1; }
 ---
 
-<!-- Slide 1 -->
-# Alfred Editor: System Walkthrough
+# Alfred Editor -- System Walkthrough
 
-**An Emacs-inspired text editor in Rust with a Lisp plugin architecture**
+**An Emacs-inspired text editor with plugin-first architecture**
 
-- 5-crate Cargo workspace
-- Functional core / imperative shell
-- Embedded Lisp interpreter (rust_lisp)
-- Terminal UI via crossterm + ratatui
-- Currently at M2 completion (of 7 milestones)
-
-<!-- Audience: All developers. Tier 1. Type: Explanation -->
+- **Language**: Rust (11,071 lines across 21 source files)
+- **Architecture**: Functional core / imperative shell, 5-crate workspace
+- **Key proof**: Vim modal editing in 52 lines of Lisp
+- **Tests**: 254 passing (94 core, 59 lisp, 25 plugin, 76 TUI)
+- **Milestones**: M1-M7 walking skeleton + M8 file save/open + M9 extended vim
 
 <!--
 Presenter notes:
-This walkthrough covers the Alfred editor codebase as of March 2026.
-Alfred is at milestone 2 of a 7-milestone walking skeleton that proves
-a plugin-first architecture where even modal editing is a Lisp plugin.
-Total codebase: ~3,700 lines of Rust across 16 source files.
-131 tests with 225 assertions.
+This walkthrough covers the complete Alfred system as of M9.
+The project demonstrates that an AI agent framework can produce
+architecturally sound, modular software. The strongest proof is
+that vim modal editing -- a complex, stateful feature -- works
+entirely as a 52-line Lisp plugin.
+Content type: Explanation | Tier: 1
 -->
 
 ---
 
-<!-- Slide 2 -->
-# What Problem Does Alfred Solve?
+# Section 1: The Problem Space
 
-**Context**: Most terminal editors fall into two camps:
+## What is Alfred trying to solve?
 
-1. **Highly extensible but legacy** -- Emacs (Elisp from 1985, dynamic scoping until 2012)
-2. **Modern but limited extensibility** -- Helix (no plugin system, most-cited limitation)
+Alfred is a **proof-of-concept text editor** that answers a specific question:
 
-**Alfred's thesis**: Build a thin Rust kernel with everything else as Lisp plugins.
+> Can a plugin-first architecture deliver a functional editor where complex features like modal editing are entirely defined in the extension language?
 
-**Walking skeleton goal**: Prove that Vim-style modal editing works entirely as a Lisp plugin on top of a minimal kernel.
+**Target users**: Developers who want an extensible, Emacs-inspired editor with Lisp as the extension language and vim-style modal editing.
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+**Evidence base**: Emacs (~70% Lisp), Neovim (Lua plugins for LSP), Xi editor post-mortem.
 
 <!--
-Presenter notes:
-This is not about replacing Emacs or Vim. The project is a proof-of-concept
-that AI agents can build architecturally sound, modular software.
-The strongest proof: a complex, stateful feature (modal editing) working
-entirely as a plugin.
+Content type: Explanation | Tier: 1
+The problem is not "build a text editor" -- many exist.
+The problem is "prove that plugin-first architecture works for non-trivial features."
 -->
 
 ---
 
-<!-- Slide 3 -->
-# Roadmap: The Walking Skeleton (M1-M7)
+# Section 1: The Problem Space (cont.)
 
-| Milestone | What It Proves | Status |
-|-----------|---------------|--------|
-| **M1** Rust Kernel | Display file, navigate with arrows | Done |
-| **M2** Lisp Integration | Evaluate Lisp that calls Rust primitives | Done |
-| **M3** Plugin System | Discover, load, initialize Lisp plugins | Next |
-| **M4** Line Numbers | First real Lisp plugin end-to-end | Planned |
-| **M5** Status Bar | Plugin renders dynamic UI with state | Planned |
-| **M6** Keybindings | Plugins intercept input, bind keys | Planned |
-| **M7** Vim Mode | Full modal editing as a plugin | Planned |
+## Quality Attributes Driving Design
 
-Estimated total: 12-14 weeks. Sequential execution.
+| Attribute | How Alfred addresses it |
+|-----------|----------------------|
+| **Extensibility** | Everything beyond core primitives is a Lisp plugin |
+| **Testability** | Pure core functions -- no mocking needed (254 tests) |
+| **Maintainability** | 5 crates enforce boundaries at compile time |
+| **Reliability** | Single-process synchronous (no async failure modes) |
+| **Simplicity** | Functional core / imperative shell separation |
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+All five are documented in ADRs (6 architectural decision records).
 
 <!--
-Presenter notes:
-M7 is the proof point. If modal editing works as a Lisp plugin,
-the architecture is validated. Everything after M7 is features, not architecture.
-M4 and M5 could run in parallel but are sequential to avoid scope creep.
+Content type: Reference | Tier: 1
 -->
 
 ---
 
-<!-- Slide 4 -->
-# System Context (C4 Level 1)
+# Section 2: System Context
+
+## Where Alfred sits in its environment
 
 ```mermaid
 C4Context
-    title System Context -- Alfred Editor
+    title System Context Diagram
 
-    Person(user, "Developer", "Uses Alfred to edit text files")
-    System(alfred, "Alfred Editor", "Terminal-based text editor with Lisp plugin system")
-    System_Ext(fs, "File System", "Source files, plugin files")
+    Person(user, "Developer", "Edits text files in terminal")
+
+    System(alfred, "Alfred Editor", "Emacs-inspired text editor with Lisp extension language and vim keybindings")
+
     System_Ext(terminal, "Terminal Emulator", "iTerm2, Alacritty, etc.")
+    System_Ext(filesystem, "File System", "Source code files on disk")
 
-    Rel(user, terminal, "Types keystrokes, reads display")
-    Rel(terminal, alfred, "Key events in, ANSI escape sequences out")
-    Rel(alfred, fs, "Reads files, loads plugins")
+    Rel(user, terminal, "Types keystrokes")
+    Rel(terminal, alfred, "stdin/stdout via crossterm")
+    Rel(alfred, filesystem, "Reads/writes files")
+    Rel(alfred, terminal, "Renders TUI via ratatui")
 ```
 
-Single binary, single process, no network, no database.
-
-<!-- Audience: All. Tier 1. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 1
+Alfred is a terminal application. It reads keystrokes from stdin,
+processes them through its event loop, and renders to stdout via ratatui.
+File I/O happens through standard Rust fs operations.
+-->
 
 ---
 
-<!-- Slide 5 -->
-# Container Architecture (C4 Level 2)
+# Section 2: Container Diagram
+
+## The 5-crate architecture
+
+```mermaid
+C4Container
+    title Container Diagram -- Alfred Cargo Workspace
+
+    Container(bin, "alfred-bin", "Rust binary", "Entry point: CLI parsing, wiring, initialization")
+    Container(tui, "alfred-tui", "Rust library", "Event loop, key conversion, terminal rendering")
+    Container(plugin, "alfred-plugin", "Rust library", "Plugin discovery, registry, lifecycle, topological sort")
+    Container(lisp, "alfred-lisp", "Rust library", "Lisp runtime wrapper, bridge primitives, define-command")
+    Container(core, "alfred-core", "Rust library", "Pure domain: buffer, cursor, viewport, commands, hooks, keymaps")
+
+    Rel(bin, tui, "runs event loop")
+    Rel(bin, plugin, "discovers and loads plugins")
+    Rel(bin, lisp, "creates runtime, registers bridge")
+    Rel(tui, core, "reads/writes EditorState")
+    Rel(tui, lisp, "evals Lisp expressions")
+    Rel(plugin, core, "reads types")
+    Rel(plugin, lisp, "evaluates init.lisp files")
+    Rel(lisp, core, "bridge mutates EditorState")
+```
+
+<!--
+Content type: Explanation | Tier: 1
+Dependencies flow inward: bin -> tui/plugin/lisp -> core.
+alfred-core has ZERO dependencies on other Alfred crates --
+this is enforced by Cargo at compile time (ADR-006).
+-->
+
+---
+
+# Section 2: Dependency Rules
+
+## Compile-time enforced boundaries
+
+```
+alfred-core  -->  [ropey, thiserror]          (ZERO Alfred deps)
+alfred-lisp  -->  [alfred-core, rust_lisp]
+alfred-plugin --> [alfred-core, alfred-lisp]
+alfred-tui   -->  [alfred-core, alfred-lisp, crossterm, ratatui]
+alfred-bin   -->  [all four crates above]
+```
+
+**Key invariant**: `alfred-core` never imports `crossterm`, `ratatui`, `rust_lisp`, or any other Alfred crate. This is not a convention -- Cargo enforces it at compile time.
+
+**Consequence**: The pure domain core can be tested without any I/O framework. All 94 core tests run without a terminal, without a Lisp runtime, without file system access (except buffer file loading tests that use tempfile).
+
+<!--
+Content type: Reference | Tier: 2
+Documented: ADR-006 explicitly states "alfred-core must have zero
+dependencies on other Alfred crates."
+-->
+
+---
+
+# Section 3: The Pure Core (alfred-core)
+
+## 8 modules, zero I/O dependencies
 
 ```mermaid
 graph TD
-    BIN["alfred-bin<br/><i>Binary entry point</i><br/>56 lines"]
-    TUI["alfred-tui<br/><i>Event loop + rendering</i><br/>1,206 lines"]
-    LISP["alfred-lisp<br/><i>Lisp interpreter + bridge</i><br/>1,066 lines"]
-    CORE["alfred-core<br/><i>Pure domain logic</i><br/>1,256 lines"]
-    PLUGIN["alfred-plugin<br/><i>Plugin system (stub)</i><br/>18 lines"]
-
-    BIN --> TUI
-    BIN --> LISP
-    BIN --> PLUGIN
-    BIN --> CORE
-    TUI --> CORE
-    TUI --> LISP
-    LISP --> CORE
-
-    style CORE fill:#d4edda,stroke:#28a745
-    style TUI fill:#cce5ff,stroke:#004085
-    style LISP fill:#fff3cd,stroke:#856404
-    style PLUGIN fill:#f8d7da,stroke:#721c24
-    style BIN fill:#e2e3e5,stroke:#383d41
+    ES[editor_state.rs<br/>1203 lines] --> B[buffer.rs<br/>672 lines]
+    ES --> C[cursor.rs<br/>727 lines]
+    ES --> V[viewport.rs<br/>231 lines]
+    ES --> CMD[command.rs<br/>225 lines]
+    ES --> K[key_event.rs<br/>123 lines]
+    ES --> H[hook.rs<br/>234 lines]
+    ES --> E[error.rs<br/>32 lines]
+    B --> ROPEY[ropey::Rope]
+    E --> THISERROR[thiserror]
 ```
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+Every module exports **free functions** (not methods) that take data and return data. This is the functional core pattern.
 
 <!--
-Presenter notes:
-The dependency rule is critical: ALL arrows point inward toward alfred-core.
-alfred-core has ZERO dependencies on other Alfred crates. This is enforced
-by Cargo at compile time -- not just a convention. alfred-core depends only
-on ropey (rope data structure) and thiserror (error derivation).
+Content type: Explanation | Tier: 1
+EditorState is the aggregation root -- it owns buffer, cursor,
+viewport, commands, hooks, keymaps, mode, and undo stacks.
+All other modules are pure data + pure functions.
 -->
 
 ---
 
-<!-- Slide 6 -->
-# The Dependency Rule
+# Section 3: Buffer -- Immutable Text Container
 
-**alfred-core depends on nothing else in Alfred.**
+## Key design: modifications return new Buffer instances
 
-| Crate | External Dependencies | Alfred Dependencies |
-|-------|----------------------|-------------------|
-| alfred-core | ropey, thiserror | None |
-| alfred-lisp | rust_lisp, thiserror | alfred-core |
-| alfred-tui | crossterm, ratatui | alfred-core, alfred-lisp |
-| alfred-plugin | (none yet) | (none yet) |
-| alfred-bin | crossterm | all four crates |
-
-**Documented** (ADR-006): Crate boundaries are an architectural enforcement mechanism. Code in alfred-core cannot accidentally import terminal I/O types.
-
-<!-- Audience: All. Tier 1. Type: Reference -->
-
----
-
-<!-- Slide 7 -->
-# Architectural Pattern: Functional Core / Imperative Shell
-
-```mermaid
-graph LR
-    subgraph "Imperative Shell (I/O at boundaries)"
-        A["alfred-tui<br/>Event loop<br/>Terminal rendering<br/>Raw mode"]
-        B["alfred-bin<br/>CLI args<br/>Process lifecycle"]
-    end
-    subgraph "Functional Core (pure logic)"
-        C["Buffer: insert_at, delete_at, get_line"]
-        D["Cursor: move_up, move_down, move_left, move_right"]
-        E["Viewport: adjust"]
-        F["Command: register, lookup, execute"]
-    end
-    A --> C
-    A --> D
-    A --> E
-    A --> F
-    B --> A
-
-    style C fill:#d4edda
-    style D fill:#d4edda
-    style E fill:#d4edda
-    style F fill:#d4edda
+```rust
+pub fn insert_at(buffer: &Buffer, line: usize, col: usize, text: &str) -> Buffer
+pub fn delete_at(buffer: &Buffer, line: usize, col: usize) -> Buffer
+pub fn delete_line(buffer: &Buffer, line: usize) -> Buffer
+pub fn join_lines(buffer: &Buffer, line: usize) -> Buffer
+pub fn replace_line(buffer: &Buffer, line: usize, text: &str) -> Buffer
+pub fn save_to_file(buffer: &Buffer, path: &Path) -> Result<Buffer>
 ```
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+- Wraps `ropey::Rope` for O(log n) text operations
+- Rope cloning is O(1) due to structural sharing (enables cheap undo snapshots)
+- Carries metadata: id, filename, file_path, modified flag, version counter
 
 <!--
-Presenter notes:
-ADR-005 documents this choice. The key insight: Rust's ownership model
-naturally enforces the boundary. Pure functions in alfred-core take
-inputs and return outputs. The event loop in alfred-tui is the only
-place where mutable state lives. Testing the core requires no mocking.
+Content type: Explanation | Tier: 2
+The immutable pattern means every buffer operation returns a NEW buffer.
+The old buffer survives for undo. Rope structural sharing makes this cheap.
 -->
 
 ---
 
-<!-- Slide 8 -->
-# Decision: Why Functional Core / Imperative Shell?
+# Section 3: Cursor -- Pure Movement Functions
 
-**Documented** (ADR-005):
+## 15 movement functions, all pure
 
-| Approach | Rejected Because |
-|----------|-----------------|
-| Pure FP (monadic effects) | Rust's ownership model fights persistent data structures |
-| Pure OOP (deep trait hierarchies) | Dynamic dispatch (`dyn Trait`) prevents monomorphization; editor data flow is a pipeline, not an object graph |
-| **Hybrid (chosen)** | Pure functions for transforms, `&mut` only at boundaries |
+| Function | Vim equivalent | Behavior |
+|----------|---------------|----------|
+| `move_up/down/left/right` | h/j/k/l | Basic navigation with wrapping |
+| `move_to_line_start/end` | 0 / $ | Line boundaries |
+| `move_to_first_non_blank` | ^ | Skip leading whitespace |
+| `move_to_document_start/end` | gg / G | Document boundaries |
+| `move_word_forward/backward/end` | w / b / e | Word-class transitions |
+| `ensure_within_bounds` | (internal) | Clamp after deletions |
 
-**Consequences**:
-- alfred-core is testable without terminal, Lisp, or filesystem
-- Buffer operations are tested with direct assertions, no mocking
-- Developers must maintain discipline: no `println!` or file I/O in alfred-core
+All functions have the same signature: `fn(cursor: Cursor, buf: &Buffer) -> Cursor`
 
-<!-- Audience: All. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 9 -->
-# alfred-core: The Pure Domain Layer
-
-Seven modules, zero I/O dependencies:
-
-| Module | Responsibility | Lines |
-|--------|---------------|-------|
-| `buffer.rs` | Rope-based text storage (ropey wrapper) | 309 |
-| `cursor.rs` | Position + pure movement functions | 318 |
-| `viewport.rs` | Visible window + scroll adjustment | 230 |
-| `editor_state.rs` | Top-level state aggregation | 165 |
-| `key_event.rs` | Key codes + modifiers (domain types) | 162 |
-| `command.rs` | Named command registry + execution | 144 |
-| `error.rs` | Unified error type (thiserror) | 24 |
-
-**55 tests** with clear Given/When/Then naming.
-
-<!-- Audience: All. Tier 1. Type: Reference -->
-
----
-
-<!-- Slide 10 -->
-# Buffer: Immutable Rope Wrapper
-
-```rust
-pub struct Buffer {
-    id: u64,
-    rope: Rope,           // ropey::Rope -- O(log n) operations
-    filename: Option<String>,
-    modified: bool,
-    version: u64,          // monotonically increasing
-}
-```
-
-All mutations return **new Buffer instances**:
-
-```rust
-pub fn insert_at(buffer: &Buffer, line: usize, column: usize,
-                 text: &str) -> Buffer { ... }
-
-pub fn delete_at(buffer: &Buffer, line: usize, column: usize) -> Buffer { ... }
-```
-
-Free functions, not methods -- keeps the module pure.
-
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
+Tests use **table-driven parametrization** (multiple cases per test function).
 
 <!--
-Presenter notes:
-The Buffer struct fields are private. Access is through free functions:
-line_count(), get_line(), content(), insert_at(), delete_at().
-The version field increments on every mutation -- this enables
-future change detection for rendering optimization.
-ADR implicit: chose ropey over gap buffers (O(n) distant edits)
-and piece tables (no mature Rust crate).
+Content type: Reference | Tier: 2
 -->
 
 ---
 
-<!-- Slide 11 -->
-# Cursor: Pure Movement Functions
+# Section 3: EditorState -- The Aggregation Root
 
-```rust
-pub struct Cursor {
-    pub line: usize,
-    pub column: usize,
-}
-```
-
-Every movement is a pure function: `(Cursor, &Buffer) -> Cursor`
-
-```rust
-pub fn move_down(cursor: Cursor, buf: &Buffer) -> Cursor { ... }
-pub fn move_up(cursor: Cursor, buf: &Buffer) -> Cursor { ... }
-pub fn move_right(cursor: Cursor, buf: &Buffer) -> Cursor { ... }
-pub fn move_left(cursor: Cursor, buf: &Buffer) -> Cursor { ... }
-pub fn ensure_within_bounds(cursor: Cursor, buf: &Buffer) -> Cursor { ... }
-```
-
-Column clamping on vertical movement. Line wrapping on horizontal movement at boundaries.
-
-<!-- Audience: Developers. Tier 2. Type: Reference -->
-
----
-
-<!-- Slide 12 -->
-# EditorState: The Single Mutable Container
+## Single mutable container for the event loop
 
 ```rust
 pub struct EditorState {
@@ -333,641 +249,690 @@ pub struct EditorState {
     pub cursor: Cursor,
     pub viewport: Viewport,
     pub commands: CommandRegistry,
-    pub mode: EditorMode,            // Normal only (Insert in M7)
-    pub active_keymaps: Vec<Keymap>, // Stub (M6)
-    pub hooks: Vec<Hook>,            // Stub (M4)
+    pub mode: String,                    // "normal" | "insert"
+    pub keymaps: HashMap<String, Keymap>,
+    pub active_keymaps: Vec<String>,
+    pub hooks: HookRegistry,
     pub message: Option<String>,
     pub running: bool,
+    pub yank_register: Option<String>,
+    pub undo_stack: Vec<UndoSnapshot>,
+    pub redo_stack: Vec<UndoSnapshot>,
 }
 ```
 
-Owned by the event loop. Passed as `&mut` during command execution, as `&` during rendering.
-
-<!-- Audience: Developers. Tier 2. Type: Reference -->
+EditorState also registers **32 built-in commands** (cursor movement, delete, insert-mode variants, undo/redo, join, yank, paste, change, screen-relative cursors, half-page scroll).
 
 <!--
-Presenter notes:
-EditorState is the single aggregation point. The component-boundaries.md
-doc originally stated "no Rc<RefCell>", but M2 required it for the Lisp
-bridge (closures need shared access to state). This is an example of
-architecture evolving to meet implementation reality.
+Content type: Reference | Tier: 2
+EditorState is the one mutable container. The event loop borrows it,
+dispatches keys, and passes it to the renderer. Lisp bridge closures
+access it through Rc<RefCell<EditorState>>.
 -->
 
 ---
 
-<!-- Slide 13 -->
-# Decision: Why Single-Process Synchronous?
+# Section 4: The Lisp Bridge (alfred-lisp)
 
-**Documented** (ADR-003):
-
-**Key evidence**: Xi editor's retrospective by Raph Levien:
-> "I now firmly believe that the process separation between front-end and core was not a good idea."
-
-| Approach | Why Rejected |
-|----------|-------------|
-| Multi-process (Xi-style) | Author warns against it; complexity overwhelmed development |
-| Async-everywhere (tokio) | Colored function problem; no operations justify async |
-| Thread pool | Not needed for walking skeleton scope |
-| **Single-process sync (chosen)** | Simplest model; matches 40-year Emacs precedent |
-
-**Consequence**: Long Lisp expressions freeze the UI. Acceptable for walking skeleton.
-
-<!-- Audience: All. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 14 -->
-# alfred-lisp: The Lisp Bridge
-
-Two modules connecting the rust_lisp interpreter to editor state:
-
-```mermaid
-graph TD
-    RT["runtime.rs<br/>LispRuntime wrapper<br/>eval() / eval_file()"]
-    BR["bridge.rs<br/>Register Rust closures<br/>as Lisp functions"]
-    RLISP["rust_lisp crate<br/>Tree-walking interpreter"]
-    CORE["alfred-core<br/>EditorState via Rc RefCell"]
-
-    RT --> RLISP
-    BR --> RT
-    BR --> CORE
-
-    style RT fill:#fff3cd
-    style BR fill:#fff3cd
-```
-
-**7 Lisp primitives** currently registered:
-`buffer-insert`, `buffer-delete`, `buffer-content`, `cursor-position`, `cursor-move`, `message`, `current-mode`
-
-<!-- Audience: All. Tier 1. Type: Explanation -->
-
----
-
-<!-- Slide 15 -->
-# Decision: Why rust_lisp Over Janet?
-
-**Documented** (ADR-004):
-
-| Factor | Janet | rust_lisp (chosen) |
-|--------|-------|-------------------|
-| Interop | C FFI bridge required | Native Rust closures |
-| Build | Needs C compiler | `cargo build` only |
-| Debugging | Cross-language FFI | Single language |
-| Features | Rich (green threads, PEG) | Minimal Lisp |
-| Performance | Bytecode VM | Tree-walking |
-| Community | ~3.5k stars | ~300 stars |
-
-**Key trade-off**: Janet is the better language. rust_lisp has better integration.
-
-For a walking skeleton proving architecture, integration quality beats language features.
-
-**Kill signal**: If eval latency exceeds 1ms, evaluate Janet.
-
-<!-- Audience: All. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 16 -->
-# The Lisp Bridge Pattern: Registered Native Closures
-
-```rust
-fn register_buffer_insert(env: Rc<RefCell<Env>>,
-                          state: Rc<RefCell<EditorState>>) {
-    define_native_closure(&env, "buffer-insert", move |_env, args| {
-        let text = extract_string_arg(&args, "buffer-insert")?;
-        let mut editor = state.borrow_mut();
-        let cursor_line = editor.cursor.line;
-        let cursor_column = editor.cursor.column;
-        editor.buffer = buffer::insert_at(
-            &editor.buffer, cursor_line, cursor_column, &text
-        );
-        Ok(Value::NIL)
-    });
-}
-```
-
-Pattern: Rust closure captures `Rc<RefCell<EditorState>>`, registered into Lisp env at startup.
-
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
-
-<!--
-Presenter notes:
-All 7 primitives follow the same pattern:
-1. Extract and validate arguments from Vec<Value>
-2. Borrow editor state (borrow_mut for writes, borrow for reads)
-3. Call pure alfred-core functions
-4. Return Value::NIL or a Lisp value
-Error handling: type mismatches return RuntimeError, not panics.
--->
-
----
-
-<!-- Slide 17 -->
-# Performance: Lisp Eval Latency
-
-Performance baseline tests with a kill signal threshold of **1ms per call**:
-
-| Primitive | Kill Signal | Status |
-|-----------|-----------|--------|
-| Arithmetic `(+ 1 2)` | < 1ms | Pass |
-| `buffer-insert` | < 1ms | Pass |
-| `cursor-move` | < 1ms | Pass |
-| `message` | < 1ms | Pass |
-| `buffer-content` | < 1ms | Pass |
-| `cursor-position` | < 1ms | Pass |
-| `current-mode` | < 1ms | Pass |
-
-Measurement: median of 100 iterations after 10 warmup rounds.
-
-**Verdict**: rust_lisp is viable for per-keystroke command dispatch.
-
-<!-- Audience: All. Tier 2. Type: Reference -->
-
----
-
-<!-- Slide 18 -->
-# alfred-tui: The Imperative Shell
-
-| File | Responsibility | Lines |
-|------|---------------|-------|
-| `app.rs` | Event loop, key conversion, key dispatch | 861 |
-| `renderer.rs` | ratatui rendering, raw mode guard | 322 |
-
-**app.rs is the largest file in the codebase** (861 lines, 38 tests).
-
-It contains three distinct concerns:
-1. **Pure**: `convert_crossterm_key()` -- maps crossterm events to domain KeyEvents
-2. **Pure**: `handle_key_event()` -- updates EditorState from key events
-3. **I/O**: `run()` -- the blocking event loop
-
-<!-- Audience: Developers. Tier 1. Type: Explanation -->
-
-<!--
-Presenter notes:
-app.rs is the top hotspot by both size and change frequency (5 commits).
-It has accumulated responsibility as M2 added the :eval command path
-and the Lisp runtime wiring. The pure functions within it are well-tested,
-but the file itself may benefit from extraction in future milestones.
--->
-
----
-
-<!-- Slide 19 -->
-# Data Flow: Read-Eval-Redisplay Loop
+## Connecting Rust primitives to Lisp
 
 ```mermaid
 sequenceDiagram
+    participant Plugin as Lisp Plugin
+    participant Runtime as LispRuntime
+    participant Bridge as bridge.rs
+    participant State as EditorState
+
+    Plugin->>Runtime: (buffer-insert "hello")
+    Runtime->>Bridge: call native closure
+    Bridge->>State: borrow_mut via Rc<RefCell>
+    Bridge->>State: buffer = insert_at(&buffer, ...)
+    Bridge->>State: cursor = move_right(cursor, &buffer)
+    Bridge-->>Runtime: Value::NIL
+    Runtime-->>Plugin: NIL
+```
+
+<!--
+Content type: Explanation | Tier: 1
+The bridge registers Rust closures into the Lisp environment.
+Each closure captures an Rc<RefCell<EditorState>> for shared access.
+This is the critical integration point: Lisp code can read and mutate
+editor state through well-defined primitive operations.
+-->
+
+---
+
+# Section 4: Bridge Primitives
+
+## 14 primitives expose the editor to Lisp
+
+| Primitive | Purpose |
+|-----------|---------|
+| `(buffer-insert text)` | Insert text at cursor |
+| `(buffer-delete)` | Delete character at cursor |
+| `(buffer-content)` | Return full buffer text |
+| `(cursor-position)` | Return (line column) list |
+| `(cursor-move dir count)` | Move cursor by direction |
+| `(message text)` | Set status message |
+| `(current-mode)` | Return current mode name |
+| `(set-mode name)` | Switch mode and keymap |
+| `(define-command name fn)` | Register a Lisp command |
+| `(add-hook name fn)` | Register a hook callback |
+| `(dispatch-hook name args)` | Fire all hook callbacks |
+| `(make-keymap name)` | Create a named keymap |
+| `(define-key map key cmd)` | Bind key to command |
+| `(set-active-keymap name)` | Activate a keymap |
+
+<!--
+Content type: Reference | Tier: 2
+These 14 primitives are the complete API surface that plugins use
+to interact with the editor. Everything else is pure Lisp.
+-->
+
+---
+
+# Section 5: The Plugin System (alfred-plugin)
+
+## Discovery, metadata, registry, and dependency ordering
+
+```mermaid
+flowchart LR
+    D[plugins/] --> S[discovery::scan]
+    S --> M[PluginMetadata<br/>name, version, deps]
+    M --> T[resolve_load_order<br/>topological sort]
+    T --> R[load_plugin<br/>eval init.lisp]
+    R --> REG[PluginRegistry<br/>tracks commands & hooks]
+```
+
+**Discovery protocol**: Each plugin is a subdirectory under `plugins/` containing `init.lisp` with metadata header comments:
+
+```lisp
+;;; name: vim-keybindings
+;;; version: 0.1.0
+;;; description: Vim-style modal keybindings
+;;; depends: dep1, dep2
+```
+
+<!--
+Content type: Explanation | Tier: 1
+Kahn's algorithm for topological sort ensures dependencies load first.
+Circular dependencies and missing dependencies produce clear errors
+(not crashes). Error reporting is graceful -- broken plugins are skipped.
+-->
+
+---
+
+# Section 5: The Five Plugins
+
+## Everything visible to the user is a plugin
+
+| Plugin | Lines | What it does |
+|--------|-------|-------------|
+| **vim-keybindings** | 52 | Full modal editing: normal/insert modes, 36 keybindings |
+| **basic-keybindings** | 22 | Arrow keys, colon command, backspace |
+| **line-numbers** | 9 | Enables gutter line numbers via render-gutter hook |
+| **status-bar** | 9 | Enables status bar via render-status hook |
+| **test-plugin** | 5 | Demo: registers a "hello" command |
+
+**The key proof**: `vim-keybindings/init.lisp` is 52 lines of Lisp that implements:
+- Normal mode: h/j/k/l, i/I/a/A/o/O, x/d, 0/$, ^, gg/G, w/b/e, J/y/p/c/C, u/Ctrl-r, H/M/L, Ctrl-d/Ctrl-u, :
+- Insert mode: Escape to normal, Backspace
+- Mode switching between normal and insert
+
+<!--
+Content type: Explanation | Tier: 1
+-->
+
+---
+
+# Section 5: Vim Plugin Deep-Dive
+
+## 52 lines of Lisp replaces what would be hundreds of lines of Rust
+
+```lisp
+;; Create normal-mode keymap with hjkl navigation
+(make-keymap "normal-mode")
+(define-key "normal-mode" "Char:h" "cursor-left")
+(define-key "normal-mode" "Char:j" "cursor-down")
+(define-key "normal-mode" "Char:k" "cursor-up")
+(define-key "normal-mode" "Char:l" "cursor-right")
+(define-key "normal-mode" "Char:i" "enter-insert-mode")
+;; ... 30 more bindings including w/b/e, J/y/p, undo/redo ...
+
+;; Create insert-mode keymap
+(make-keymap "insert-mode")
+(define-key "insert-mode" "Escape" "enter-normal-mode")
+(define-key "insert-mode" "Backspace" "delete-backward")
+
+;; Define mode-switching commands
+(define-command "enter-insert-mode" (lambda () (set-mode "insert")))
+(define-command "enter-normal-mode" (lambda () (set-mode "normal")))
+
+;; Start in normal mode
+(set-active-keymap "normal-mode")
+(set-mode "normal")
+```
+
+<!--
+Content type: Explanation | Tier: 2
+This is the architecture validation. The vim plugin uses 3 bridge
+primitives (make-keymap, define-key, define-command) and 2 mode
+primitives (set-mode, set-active-keymap) to implement full modal editing.
+-->
+
+---
+
+# Section 6: The Imperative Shell (alfred-tui)
+
+## Event loop architecture
+
+```mermaid
+sequenceDiagram
+    participant Loop as Event Loop
+    participant State as EditorState
+    participant Hooks as Hook Dispatch
+    participant Render as Renderer
     participant Term as Terminal
-    participant App as app.rs (event loop)
-    participant Core as alfred-core
-    participant Lisp as alfred-lisp
 
     loop while state.running
-        App->>Term: render_frame(&state)
-        Term->>App: crossterm::event::read()
-        App->>App: convert_crossterm_key(ct_key)
-        App->>Core: handle_key_event(&mut state, key)
-        alt Arrow key
-            Core->>Core: cursor::move_*(cursor, &buffer)
-            Core->>Core: viewport::adjust(viewport, &cursor)
-        else :eval expression
-            App->>Lisp: runtime.eval(expression)
-            Lisp->>Core: bridge primitives modify state
-            Lisp->>App: result or error
-            App->>Core: state.message = result
-        else :q / :quit
-            Core->>Core: state.running = false
+        Loop->>Hooks: compute_gutter_content()
+        Loop->>Hooks: compute_status_content()
+        Loop->>Render: render_frame(state, gutter, status)
+        Render->>Term: draw via ratatui
+        Loop->>Term: read key event (blocking)
+        Term-->>Loop: crossterm KeyEvent
+        Loop->>Loop: convert_crossterm_key (pure)
+        Loop->>State: handle_key_event (pure)
+        State-->>Loop: (InputState, DeferredAction)
+        alt DeferredAction::ExecCommand
+            Loop->>State: command::execute()
+        else DeferredAction::Eval
+            Loop->>State: eval_and_display()
+        else DeferredAction::SaveBuffer
+            Loop->>State: save_to_file()
         end
     end
 ```
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 1
+The event loop has a clean separation: pure conversion (crossterm -> KeyEvent),
+pure handling (key -> deferred action), then impure execution (deferred action).
+This avoids RefCell double-borrow panics.
+-->
 
 ---
 
-<!-- Slide 20 -->
-# The :eval Command Path (M2 Addition)
+# Section 6: Key Dispatch Pipeline
 
-```mermaid
-graph TD
-    A[User types ':'] --> B["Enter Command mode<br/>InputState::Command"]
-    B --> C["Accumulate chars<br/>Display ':eval ...'"]
-    C --> D["User presses Enter"]
-    D --> E{"Parse command"}
-    E -->|"eval ..."| F["Extract expression"]
-    E -->|"q/quit"| G["state.running = false"]
-    E -->|other| H["Unknown command error"]
-    F --> I["Drop EditorState borrow"]
-    I --> J["eval_and_display()"]
-    J --> K["runtime.eval(expr)"]
-    K -->|Ok| L["Display result as message"]
-    K -->|Err| M["Display error as message"]
+## From keystroke to command execution
+
+```
+Terminal keystroke
+    |
+    v
+crossterm::event::read()          -- I/O: reads raw key
+    |
+    v
+convert_crossterm_key()           -- Pure: maps to alfred-core KeyEvent
+    |
+    v
+handle_key_event(state, key)      -- Pure: resolves via keymaps
+    |                                returns DeferredAction
+    v
+resolve_key(state, key)           -- Pure: iterates active_keymaps
+    |
+    v
+DeferredAction::ExecCommand(name) -- Deferred: executed after borrow drops
+    |
+    v
+command::execute(state, name)     -- Looks up handler, calls it
 ```
 
-**Key design detail**: EditorState borrow is dropped before Lisp eval to avoid `RefCell` conflicts -- bridge closures also borrow the state.
+**Why deferred execution?** Lisp commands capture `Rc<RefCell<EditorState>>` and call `borrow_mut()` internally. If the event loop already holds a borrow on the RefCell, this would panic. Deferring the command execution until after the event loop drops its borrow avoids this.
 
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 2
+Documented: Several commits explicitly reference RefCell double-borrow
+fixes (06847bf, 765f95f). This is a well-understood constraint.
+-->
 
 ---
 
-<!-- Slide 21 -->
-# Rendering: ratatui + TestBackend
+# Section 6: Colon Command System
+
+## Vim-style ex commands
+
+| Command | Action |
+|---------|--------|
+| `:q` | Quit (warns on unsaved changes) |
+| `:q!` | Force quit (discards changes) |
+| `:w` | Save to buffer's file path |
+| `:w path` | Save to explicit path |
+| `:wq` | Save and quit |
+| `:e path` | Open a file |
+| `:eval expr` | Evaluate Lisp expression |
+| `:cmd-name` | Execute any registered command |
+
+The colon command system uses `InputState::Command(String)` to accumulate keystrokes until Enter or Escape.
+
+<!--
+Content type: Reference | Tier: 2
+-->
+
+---
+
+# Section 6: Renderer
+
+## Terminal rendering via ratatui
+
+The renderer (`renderer.rs`, 708 lines) handles:
+
+1. **Layout computation**: text area, gutter area, status bar area, message area
+2. **Visible line collection**: maps viewport scroll to buffer lines
+3. **Gutter rendering**: line numbers in left column (when plugin active)
+4. **Cursor positioning**: accounts for gutter width offset
+5. **Raw mode management**: RAII guard ensures terminal cleanup
+
+```
++-------+---------------------------+
+| 1     | fn main() {               |  <- text area
+| 2     |     println!("hello");    |
+| 3     | }                         |
++-------+---------------------------+
+| sample.rs  Ln 1, Col 0  NORMAL   |  <- status bar
++-----------------------------------+
+| :w                                |  <- message line
++-----------------------------------+
+```
+
+<!--
+Content type: Explanation | Tier: 2
+-->
+
+---
+
+# Section 7: Design Decisions
+
+## 6 documented ADRs
+
+| ADR | Decision | Key rationale |
+|-----|----------|---------------|
+| ADR-001 | Adopt existing Lisp (not build custom) | Interpreter is means to end, not the end |
+| ADR-002 | Plugin-first architecture | Strongest proof of extensibility |
+| ADR-003 | Single-process synchronous | Xi post-mortem warns against multi-process |
+| ADR-004 | rust_lisp over Janet | Zero FFI friction > richer language features |
+| ADR-005 | Functional core / imperative shell | Pure core is testable without mocking |
+| ADR-006 | 5-crate Cargo workspace | Compile-time boundary enforcement |
+
+Every ADR follows the Context > Decision > Alternatives > Consequences format.
+
+<!--
+Content type: Reference | Tier: 1
+All 6 decisions are documented. None are inferred.
+-->
+
+---
+
+# Section 7: ADR-002 Deep-Dive
+
+## Plugin-first: the defining architectural decision
+
+**Context**: How much functionality in Rust kernel vs. Lisp extension layer?
+
+**Decision**: Thin kernel. Everything beyond core primitives is a Lisp plugin.
+
+**Evidence informing decision**:
+- Emacs: ~70% Lisp, ~30% C -- even cursor movement is Lisp
+- Helix: No plugin system -- most-cited limitation
+- Neovim: LSP client is a Lua plugin (proves non-trivial features work)
+
+**Consequence validated**: Vim modal editing (36 keybindings, 2 modes, mode switching) works as 52 lines of Lisp. The plugin API was sufficient for a complex, stateful feature.
+
+<!--
+Content type: Explanation | Tier: 1
+This is the architectural hypothesis that the walking skeleton
+was designed to test. M7 completion validated it.
+-->
+
+---
+
+# Section 7: ADR-004 Deep-Dive
+
+## rust_lisp over Janet: integration over features
+
+**Key trade-off**: Janet is the better language (bytecode VM, green threads, larger community). rust_lisp provides better integration (native Rust, no FFI, direct closure registration).
+
+**Validation**: Performance baselines confirm rust_lisp is adequate:
+- All 7 core primitives eval under 1ms (kill signal threshold)
+- Per-keystroke Lisp dispatch has no perceptible latency
+
+**Migration path**: If rust_lisp proves insufficient, migration is isolated to `alfred-lisp` crate. The bridge primitive API and plugin Lisp source would need adaptation, but `alfred-core`, `alfred-tui`, and `alfred-bin` remain unaffected.
+
+<!--
+Content type: Explanation | Tier: 2
+Documented: ADR-004 explicitly defines the 1ms kill signal and
+the migration path. Performance baselines exist as tests in runtime.rs.
+-->
+
+---
+
+# Section 8: Undo/Redo Architecture
+
+## Rope snapshots for zero-cost undo
 
 ```rust
-pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>,
-                                state: &EditorState) -> io::Result<()> {
-    terminal.draw(|frame| {
-        let text_area = compute_text_area(area, state.message.is_some());
-        let visible_lines = collect_visible_lines(state, text_area.height);
-        frame.render_widget(Paragraph::new(visible_lines), text_area);
-        // Message line on bottom row
-        // Cursor position relative to viewport
-    })?;
-    Ok(())
+pub struct UndoSnapshot {
+    pub buffer: Buffer,   // Rope clone is O(1) via structural sharing
+    pub cursor: Cursor,   // Copy type, 16 bytes
 }
 ```
 
-**Key pattern**: `render_frame` is generic over `Backend`, enabling `TestBackend` in tests.
+**How it works**:
+1. Before a destructive edit (J, dd, cc, C, yy, p), push current state to undo_stack
+2. On `u` (undo): pop from undo_stack, push current to redo_stack, restore snapshot
+3. On `Ctrl-r` (redo): pop from redo_stack, push current to undo_stack, restore snapshot
 
-The renderer is fully tested without a real terminal.
+**Why this works**: `ropey::Rope::clone()` is O(1) because Rope uses structural sharing (like a persistent data structure). Cloning the entire buffer for each undo snapshot costs essentially nothing.
 
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 2
+Inferred: The undo system design was chosen for its simplicity and
+the fact that ropey's structural sharing makes whole-buffer snapshots cheap.
+No ADR documents this choice explicitly.
+-->
 
 ---
 
-<!-- Slide 22 -->
-# alfred-bin: The Composition Root
+# Section 8: Hook System
+
+## Plugins extend the editor via named hooks
+
+```mermaid
+flowchart LR
+    P1[line-numbers plugin] -->|add-hook 'render-gutter'| HR[HookRegistry]
+    P2[status-bar plugin] -->|add-hook 'render-status'| HR
+    EL[Event Loop] -->|dispatch_hook 'render-gutter'| HR
+    EL -->|dispatch_hook 'render-status'| HR
+    HR -->|callback results| EL
+```
+
+Two hooks are currently active:
+- `render-gutter`: Signals that line numbers should be displayed
+- `render-status`: Signals that the status bar should be displayed
+
+**Design pattern**: The hook callback's *presence* is the signal. The actual formatting (line number width, status bar content) is done in Rust for performance. The Lisp callback is a lightweight sentinel.
+
+<!--
+Content type: Explanation | Tier: 2
+-->
+
+---
+
+# Section 9: Test Architecture
+
+## 254 tests across 4 crates
+
+| Crate | Tests | Test strategy |
+|-------|-------|--------------|
+| alfred-core | 94 | Table-driven parametrization, acceptance + unit |
+| alfred-lisp | 59 | Acceptance (eval arithmetic), unit, performance baseline |
+| alfred-plugin | 25 | Integration (scan + load), acceptance (dependency ordering) |
+| alfred-tui | 76 | Integration (key dispatch), ratatui TestBackend rendering |
+
+**Testing principles**:
+- Given/When/Then naming convention
+- Acceptance tests first, unit tests for edge cases
+- Table-driven parametrization for boundary cases
+- No mocking in core tests (pure functions need no mocks)
+- Performance baseline tests with 1ms kill signal threshold
+
+<!--
+Content type: Reference | Tier: 1
+-->
+
+---
+
+# Section 9: Test Quality Metrics
+
+## Farley Index 8.3 -- zero tautology theatre
+
+**Test budget discipline**: Each behavior gets a test budget (behaviors x 2 maximum). Comments like `// Test Budget: 5 behaviors x 2 = 10 max` appear in hook.rs.
+
+**Table-driven tests** eliminate input-variation explosion:
 
 ```rust
-fn run_editor(file_path: Option<&str>)
-    -> Result<(), Box<dyn std::error::Error>>
-{
-    let (width, height) = crossterm::terminal::size()?;
-    let state = Rc::new(RefCell::new(editor_state::new(width, height)));
-
-    if let Some(path_str) = file_path {
-        let buffer = Buffer::from_file(Path::new(path_str))?;
-        state.borrow_mut().buffer = buffer;
+#[test]
+fn move_down_boundary_cases() {
+    let cases: Vec<(&str, Cursor, Cursor, &str)> = vec![
+        ("aaa\nbbb\nccc", new(0,0), new(1,0), "first to second"),
+        ("aaa\nbbb",     new(1,0), new(1,0), "last stays"),
+        ("abcdef\nxy",   new(0,5), new(1,2), "clamps column"),
+    ];
+    for (buffer, start, expected, label) in &cases {
+        let buf = Buffer::from_string(buffer);
+        assert_eq!(move_down(*start, &buf), *expected, "{}", label);
     }
-
-    let runtime = LispRuntime::new();
-    bridge::register_core_primitives(&runtime, state.clone());
-    alfred_tui::app::run(&state, &runtime)?;
-    Ok(())
 }
 ```
 
-56 lines. Wires all crates together. No business logic.
-
-<!-- Audience: Developers. Tier 2. Type: Reference -->
-
----
-
-<!-- Slide 23 -->
-# Decision: Why Adopt a Lisp Instead of Building One?
-
-**Documented** (ADR-001):
-
-**Context**: Building a Lisp is a project-sized effort (MAL has 11 steps from tokenizer through self-hosting).
-
-| Approach | Assessment |
-|----------|-----------|
-| Build custom Lisp (MAL) | 3-4 weeks; interpreter bugs would mask architecture issues |
-| Use Lua (Neovim approach) | No homoiconicity; Alfred's identity is Lisp-based |
-| **Adopt existing (chosen)** | Focus on FFI bridge, not language implementation |
-
-**Consequence**: Less control over syntax/semantics, but 3-4 weeks saved and inherited reliability.
-
-**Migration path**: If rust_lisp proves insufficient post-skeleton, migration is isolated to `alfred-lisp` crate.
-
-<!-- Audience: All. Tier 2. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 2
+-->
 
 ---
 
-<!-- Slide 24 -->
-# Decision: Why Plugin-First?
+# Section 10: CI/CD and Quality Gates
 
-**Documented** (ADR-002):
-
-**Evidence from editor case studies**:
-- Emacs: ~70% Lisp, ~30% C. Even cursor movement is Lisp.
-- Neovim: Built-in LSP client is a Lua plugin.
-- Helix: No plugin system -- most-cited community limitation.
-
-**The boundary test** -- a component belongs in the kernel if and only if:
-1. It is infrastructure plugins depend on (command registry, hook system), OR
-2. It requires direct hardware/OS access (terminal I/O), OR
-3. It is performance-critical (rope operations, key resolution)
-
-If none apply, it is a plugin.
-
-<!-- Audience: All. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 25 -->
-# Kernel vs Plugin Boundary (M3-M7)
+## GitHub Actions pipeline (4 parallel jobs)
 
 ```mermaid
-graph TB
-    subgraph "Kernel (Rust)"
-        K1[Rope buffer operations]
-        K2[Cursor movement logic]
-        K3[Keymap resolver]
-        K4[Command registry]
-        K5[Hook dispatcher]
-        K6[Mode state manager]
-        K7[Event loop + rendering]
-    end
-    subgraph "Plugins (Lisp) -- M3 onward"
-        P1["Line Numbers (M4)"]
-        P2["Status Bar (M5)"]
-        P3["Basic Keybindings (M6)"]
-        P4["Vim Modal Editing (M7)"]
-    end
-    P1 -.->|render-gutter-hook| K5
-    P2 -.->|render-status-hook| K5
-    P3 -.->|define-key| K3
-    P4 -.->|set-mode, define-key| K3
-    P4 -.->|set-mode| K6
+flowchart LR
+    PR[Push / PR] --> C[cargo check]
+    PR --> T[cargo test --workspace]
+    PR --> F[cargo fmt --check]
+    PR --> CL[cargo clippy -D warnings]
 ```
 
-<!-- Audience: All. Tier 1. Type: Explanation -->
+**Pre-commit hooks** (local):
+- `scripts/pre-commit`: runs fmt, clippy, and test before each commit
+- `scripts/setup-hooks.sh`: installs the pre-commit hook
+
+**Additional quality measures**:
+- `RUSTFLAGS="-Dwarnings"` in CI -- all warnings are errors
+- Clippy with `-D warnings` -- no lint violations allowed
+- Per-feature mutation testing strategy (documented in CLAUDE.md)
+
+<!--
+Content type: Reference | Tier: 2
+-->
 
 ---
 
-<!-- Slide 26 -->
-# Testing Strategy
+# Section 11: Hotspot Analysis
 
-**131 tests** across 4 crates (alfred-plugin has 1 stub test, alfred-bin has 0):
+## Files ranked by complexity x change frequency
 
-| Crate | Tests | Assertions | Avg Assert/Test |
-|-------|-------|-----------|----------------|
-| alfred-core | 55 | ~95 | 1.7 |
-| alfred-lisp | 37 | ~65 | 1.8 |
-| alfred-tui | 38 | ~60 | 1.6 |
-| alfred-plugin | 1 | 1 | 1.0 |
+| File | Lines | Changes | Hotspot score |
+|------|-------|---------|---------------|
+| `alfred-tui/app.rs` | 3,301 | 24 | **HIGH** |
+| `alfred-core/editor_state.rs` | 1,203 | 14 | **HIGH** |
+| `alfred-lisp/bridge.rs` | 1,813 | 13 | **MEDIUM** |
+| `alfred-core/cursor.rs` | 727 | 7 | **MEDIUM** |
+| `alfred-core/buffer.rs` | 672 | 6 | **LOW** |
 
-**Testing approach**:
-- Given/When/Then naming convention throughout
-- Acceptance tests first, then unit tests per behavior
-- `TestBackend` from ratatui enables terminal-free rendering tests
-- Performance baseline tests with kill signal thresholds
+**app.rs** is the top hotspot: it is both the largest file and the most frequently changed. This makes sense -- the event loop is the integration point where new features (colon commands, deferred actions, save/open) converge.
 
-<!-- Audience: All. Tier 1. Type: Reference -->
+**Recommendation**: Consider extracting colon command dispatch and deferred action execution into separate modules to reduce app.rs complexity.
 
----
-
-<!-- Slide 27 -->
-# Test Quality Assessment
-
-**Strengths**:
-- Every public function has tests
-- Acceptance tests cover end-to-end scenarios (key sequence -> state change)
-- Pure functions tested without mocking -- direct input/output assertions
-- Performance tests guard Lisp eval latency
-
-**Areas for improvement** (Inferred):
-- Average 1.7 assertions per test -- adequate but could be richer
-- No property-based testing yet (CLAUDE.md prescribes it as default strategy)
-- Acceptance tests in `tests/acceptance/` are all `#[ignore]` stubs
-- No mutation testing output found (though CLAUDE.md specifies per-feature strategy)
-
-<!-- Audience: All. Tier 2. Type: Explanation -->
+<!--
+Content type: Explanation | Tier: 2
+-->
 
 ---
 
-<!-- Slide 28 -->
-# Documentation Quality
+# Section 11: Hotspot Deep-Dive -- app.rs
 
-**Exceptional for a project of this size**:
+## 3,301 lines doing 4 distinct jobs
 
-| Document Type | Count | Quality |
-|---------------|-------|---------|
-| ADRs | 6 | Full Context/Decision/Consequences format |
-| Architecture docs | 4 | C4 diagrams, data models, boundaries, tech stack |
-| Walking skeleton roadmap | 1 | 7 milestones with acceptance criteria and kill signals |
-| Discovery docs | 4 | Problem validation, lean canvas, opportunity tree |
-| CLAUDE.md | 1 | Development paradigm and project structure |
+| Responsibility | Lines (approx) | Extraction candidate? |
+|---------------|----------------|----------------------|
+| Key conversion (crossterm -> KeyEvent) | ~70 | Small, stable |
+| handle_key_event + colon dispatch | ~130 | Yes -- command parser |
+| Deferred action execution | ~150 | Yes -- executor module |
+| Event loop (run function) | ~170 | Tightly coupled to above |
+| Tests | ~2,700 | Largest share |
 
-ADRs cover every major architectural decision. Each records alternatives considered and why they were rejected.
+**app.rs test mass**: 76 tests account for ~2,700 of the 3,301 lines. The production code is ~600 lines -- reasonable for an event loop integration point.
 
-<!-- Audience: All. Tier 1. Type: Reference -->
+**Verdict**: The hotspot is primarily test mass, not production code complexity. The production logic is well-structured with pure functions separated from I/O.
 
----
-
-<!-- Slide 29 -->
-# Code Hotspots
-
-Files ranked by (lines x change frequency):
-
-| File | Lines | Commits | Hotspot Score |
-|------|-------|---------|--------------|
-| `alfred-tui/src/app.rs` | 861 | 5 | 4,305 |
-| `alfred-lisp/src/bridge.rs` | 557 | 3 | 1,671 |
-| `alfred-lisp/src/runtime.rs` | 487 | 2 | 974 |
-| `alfred-tui/src/renderer.rs` | 322 | 2 | 644 |
-| `alfred-core/src/cursor.rs` | 318 | 2 | 636 |
-
-**app.rs** is the clear hotspot -- largest file and most frequently changed. It accumulated the event loop, key conversion, key dispatch, command-line mode, and Lisp eval wiring across M1 and M2.
-
-<!-- Audience: Developers. Tier 2. Type: Reference -->
+<!--
+Content type: Explanation | Tier: 3
+-->
 
 ---
 
-<!-- Slide 30 -->
-# Risk: app.rs Complexity Growth
+# Section 12: Data Flow
 
-**Current state**: 861 lines with three distinct responsibilities mixed together.
-
-**Pattern observed**: Each milestone adds to this file:
-- M1: Event loop + arrow key handling
-- M2: Command-line mode (`:eval`, `:q`) + Lisp runtime wiring
-
-**Projection**: M6 (keybinding plugin) will need to replace the hardcoded key dispatch with keymap resolution -- a significant refactor of app.rs.
-
-**Recommendation** (Inferred): Extract before M6:
-- `key_conversion.rs` -- pure crossterm-to-domain mapping
-- `key_dispatch.rs` -- pure key event handling
-- `app.rs` -- event loop I/O only
-
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 31 -->
-# Risk: Rc RefCell vs Design Docs
-
-**Tension identified**:
-
-The component-boundaries.md document states:
-> "This is deliberately simple. The single-owner model avoids Rust's borrow checker complexity for shared mutable state (no `Rc<RefCell<T>>`)."
-
-But M2 implementation **uses** `Rc<RefCell<EditorState>>` because Lisp bridge closures need shared access to editor state.
-
-**Impact**: Low. The `Rc<RefCell>` is confined to the event loop and bridge boundary. The core domain remains pure. But the design docs should be updated to reflect this reality.
-
-<!-- Audience: Developers. Tier 3. Type: Explanation -->
-
----
-
-<!-- Slide 32 -->
-# Crate Structure: What Exists vs What Is Planned
+## From file open to rendered frame
 
 ```mermaid
-graph TD
-    subgraph "Implemented (M1-M2)"
-        CORE["alfred-core<br/>7 modules, 55 tests"]
-        LISP["alfred-lisp<br/>2 modules, 37 tests"]
-        TUI["alfred-tui<br/>2 modules, 38 tests"]
-        BIN["alfred-bin<br/>main.rs, 0 tests"]
-    end
-    subgraph "Stub (M3+)"
-        PLUGIN["alfred-plugin<br/>available() returns false<br/>1 test"]
-    end
-    subgraph "Not Yet Created (M4+)"
-        PLUGINS["plugins/<br/>line-numbers/<br/>status-bar/<br/>basic-keybindings/<br/>vim-keybindings/"]
-    end
+sequenceDiagram
+    participant User
+    participant Main as main.rs
+    participant Lisp as LispRuntime
+    participant Plugins as plugins/
+    participant Loop as Event Loop
+    participant Render as Renderer
 
-    style CORE fill:#d4edda
-    style LISP fill:#d4edda
-    style TUI fill:#d4edda
-    style BIN fill:#d4edda
-    style PLUGIN fill:#fff3cd
-    style PLUGINS fill:#f8d7da
+    User->>Main: alfred myfile.txt
+    Main->>Main: Buffer::from_file("myfile.txt")
+    Main->>Lisp: LispRuntime::new()
+    Main->>Lisp: register_core_primitives()
+    Main->>Lisp: register_define_command()
+    Main->>Lisp: register_hook_primitives()
+    Main->>Lisp: register_keymap_primitives()
+    Main->>Plugins: discovery::scan("plugins/")
+    Main->>Plugins: resolve_load_order()
+    Plugins->>Lisp: eval_file(vim-keybindings/init.lisp)
+    Plugins->>Lisp: eval_file(line-numbers/init.lisp)
+    Plugins->>Lisp: eval_file(status-bar/init.lisp)
+    Main->>Loop: app::run()
+    Loop->>Render: render_frame()
+    Render->>User: Terminal output
 ```
 
-<!-- Audience: All. Tier 1. Type: Reference -->
+<!--
+Content type: Explanation | Tier: 2
+The startup sequence is linear: create state, register bridge,
+discover plugins, load plugins, run event loop.
+No lazy initialization, no dependency injection framework.
+-->
 
 ---
 
-<!-- Slide 33 -->
-# What M3 Needs to Build
+# Section 13: Risks and Evolution
 
-The plugin system (alfred-plugin) requires:
-
-1. **Plugin discovery** -- scan `plugins/` directory for `init.lisp` files
-2. **Metadata parsing** -- extract name, version, dependencies from Lisp source
-3. **Topological sort** -- resolve plugin load order by dependencies
-4. **Lifecycle management** -- init, cleanup, unload with command/hook/keymap tracking
-5. **Error isolation** -- plugin load failures must not crash the editor
-
-**New primitives needed** (per architecture doc):
-- `make-keymap`, `define-key`, `set-active-keymap`
-- `define-command`, `execute-command`
-- `add-hook`, `remove-hook`
-- `set-mode`
-
-<!-- Audience: Developers. Tier 2. Type: Explanation -->
-
----
-
-<!-- Slide 34 -->
-# Design Decisions Summary
-
-| # | Decision | Status | Rationale (short) |
-|---|----------|--------|-------------------|
-| ADR-001 | Adopt Lisp, don't build | Documented | Interpreter is means, not end |
-| ADR-002 | Plugin-first architecture | Documented | Prove architecture, not features |
-| ADR-003 | Single-process synchronous | Documented | Xi retrospective; Emacs precedent |
-| ADR-004 | rust_lisp over Janet | Documented | Integration quality > language features |
-| ADR-005 | Functional core / imperative shell | Documented | Pure testability; Rust ownership alignment |
-| ADR-006 | 5-crate workspace | Documented | Compile-time boundary enforcement |
-| (impl) | `Rc<RefCell>` for Lisp bridge | Inferred | Bridge closures need shared state access |
-
-<!-- Audience: All. Tier 1. Type: Reference -->
-
----
-
-<!-- Slide 35 -->
-# Tech Stack At a Glance
-
-| Layer | Technology | Why This One |
-|-------|-----------|-------------|
-| Language | Rust (stable) | Safety + performance; Helix/Zed validate for editors |
-| Text buffer | ropey 1.x | O(log n) all ops; used by Helix in production |
-| Terminal I/O | crossterm 0.28 | Cross-platform; default ratatui backend |
-| TUI framework | ratatui 0.29 | Immediate-mode; diff-based rendering |
-| Lisp | rust_lisp 0.18 | Native Rust; no FFI boundary |
-| Error handling | thiserror 1.x | Derive macro for error enums |
-
-All dependencies are MIT-licensed open source. No proprietary dependencies.
-
-<!-- Audience: All. Tier 1. Type: Reference -->
-
----
-
-<!-- Slide 36 -->
-# Getting Started
-
-```bash
-# Clone and build
-git clone <repo-url>
-cd alfred
-cargo build
-
-# Run with a file
-cargo run --bin alfred -- path/to/file.txt
-
-# Run without a file (empty buffer)
-cargo run --bin alfred
-
-# Inside the editor
-# Arrow keys: navigate
-# :q Enter:  quit
-# :eval (+ 1 2) Enter: evaluate Lisp
-# :eval (message "hello") Enter: set message
-
-# Run all tests
-cargo test
-
-# Run a specific crate's tests
-cargo test -p alfred-core
-cargo test -p alfred-lisp
-```
-
-<!-- Audience: All. Tier 1. Type: How-To -->
-
----
-
-<!-- Slide 37 -->
-# Key Risks and Mitigations
+## Current architectural risks
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| app.rs grows into god-file | Medium | Extract before M6 keybinding refactor |
-| rust_lisp maintenance stalls | Medium | Simple enough to fork; migration path to Janet exists |
-| Plugin API insufficient for modal editing | High | M7 is the definitive test; kill signal defined |
-| `Rc<RefCell>` borrow panics at runtime | Low | Confined to event loop boundary; tested paths |
-| Property-based testing not implemented | Low | Prescribed in CLAUDE.md but not yet adopted |
+| app.rs size (3,301 lines) | Medium | ~2,700 are tests; production code is ~600 lines |
+| rust_lisp maintenance risk | Medium | Simple enough to fork; migration path documented in ADR-004 |
+| No async I/O | Low | By design (ADR-003); not needed until LSP integration |
+| Single-author bus factor | Medium | 6 ADRs + this walkthrough document design rationale |
+| PluginRegistry not stored on EditorState | Low | Comment in main.rs notes this is deferred |
 
-<!-- Audience: All. Tier 2. Type: Reference -->
+<!--
+Content type: Explanation | Tier: 1
+-->
 
 ---
 
-<!-- Slide 38 -->
-# Summary
+# Section 13: Evolution Path
 
-**Alfred is a well-architected proof-of-concept** at the midpoint of its walking skeleton:
+## What comes next after M9
 
-- **Clean separation**: Pure core (1,256 lines, 55 tests) with no I/O dependencies
-- **Documented decisions**: 6 ADRs with full context/decision/consequences
-- **Working Lisp bridge**: 7 primitives, all under 1ms latency threshold
-- **Test discipline**: 131 tests, Given/When/Then naming, TestBackend for rendering
+**Natural next milestones** (inferred from architecture):
 
-**What remains** (M3-M7): The hard part -- proving that keybindings, line numbers, status bar, and modal editing all work as Lisp plugins on this foundation.
-
-**M7 completion = architecture validated.**
-
-<!-- Audience: All. Tier 1. Type: Explanation -->
+1. **Syntax highlighting**: Hook-based, would add a `render-highlight` hook. Requires async-capable pipeline if tree-sitter is used.
+2. **LSP integration**: Would require ADR-003 evolution (single-threaded to async I/O for language server communication).
+3. **Multi-buffer support**: EditorState currently holds one buffer. Would need buffer list management.
+4. **Visual mode**: Vim visual selection (v, V, Ctrl-v). Requires selection range on EditorState.
+5. **Search and replace**: `/pattern` and `:%s/old/new/g`. Requires regex integration.
+6. **Plugin hot-reload**: PluginRegistry already tracks commands per plugin; unload_plugin_with_cleanup exists.
 
 <!--
-Presenter notes:
-The strongest indicator of this project's quality is the decision trail.
-Every major choice has an ADR with alternatives considered and rejected.
-The code follows the documented architecture faithfully, with the small
-exception of Rc<RefCell> in the Lisp bridge path. The test suite is
-thorough for the implemented scope. The main risk going forward is
-whether the plugin API will be sufficient for complex features like
-modal editing -- that's exactly what M7 is designed to test.
+Content type: Explanation | Tier: 3
+All items above are inferred from the current architecture's
+extension points and gaps. None are documented as planned features.
+-->
+
+---
+
+# Section 14: Getting Started
+
+## For new contributors
+
+**Build and run**:
+```bash
+cargo build --workspace        # Build all 5 crates
+cargo test --workspace         # Run all 254 tests
+cargo run --bin alfred         # Run with empty buffer
+cargo run --bin alfred file.txt  # Open a file
+```
+
+**Key files to read first**:
+1. `CLAUDE.md` -- Project conventions and paradigm
+2. `docs/adrs/` -- All 6 architectural decisions
+3. `crates/alfred-core/src/editor_state.rs` -- The aggregation root
+4. `plugins/vim-keybindings/init.lisp` -- The architecture proof
+
+<!--
+Content type: How-To | Tier: 1
+-->
+
+---
+
+# Section 14: Codebase Navigation Guide
+
+## Where to find things
+
+| Want to... | Look in... |
+|-----------|-----------|
+| Understand the domain model | `alfred-core/src/` (buffer, cursor, viewport) |
+| See how keys become commands | `alfred-tui/src/app.rs` (handle_key_event) |
+| See how Lisp talks to Rust | `alfred-lisp/src/bridge.rs` (register_core_primitives) |
+| Add a new Lisp primitive | `alfred-lisp/src/bridge.rs` (follow register_* pattern) |
+| Add a new plugin | `plugins/your-plugin/init.lisp` (follow metadata header format) |
+| Add a new built-in command | `alfred-core/src/editor_state.rs` (register_builtin_commands) |
+| Add a new vim keybinding | `plugins/vim-keybindings/init.lisp` (define-key) |
+| Understand rendering | `alfred-tui/src/renderer.rs` (render_frame) |
+| See the startup sequence | `alfred-bin/src/main.rs` (run_editor) |
+
+<!--
+Content type: How-To | Tier: 1
+-->
+
+---
+
+# Summary
+
+## Alfred in one slide
+
+**What**: An Emacs-inspired text editor proving plugin-first architecture works.
+
+**How**: 5-crate Rust workspace with functional core / imperative shell.
+Lisp (rust_lisp) as extension language. 14 bridge primitives connect Lisp to Rust.
+
+**Proof**: Vim modal editing (36 keybindings, 2 modes) is 52 lines of Lisp.
+254 tests (Farley Index 8.3). 6 documented ADRs. Zero tautology theatre.
+
+**Key decisions**: Adopt Lisp (not build), plugin-first (not kernel-first), single-process (not async), rust_lisp (not Janet), functional core (not OOP), 5 crates (not monolith).
+
+**Status**: Walking skeleton complete (M1-M7) + file save/open (M8) + extended vim keybindings (M9). 69 commits, 11,071 lines of Rust.
+
+<!--
+Content type: Explanation | Tier: 1
 -->
