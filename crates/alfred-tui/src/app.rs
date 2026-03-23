@@ -161,6 +161,8 @@ pub(crate) enum DeferredAction {
     SaveBuffer(Option<String>),
     /// Open a file into the buffer
     OpenFile(String),
+    /// Save the current buffer then quit (from :wq)
+    SaveAndQuit,
 }
 
 /// Executes a colon command, returning the new input state and a deferred action.
@@ -171,9 +173,19 @@ pub(crate) enum DeferredAction {
 fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState, DeferredAction) {
     match command {
         "q" | "quit" => {
+            if state.buffer.is_modified() {
+                state.message = Some("Unsaved changes! Use :q! to force quit".to_string());
+                (InputState::Normal, DeferredAction::None)
+            } else {
+                state.running = false;
+                (InputState::Normal, DeferredAction::None)
+            }
+        }
+        "q!" => {
             state.running = false;
             (InputState::Normal, DeferredAction::None)
         }
+        "wq" => (InputState::Normal, DeferredAction::SaveAndQuit),
         "w" => {
             // Save to the buffer's existing file path
             (InputState::Normal, DeferredAction::SaveBuffer(None))
@@ -478,6 +490,33 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                             }
                             Err(e) => {
                                 state_rc.borrow_mut().message = Some(format!("{}", e));
+                            }
+                        }
+                    }
+                    DeferredAction::SaveAndQuit => {
+                        let mut state = state_rc.borrow_mut();
+                        let save_path = state.buffer.file_path().map(|p| p.to_path_buf());
+                        match save_path {
+                            Some(path) => {
+                                match alfred_core::buffer::save_to_file(&state.buffer, &path) {
+                                    Ok(saved_buffer) => {
+                                        let byte_count =
+                                            alfred_core::buffer::content(&saved_buffer).len();
+                                        state.buffer = saved_buffer;
+                                        state.message = Some(format!(
+                                            "\"{}\" written, {} bytes",
+                                            path.display(),
+                                            byte_count
+                                        ));
+                                        state.running = false;
+                                    }
+                                    Err(e) => {
+                                        state.message = Some(format!("{}", e));
+                                    }
+                                }
+                            }
+                            None => {
+                                state.message = Some("No file name".to_string());
                             }
                         }
                     }
@@ -2757,7 +2796,9 @@ mod tests {
             );
         }
 
-        // ---- Step 7: Use : to enter command mode, type :q to quit ----
+        // ---- Step 7: Use : to enter command mode, type :q! to force quit ----
+        // Buffer is modified (text inserted, lines deleted), so :q would warn.
+        // Use :q! to force quit without saving.
         is = dispatch_key_rc(
             &state_rc,
             KeyEvent::plain(KeyCode::Char(':')),
@@ -2772,12 +2813,13 @@ mod tests {
             assert_eq!(state.message, Some(":".to_string()));
         }
 
-        // Type 'q' and press Enter
+        // Type 'q!' and press Enter
         is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('q')), is);
+        is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('!')), is);
         dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Enter), is);
         {
             let state = state_rc.borrow();
-            assert!(!state.running, ":q should quit the editor");
+            assert!(!state.running, ":q! should force quit the editor");
         }
     }
 
@@ -3078,5 +3120,182 @@ mod tests {
         // And: original buffer is preserved
         let content = alfred_core::buffer::content(&state.buffer);
         assert_eq!(content, "original");
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (08-03): :wq saves and quits, :q warns on modified buffer
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_modified_buffer_when_colon_wq_then_buffer_saved_and_editor_quits() {
+        // Given: a buffer loaded from a file, then modified
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("test_wq.txt");
+        std::fs::write(&file_path, "Original").unwrap();
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_file(&file_path).unwrap();
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 8, " changed");
+        setup_standard_keymaps(&mut state);
+
+        // Precondition: buffer is modified and running
+        assert!(state.buffer.is_modified());
+        assert!(state.running);
+
+        // When: type :wq and press Enter
+        let mut result = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char(':')),
+            super::InputState::Normal,
+        );
+        for c in "wq".chars() {
+            result = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char(c)), result);
+        }
+        let (_, action) =
+            super::handle_key_event(&mut state, KeyEvent::plain(KeyCode::Enter), result);
+
+        // Then: action is SaveAndQuit
+        assert_eq!(action, super::DeferredAction::SaveAndQuit);
+
+        // And: when SaveAndQuit is executed (simulate event loop)
+        if let super::DeferredAction::SaveAndQuit = action {
+            let save_path = state.buffer.file_path().map(|p| p.to_path_buf());
+            match save_path {
+                Some(path) => match alfred_core::buffer::save_to_file(&state.buffer, &path) {
+                    Ok(saved_buffer) => {
+                        let byte_count = alfred_core::buffer::content(&saved_buffer).len();
+                        state.buffer = saved_buffer;
+                        state.message = Some(format!(
+                            "\"{}\" written, {} bytes",
+                            path.display(),
+                            byte_count
+                        ));
+                        state.running = false;
+                    }
+                    Err(e) => {
+                        state.message = Some(format!("{}", e));
+                    }
+                },
+                None => {
+                    state.message = Some("No file name".to_string());
+                }
+            }
+        }
+
+        // Then: file on disk has updated content
+        let on_disk = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(on_disk, "Original changed");
+
+        // And: buffer is no longer modified
+        assert!(!state.buffer.is_modified());
+
+        // And: editor is no longer running (quit)
+        assert!(!state.running);
+
+        // And: message shows "written"
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("written"),
+            "Message should contain 'written', got: '{}'",
+            msg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (08-03): :wq, :q on modified buffer, :q! force quit
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_editor_when_colon_wq_entered_then_returns_save_and_quit() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "wq");
+
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::SaveAndQuit);
+        // running should NOT be set to false yet (deferred action handles that)
+        assert!(state.running);
+    }
+
+    #[test]
+    fn given_modified_buffer_when_colon_q_then_warns_unsaved_changes() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+        // Make the buffer modified
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 0, "text");
+        assert!(state.buffer.is_modified());
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "q");
+
+        // Should NOT quit
+        assert!(state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::None);
+        // Should show warning message
+        assert_eq!(
+            state.message,
+            Some("Unsaved changes! Use :q! to force quit".to_string())
+        );
+    }
+
+    #[test]
+    fn given_modified_buffer_when_colon_quit_then_warns_unsaved_changes() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 0, "text");
+        assert!(state.buffer.is_modified());
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "quit");
+
+        assert!(state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::None);
+        assert_eq!(
+            state.message,
+            Some("Unsaved changes! Use :q! to force quit".to_string())
+        );
+    }
+
+    #[test]
+    fn given_unmodified_buffer_when_colon_q_then_quits_normally() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+        assert!(!state.buffer.is_modified());
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "q");
+
+        assert!(!state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::None);
+    }
+
+    #[test]
+    fn given_modified_buffer_when_colon_q_bang_then_force_quits() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+        state.buffer = alfred_core::buffer::insert_at(&state.buffer, 0, 0, "unsaved");
+        assert!(state.buffer.is_modified());
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "q!");
+
+        // Should quit despite modified buffer
+        assert!(!state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::None);
+    }
+
+    #[test]
+    fn given_unmodified_buffer_when_colon_q_bang_then_also_quits() {
+        let mut state = editor_state::new(80, 24);
+        setup_standard_keymaps(&mut state);
+        assert!(!state.buffer.is_modified());
+
+        let (input_state, action) = super::execute_colon_command(&mut state, "q!");
+
+        assert!(!state.running);
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(action, super::DeferredAction::None);
     }
 }
