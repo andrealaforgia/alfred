@@ -3429,4 +3429,219 @@ mod tests {
         assert_eq!(input_state, super::InputState::Normal);
         assert_eq!(action, super::DeferredAction::None);
     }
+
+    // -----------------------------------------------------------------------
+    // Count prefix tests: Vim-style numeric prefix (e.g. 5j, 3x, 10l)
+    // Test Budget: 5 behaviors x 2 = 10 max (using 5)
+    // -----------------------------------------------------------------------
+
+    /// Helper: set up keymaps with Vim-style hjkl, x, and 0 bindings,
+    /// plus register all builtin native commands.
+    fn setup_vim_style_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        use alfred_core::editor_state::Keymap;
+        let mut keymap = Keymap::new();
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('h')),
+            "cursor-left".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('j')),
+            "cursor-down".to_string(),
+        );
+        keymap.insert(KeyEvent::plain(KeyCode::Char('k')), "cursor-up".to_string());
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('l')),
+            "cursor-right".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('x')),
+            "delete-char-at-cursor".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('0')),
+            "cursor-line-start".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char(':')),
+            "enter-command-mode".to_string(),
+        );
+        state.keymaps.insert("normal-mode".to_string(), keymap);
+        state.active_keymaps.push("normal-mode".to_string());
+        editor_state::register_builtin_commands(state);
+    }
+
+    /// Helper: send a sequence of digit keys to accumulate a count prefix,
+    /// then dispatch the final command key with the accumulated count.
+    /// Returns the pending_count after all digits are processed (before the command key).
+    fn accumulate_count(
+        state: &mut alfred_core::editor_state::EditorState,
+        digits: &[char],
+    ) -> Option<u32> {
+        let mut pending: Option<u32> = None;
+        for &digit in digits {
+            let (_input_state, _action, returned_count) = super::handle_key_event(
+                state,
+                KeyEvent::plain(KeyCode::Char(digit)),
+                super::InputState::Normal,
+                pending,
+            );
+            pending = returned_count;
+        }
+        pending
+    }
+
+    #[test]
+    fn given_normal_mode_when_5j_then_cursor_moves_down_5_lines() {
+        // Given: an editor with a 10-line buffer, cursor at line 0, vim keymaps loaded
+        let mut state = editor_state::new(80, 24);
+        let lines: Vec<&str> = (0..10)
+            .map(|i| match i {
+                0 => "Line0",
+                1 => "Line1",
+                2 => "Line2",
+                3 => "Line3",
+                4 => "Line4",
+                5 => "Line5",
+                6 => "Line6",
+                7 => "Line7",
+                8 => "Line8",
+                _ => "Line9",
+            })
+            .collect();
+        state.buffer = Buffer::from_string(&lines.join("\n"));
+        setup_vim_style_keymaps(&mut state);
+        assert_eq!(state.cursor.line, 0);
+
+        // When: type '5' then 'j'
+        let pending = accumulate_count(&mut state, &['5']);
+        assert_eq!(
+            pending,
+            Some(5),
+            "After typing '5', pending count should be 5"
+        );
+        dispatch_key_with_count(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('j')),
+            super::InputState::Normal,
+            pending,
+        );
+
+        // Then: cursor should have moved down 5 lines
+        assert_eq!(state.cursor.line, 5, "Cursor should be at line 5 after 5j");
+    }
+
+    #[test]
+    fn given_normal_mode_when_3x_then_3_chars_deleted() {
+        // Given: an editor with "ABCDEF" buffer, cursor at column 0, vim keymaps loaded
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("ABCDEF");
+        setup_vim_style_keymaps(&mut state);
+        assert_eq!(state.cursor.column, 0);
+
+        // When: type '3' then 'x'
+        let pending = accumulate_count(&mut state, &['3']);
+        assert_eq!(
+            pending,
+            Some(3),
+            "After typing '3', pending count should be 3"
+        );
+        dispatch_key_with_count(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+            pending,
+        );
+
+        // Then: first 3 characters should be deleted, leaving "DEF"
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "DEF",
+            "After 3x at column 0, 'ABC' should be deleted leaving 'DEF'"
+        );
+    }
+
+    #[test]
+    fn given_normal_mode_when_10l_then_cursor_moves_right_10() {
+        // Given: an editor with a long line, cursor at column 0, vim keymaps loaded
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("0123456789ABCDEF");
+        setup_vim_style_keymaps(&mut state);
+        assert_eq!(state.cursor.column, 0);
+
+        // When: type '1', '0', then 'l'
+        let pending = accumulate_count(&mut state, &['1', '0']);
+        assert_eq!(
+            pending,
+            Some(10),
+            "After typing '1','0', pending count should be 10"
+        );
+        dispatch_key_with_count(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('l')),
+            super::InputState::Normal,
+            pending,
+        );
+
+        // Then: cursor should have moved right 10 columns
+        assert_eq!(
+            state.cursor.column, 10,
+            "Cursor should be at column 10 after 10l"
+        );
+    }
+
+    #[test]
+    fn given_normal_mode_when_0_alone_then_goes_to_line_start() {
+        // Given: an editor with cursor at column 5, vim keymaps loaded
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello World");
+        state.cursor = cursor::new(0, 5);
+        setup_vim_style_keymaps(&mut state);
+        assert_eq!(state.cursor.column, 5);
+
+        // When: type '0' with no prior digit (pending_count is None)
+        // '0' alone should NOT start a count -- it should resolve as cursor-line-start
+        dispatch_key_with_count(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('0')),
+            super::InputState::Normal,
+            None,
+        );
+
+        // Then: cursor should be at column 0 (line start)
+        assert_eq!(
+            state.cursor.column, 0,
+            "Pressing '0' alone should move cursor to line start"
+        );
+    }
+
+    #[test]
+    fn given_normal_mode_when_20j_then_0_is_part_of_count() {
+        // Given: an editor with a 30-line buffer, cursor at line 0, vim keymaps loaded
+        let mut state = editor_state::new(80, 24);
+        let lines: Vec<String> = (0..30).map(|i| format!("Line{}", i)).collect();
+        state.buffer = Buffer::from_string(&lines.join("\n"));
+        setup_vim_style_keymaps(&mut state);
+        assert_eq!(state.cursor.line, 0);
+
+        // When: type '2', '0', then 'j'
+        // The '0' after '2' should append to the count (making 20), not trigger cursor-line-start
+        let pending = accumulate_count(&mut state, &['2', '0']);
+        assert_eq!(
+            pending,
+            Some(20),
+            "After typing '2','0', pending count should be 20 (0 appends to existing count)"
+        );
+        dispatch_key_with_count(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('j')),
+            super::InputState::Normal,
+            pending,
+        );
+
+        // Then: cursor should have moved down 20 lines
+        assert_eq!(
+            state.cursor.line, 20,
+            "Cursor should be at line 20 after 20j"
+        );
+    }
 }
