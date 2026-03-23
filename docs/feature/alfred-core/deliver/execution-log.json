@@ -4,109 +4,32 @@
   "feature_id": "alfred-core",
   "events": [
     {
-      "sid": "08-01",
+      "sid": "09-01",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:06:41Z"
+      "t": "2026-03-23T12:21:59Z"
     },
     {
-      "sid": "08-01",
+      "sid": "09-01",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:06:51Z"
+      "t": "2026-03-23T12:23:58Z"
     },
     {
-      "sid": "08-01",
+      "sid": "09-01",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:06:51Z"
+      "t": "2026-03-23T12:23:59Z"
     },
     {
-      "sid": "08-01",
+      "sid": "09-01",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-23T12:06:52Z"
-    },
-    {
-      "sid": "08-01",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:06:53Z"
-    },
-    {
-      "sid": "08-02",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:12:44Z"
-    },
-    {
-      "sid": "08-02",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:12:49Z"
-    },
-    {
-      "sid": "08-02",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:12:49Z"
-    },
-    {
-      "sid": "08-02",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:12:49Z"
-    },
-    {
-      "sid": "08-02",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:12:49Z"
-    },
-    {
-      "sid": "08-03",
-      "p": "PREPARE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:15:16Z"
-    },
-    {
-      "sid": "08-03",
-      "p": "RED_ACCEPTANCE",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:15:50Z"
-    },
-    {
-      "sid": "08-03",
-      "p": "RED_UNIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:16:27Z"
-    },
-    {
-      "sid": "08-03",
-      "p": "GREEN",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:18:03Z"
-    },
-    {
-      "sid": "08-03",
-      "p": "COMMIT",
-      "s": "EXECUTED",
-      "d": "PASS",
-      "t": "2026-03-23T12:18:37Z"
+      "t": "2026-03-23T12:24:00Z"
     }
   ]
 }

@@ -11,6 +11,14 @@
 (define-key "normal-mode" "Char:i" "enter-insert-mode")
 (define-key "normal-mode" "Char:x" "delete-char-at-cursor")
 (define-key "normal-mode" "Char:d" "delete-line")
+(define-key "normal-mode" "Char:0" "cursor-line-start")
+(define-key "normal-mode" "Char:$" "cursor-line-end")
+(define-key "normal-mode" "Char:^" "cursor-first-non-blank")
+(define-key "normal-mode" "Char:g" "cursor-document-start")
+(define-key "normal-mode" "Char:G" "cursor-document-end")
+(define-key "normal-mode" "Char:w" "cursor-word-forward")
+(define-key "normal-mode" "Char:b" "cursor-word-backward")
+(define-key "normal-mode" "Char:e" "cursor-word-end")
 (define-key "normal-mode" "Char::" "enter-command-mode")
 
 ;; Create insert-mode keymap with Escape to return to normal mode and Backspace

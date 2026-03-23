@@ -146,6 +146,78 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-line-start".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_line_start(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-line-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_line_end(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-first-non-blank".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_first_non_blank(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-document-start".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_document_start(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-document-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_to_document_end(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-word-forward".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_word_forward(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-word-backward".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_word_backward(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "cursor-word-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            s.cursor = crate::cursor::move_word_end(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
 }
 
 pub fn new(width: u16, height: u16) -> EditorState {

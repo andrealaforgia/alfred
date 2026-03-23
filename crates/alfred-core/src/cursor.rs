@@ -112,6 +112,224 @@ pub fn ensure_within_bounds(cursor: Cursor, buf: &Buffer) -> Cursor {
     clamp_column_to_line(clamped_line, cursor.column, buf)
 }
 
+/// Moves the cursor to column 0 of the current line (vim `0`).
+pub fn move_to_line_start(cursor: Cursor, _buf: &Buffer) -> Cursor {
+    Cursor {
+        line: cursor.line,
+        column: 0,
+    }
+}
+
+/// Moves the cursor to the end of the current line (vim `$`).
+pub fn move_to_line_end(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let len = line_length(buf, cursor.line);
+    Cursor {
+        line: cursor.line,
+        column: if len > 0 { len.saturating_sub(1) } else { 0 },
+    }
+}
+
+/// Moves the cursor to the first non-blank character on the current line (vim `^`).
+pub fn move_to_first_non_blank(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let line_content = buffer::get_line(buf, cursor.line).unwrap_or("");
+    let first_non_blank = line_content
+        .chars()
+        .position(|c| !c.is_whitespace())
+        .unwrap_or(0);
+    Cursor {
+        line: cursor.line,
+        column: first_non_blank,
+    }
+}
+
+/// Moves the cursor to the start of the document (vim `gg`).
+pub fn move_to_document_start(_cursor: Cursor, _buf: &Buffer) -> Cursor {
+    Cursor { line: 0, column: 0 }
+}
+
+/// Moves the cursor to the last line of the document (vim `G`).
+pub fn move_to_document_end(_cursor: Cursor, buf: &Buffer) -> Cursor {
+    Cursor {
+        line: last_line_index(buf),
+        column: 0,
+    }
+}
+
+/// Returns true if the character is a "word" character (alphanumeric or underscore).
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Returns the line content without trailing newline as a Vec<char>.
+fn line_chars(buf: &Buffer, line_index: usize) -> Vec<char> {
+    buffer::get_line(buf, line_index)
+        .unwrap_or("")
+        .trim_end_matches('\n')
+        .chars()
+        .collect()
+}
+
+/// Moves the cursor forward to the start of the next word (vim `w`).
+///
+/// Word boundaries are transitions between word characters (alphanumeric/underscore)
+/// and non-word characters, or whitespace boundaries. Skips across lines.
+pub fn move_word_forward(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let total_lines = buffer::line_count(buf);
+    let mut line = cursor.line;
+    let mut col = cursor.column;
+    let mut chars = line_chars(buf, line);
+
+    // If we're within the current line, skip past current word/non-word group
+    if col < chars.len() {
+        let starting_is_word = is_word_char(chars[col]);
+        // Skip characters of the same class
+        while col < chars.len() && is_word_char(chars[col]) == starting_is_word {
+            col += 1;
+        }
+        // Skip whitespace
+        while col < chars.len() && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col < chars.len() {
+            return Cursor { line, column: col };
+        }
+    }
+
+    // Move to next line(s) to find start of next word
+    line += 1;
+    while line < total_lines {
+        chars = line_chars(buf, line);
+        // Skip leading whitespace
+        let first_non_ws = chars.iter().position(|c| !c.is_whitespace());
+        if let Some(pos) = first_non_ws {
+            return Cursor {
+                line,
+                column: pos,
+            };
+        }
+        line += 1;
+    }
+
+    // No more words; stay at end of buffer
+    let last_line = last_line_index(buf);
+    let last_len = line_length(buf, last_line);
+    Cursor {
+        line: last_line,
+        column: if last_len > 0 {
+            last_len.saturating_sub(1)
+        } else {
+            0
+        },
+    }
+}
+
+/// Moves the cursor backward to the start of the previous word (vim `b`).
+///
+/// Word boundaries are transitions between word characters (alphanumeric/underscore)
+/// and non-word characters, or whitespace boundaries. Skips across lines.
+pub fn move_word_backward(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let mut line = cursor.line;
+    let mut col = cursor.column;
+    let mut chars = line_chars(buf, line);
+
+    // If at start of line, go to previous line end
+    if col == 0 {
+        if line == 0 {
+            return Cursor { line: 0, column: 0 };
+        }
+        line -= 1;
+        chars = line_chars(buf, line);
+        col = chars.len();
+    }
+
+    // Move back one step to look behind
+    if col > 0 {
+        col -= 1;
+    }
+
+    // Skip whitespace backward
+    while col > 0 && chars[col].is_whitespace() {
+        col -= 1;
+    }
+
+    // Handle case where we landed on whitespace at position 0
+    if chars.is_empty() || (col == 0 && chars[0].is_whitespace()) {
+        // Try previous lines
+        if line == 0 {
+            return Cursor { line: 0, column: 0 };
+        }
+        line -= 1;
+        chars = line_chars(buf, line);
+        if chars.is_empty() {
+            return Cursor { line, column: 0 };
+        }
+        col = chars.len().saturating_sub(1);
+        // Skip whitespace backward again on the new line
+        while col > 0 && chars[col].is_whitespace() {
+            col -= 1;
+        }
+    }
+
+    // Now skip backward over the current word/non-word class to find the start
+    let current_is_word = is_word_char(chars[col]);
+    while col > 0 && is_word_char(chars[col - 1]) == current_is_word {
+        col -= 1;
+    }
+
+    Cursor { line, column: col }
+}
+
+/// Moves the cursor to the end of the current or next word (vim `e`).
+///
+/// Word boundaries are transitions between word characters (alphanumeric/underscore)
+/// and non-word characters, or whitespace boundaries. Skips across lines.
+pub fn move_word_end(cursor: Cursor, buf: &Buffer) -> Cursor {
+    let total_lines = buffer::line_count(buf);
+    let mut line = cursor.line;
+    let mut col = cursor.column;
+    let mut chars = line_chars(buf, line);
+
+    // Move forward at least one position to avoid staying on current word end
+    if !chars.is_empty() && col < chars.len() {
+        col += 1;
+    }
+
+    // Skip whitespace (possibly across lines)
+    loop {
+        while col < chars.len() && chars[col].is_whitespace() {
+            col += 1;
+        }
+        if col < chars.len() {
+            break;
+        }
+        // Move to next line
+        line += 1;
+        if line >= total_lines {
+            // At end of buffer
+            let last_line = last_line_index(buf);
+            let last_len = line_length(buf, last_line);
+            return Cursor {
+                line: last_line,
+                column: if last_len > 0 {
+                    last_len.saturating_sub(1)
+                } else {
+                    0
+                },
+            };
+        }
+        chars = line_chars(buf, line);
+        col = 0;
+    }
+
+    // Now col is at a non-whitespace character; skip to end of word/non-word group
+    let current_is_word = is_word_char(chars[col]);
+    while col + 1 < chars.len() && is_word_char(chars[col + 1]) == current_is_word {
+        col += 1;
+    }
+
+    Cursor { line, column: col }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +459,218 @@ mod tests {
         let buf = Buffer::from_string("abc\ndef");
         let cursor = ensure_within_bounds(new(1, 2), &buf);
         assert_eq!(cursor, new(1, 2));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_to_line_start (vim 0)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_line_start_sets_column_to_zero() {
+        let buf = Buffer::from_string("hello world");
+        let cursor = move_to_line_start(new(0, 5), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    #[test]
+    fn move_to_line_start_already_at_zero_stays() {
+        let buf = Buffer::from_string("hello");
+        let cursor = move_to_line_start(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_to_line_end (vim $)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_line_end_moves_to_last_character() {
+        let buf = Buffer::from_string("hello");
+        let cursor = move_to_line_end(new(0, 0), &buf);
+        // "hello" has 5 chars, last char index is 4
+        assert_eq!(cursor, new(0, 4));
+    }
+
+    #[test]
+    fn move_to_line_end_on_empty_line_stays_at_zero() {
+        let buf = Buffer::from_string("");
+        let cursor = move_to_line_end(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    #[test]
+    fn move_to_line_end_on_second_line() {
+        let buf = Buffer::from_string("abc\ndefgh");
+        let cursor = move_to_line_end(new(1, 0), &buf);
+        // "defgh" has 5 chars, last char index is 4
+        assert_eq!(cursor, new(1, 4));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_to_first_non_blank (vim ^)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_first_non_blank_skips_leading_spaces() {
+        let buf = Buffer::from_string("   hello");
+        let cursor = move_to_first_non_blank(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 3));
+    }
+
+    #[test]
+    fn move_to_first_non_blank_no_leading_spaces() {
+        let buf = Buffer::from_string("hello");
+        let cursor = move_to_first_non_blank(new(0, 5), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    #[test]
+    fn move_to_first_non_blank_tabs_and_spaces() {
+        let buf = Buffer::from_string("\t  world");
+        let cursor = move_to_first_non_blank(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 3));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_to_document_start (vim gg)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_document_start_from_middle_of_buffer() {
+        let buf = Buffer::from_string("aaa\nbbb\nccc");
+        let cursor = move_to_document_start(new(2, 2), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    #[test]
+    fn move_to_document_start_already_at_start() {
+        let buf = Buffer::from_string("aaa\nbbb");
+        let cursor = move_to_document_start(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_to_document_end (vim G)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_to_document_end_from_first_line() {
+        let buf = Buffer::from_string("aaa\nbbb\nccc");
+        let cursor = move_to_document_end(new(0, 0), &buf);
+        assert_eq!(cursor, new(2, 0));
+    }
+
+    #[test]
+    fn move_to_document_end_already_at_last_line() {
+        let buf = Buffer::from_string("aaa\nbbb");
+        let cursor = move_to_document_end(new(1, 2), &buf);
+        assert_eq!(cursor, new(1, 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: move_word_forward across multiple words (vim w)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_word_forward_across_multiple_words() {
+        let buf = Buffer::from_string("hello world foo");
+        // Start at 'h'
+        let c1 = move_word_forward(new(0, 0), &buf);
+        assert_eq!(c1, new(0, 6)); // 'w' of "world"
+        let c2 = move_word_forward(c1, &buf);
+        assert_eq!(c2, new(0, 12)); // 'f' of "foo"
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_word_forward (vim w)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_word_forward_skips_punctuation_as_separate_word() {
+        let buf = Buffer::from_string("foo.bar");
+        let c1 = move_word_forward(new(0, 0), &buf);
+        // After "foo", '.' is different class, so word start is at '.'
+        assert_eq!(c1, new(0, 3)); // '.'
+        let c2 = move_word_forward(c1, &buf);
+        assert_eq!(c2, new(0, 4)); // 'b' of "bar"
+    }
+
+    #[test]
+    fn move_word_forward_across_lines() {
+        let buf = Buffer::from_string("end\nstart");
+        let cursor = move_word_forward(new(0, 0), &buf);
+        assert_eq!(cursor, new(1, 0)); // 's' of "start"
+    }
+
+    #[test]
+    fn move_word_forward_at_end_of_buffer_stays() {
+        let buf = Buffer::from_string("last");
+        let cursor = move_word_forward(new(0, 3), &buf);
+        // Already at last char, no more words
+        assert_eq!(cursor, new(0, 3));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_word_backward (vim b)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_word_backward_to_previous_word_start() {
+        let buf = Buffer::from_string("hello world");
+        let cursor = move_word_backward(new(0, 6), &buf);
+        assert_eq!(cursor, new(0, 0)); // 'h' of "hello"
+    }
+
+    #[test]
+    fn move_word_backward_across_lines() {
+        let buf = Buffer::from_string("first\nsecond");
+        let cursor = move_word_backward(new(1, 0), &buf);
+        assert_eq!(cursor, new(0, 0)); // 'f' of "first"
+    }
+
+    #[test]
+    fn move_word_backward_at_start_of_buffer_stays() {
+        let buf = Buffer::from_string("hello");
+        let cursor = move_word_backward(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 0));
+    }
+
+    #[test]
+    fn move_word_backward_from_middle_of_word() {
+        let buf = Buffer::from_string("hello world");
+        let cursor = move_word_backward(new(0, 8), &buf);
+        assert_eq!(cursor, new(0, 6)); // 'w' of "world"
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: move_word_end (vim e)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn move_word_end_to_end_of_current_word() {
+        let buf = Buffer::from_string("hello world");
+        let cursor = move_word_end(new(0, 0), &buf);
+        assert_eq!(cursor, new(0, 4)); // 'o' of "hello"
+    }
+
+    #[test]
+    fn move_word_end_to_end_of_next_word() {
+        let buf = Buffer::from_string("hello world");
+        let cursor = move_word_end(new(0, 4), &buf);
+        assert_eq!(cursor, new(0, 10)); // 'd' of "world"
+    }
+
+    #[test]
+    fn move_word_end_across_lines() {
+        let buf = Buffer::from_string("hi\nthere");
+        let cursor = move_word_end(new(0, 1), &buf);
+        assert_eq!(cursor, new(1, 4)); // 'e' of "there"
+    }
+
+    #[test]
+    fn move_word_end_at_end_of_buffer_stays() {
+        let buf = Buffer::from_string("end");
+        let cursor = move_word_end(new(0, 2), &buf);
+        assert_eq!(cursor, new(0, 2));
     }
 }

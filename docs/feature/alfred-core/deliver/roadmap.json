@@ -1,59 +1,81 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-23T14:00:00Z",
-    "total_steps": 3
+    "created_at": "2026-03-23T15:00:00Z",
+    "total_steps": 4
   },
   "phases": [
     {
-      "id": "08",
-      "name": "M8 File Save and Open",
+      "id": "09",
+      "name": "M9 Extended Vim Keybindings",
       "steps": [
         {
-          "id": "08-01",
-          "name": "Buffer save to file and save primitives",
+          "id": "09-01",
+          "name": "Cursor movement commands: w b e 0 $ ^ gg G",
           "criteria": [
-            "buffer save_to_file writes content to disk",
-            "save-buffer Lisp primitive saves current buffer",
-            "Modified flag resets to false after save",
-            "Save to nonexistent directory returns error",
-            "Saving preserves original file encoding"
+            "w moves to next word start",
+            "b moves to previous word start",
+            "e moves to next word end",
+            "0 moves to line start and $ to line end",
+            "gg moves to document start and G to end"
           ],
           "files_to_modify": [
-            "crates/alfred-core/src/buffer.rs",
-            "crates/alfred-lisp/src/bridge.rs"
+            "crates/alfred-core/src/cursor.rs",
+            "crates/alfred-core/src/editor_state.rs",
+            "plugins/vim-keybindings/init.lisp"
           ]
         },
         {
-          "id": "08-02",
-          "name": "Colon commands for save and open",
+          "id": "09-02",
+          "name": "Insert mode variants: I a A o O",
           "criteria": [
-            "Colon w saves current buffer to its file",
-            "Colon w filename saves to specified path",
-            "Colon e filename opens a new file",
-            "Save with no filename shows error message",
-            "Open nonexistent file shows error message"
+            "I inserts at first non-blank of line",
+            "a inserts after cursor",
+            "A inserts at end of line",
+            "o opens new line below and enters insert",
+            "O opens new line above and enters insert"
           ],
           "files_to_modify": [
-            "crates/alfred-tui/src/app.rs"
+            "crates/alfred-core/src/editor_state.rs",
+            "crates/alfred-core/src/buffer.rs",
+            "plugins/vim-keybindings/init.lisp"
           ],
-          "deps": ["08-01"]
+          "deps": ["09-01"]
         },
         {
-          "id": "08-03",
-          "name": "Vim plugin save and quit bindings",
+          "id": "09-03",
+          "name": "Editing: J r cc C yy p dd dw undo redo",
           "criteria": [
-            "Colon wq saves and quits",
-            "Normal mode ZZ saves and quits",
-            "Status bar shows saved confirmation",
-            "Modified indicator clears after save",
-            "Unsaved changes warning on quit attempt"
+            "J joins current line with next line",
+            "yy yanks current line and p pastes it",
+            "cc replaces entire line entering insert",
+            "C replaces from cursor to line end",
+            "u undoes last change and Ctrl-r redoes"
           ],
           "files_to_modify": [
-            "plugins/vim-keybindings/init.lisp",
-            "crates/alfred-tui/src/app.rs"
+            "crates/alfred-core/src/buffer.rs",
+            "crates/alfred-core/src/editor_state.rs",
+            "crates/alfred-lisp/src/bridge.rs",
+            "plugins/vim-keybindings/init.lisp"
           ],
-          "deps": ["08-02"]
+          "deps": ["09-02"]
+        },
+        {
+          "id": "09-04",
+          "name": "Scroll and screen: H M L Ctrl-d Ctrl-u zz",
+          "criteria": [
+            "H moves cursor to screen top",
+            "M moves cursor to screen middle",
+            "L moves cursor to screen bottom",
+            "Ctrl-d scrolls down half page",
+            "Ctrl-u scrolls up half page"
+          ],
+          "files_to_modify": [
+            "crates/alfred-core/src/cursor.rs",
+            "crates/alfred-core/src/editor_state.rs",
+            "plugins/vim-keybindings/init.lisp"
+          ],
+          "deps": ["09-03"]
         }
       ]
     }
