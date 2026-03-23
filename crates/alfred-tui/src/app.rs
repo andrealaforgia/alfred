@@ -99,6 +99,8 @@ pub(crate) enum InputState {
     PendingChar(alfred_core::editor_state::CharFindKind),
     /// Waiting for a motion key to complete an operator (d, c, y)
     OperatorPending(Operator),
+    /// Waiting for a text object type key after operator + modifier (e.g., `di` + `w`, `ca` + `"`)
+    TextObject(Operator, alfred_core::text_object::TextObjectModifier),
 }
 
 /// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
@@ -220,6 +222,47 @@ fn execute_delete_with_motion(
     }
 
     state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Executes a delete operator over an explicit character range (for text objects).
+///
+/// Deletes text from `from` (inclusive) to `to` (exclusive). Pushes undo state.
+/// Cursor is placed at `from`, clamped to buffer bounds.
+fn execute_delete_range(
+    state: &mut EditorState,
+    from: alfred_core::cursor::Cursor,
+    to: alfred_core::cursor::Cursor,
+) {
+    alfred_core::editor_state::push_undo(state);
+    state.buffer = alfred_core::buffer::delete_char_range(
+        &state.buffer,
+        from.line,
+        from.column,
+        to.line,
+        to.column,
+    );
+    state.cursor = alfred_core::cursor::ensure_within_bounds(from, &state.buffer);
+    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Executes a yank operator over an explicit character range (for text objects).
+///
+/// Copies text from `from` (inclusive) to `to` (exclusive) to the yank register.
+fn execute_yank_range(
+    state: &mut EditorState,
+    from: alfred_core::cursor::Cursor,
+    to: alfred_core::cursor::Cursor,
+) {
+    let text = alfred_core::buffer::get_text_range(
+        &state.buffer,
+        from.line,
+        from.column,
+        to.line,
+        to.column,
+    );
+    state.yank_register = Some(text);
+    state.yank_linewise = false;
+    state.message = Some("yanked".to_string());
 }
 
 /// Executes a yank operator with the given motion, copying text to the yank register.
@@ -440,6 +483,28 @@ pub(crate) fn handle_key_event(
             return (InputState::Normal, DeferredAction::None, None);
         }
 
+        // Text object modifier: 'i' (inner) or 'a' (around) enters TextObject sub-state
+        if let KeyCode::Char('i') = key.code {
+            return (
+                InputState::TextObject(
+                    operator,
+                    alfred_core::text_object::TextObjectModifier::Inner,
+                ),
+                DeferredAction::None,
+                None,
+            );
+        }
+        if let KeyCode::Char('a') = key.code {
+            return (
+                InputState::TextObject(
+                    operator,
+                    alfred_core::text_object::TextObjectModifier::Around,
+                ),
+                DeferredAction::None,
+                None,
+            );
+        }
+
         // Look up the key in the keymap to get a command name
         if let Some(cmd_name) = alfred_core::editor_state::resolve_key(state, key) {
             if let Some((motion_cursor, motion_kind)) = execute_motion(state, &cmd_name) {
@@ -464,6 +529,88 @@ pub(crate) fn handle_key_event(
         }
 
         // Unrecognized motion key: cancel operator
+        return (InputState::Normal, DeferredAction::None, None);
+    }
+
+    // TextObject mode: after operator + modifier (i/a), waiting for the object type key.
+    // Resolves the text object, computes the range, and applies the operator.
+    if let InputState::TextObject(operator, modifier) = input_state {
+        // Escape cancels the text object
+        if key.code == KeyCode::Escape {
+            return (InputState::Normal, DeferredAction::None, None);
+        }
+
+        // Resolve the text object type from the key
+        let range = match key.code {
+            KeyCode::Char('w') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_word(state.cursor, &state.buffer)
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_word(state.cursor, &state.buffer)
+                }
+            },
+            KeyCode::Char('"') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_quotes(state.cursor, &state.buffer, '"')
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_quotes(state.cursor, &state.buffer, '"')
+                }
+            },
+            KeyCode::Char('\'') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_quotes(state.cursor, &state.buffer, '\'')
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_quotes(state.cursor, &state.buffer, '\'')
+                }
+            },
+            KeyCode::Char('(' | ')') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_parens(state.cursor, &state.buffer, '(', ')')
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_parens(state.cursor, &state.buffer, '(', ')')
+                }
+            },
+            KeyCode::Char('[' | ']') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_parens(state.cursor, &state.buffer, '[', ']')
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_parens(state.cursor, &state.buffer, '[', ']')
+                }
+            },
+            KeyCode::Char('{' | '}') => match modifier {
+                alfred_core::text_object::TextObjectModifier::Inner => {
+                    alfred_core::text_object::inner_parens(state.cursor, &state.buffer, '{', '}')
+                }
+                alfred_core::text_object::TextObjectModifier::Around => {
+                    alfred_core::text_object::around_parens(state.cursor, &state.buffer, '{', '}')
+                }
+            },
+            _ => None, // Unrecognized text object type: cancel
+        };
+
+        if let Some((range_start, range_end)) = range {
+            match operator {
+                Operator::Delete => {
+                    execute_delete_range(state, range_start, range_end);
+                }
+                Operator::Change => {
+                    // Change = delete range + enter insert mode
+                    execute_delete_range(state, range_start, range_end);
+                    state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+                    state.active_keymaps =
+                        vec![format!("{}-mode", alfred_core::editor_state::MODE_INSERT)];
+                }
+                Operator::Yank => {
+                    execute_yank_range(state, range_start, range_end);
+                }
+            }
+        }
+
         return (InputState::Normal, DeferredAction::None, None);
     }
 
@@ -4908,5 +5055,264 @@ mod tests {
         let state = state_rc.borrow();
         assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
         assert_eq!(state.mode, "normal");
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: text objects (diw, daw, ci", di(, etc.)
+    // Test Budget: 6 behaviors x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_two_words_when_diw_on_second_word_then_word_deleted_space_remains() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "hello world" with cursor on 'w' of "world" (col 6)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 6);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press d, i, w
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        assert!(matches!(
+            is,
+            super::InputState::OperatorPending(super::Operator::Delete)
+        ));
+
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('i')), is);
+        assert!(matches!(
+            is,
+            super::InputState::TextObject(
+                super::Operator::Delete,
+                alfred_core::text_object::TextObjectModifier::Inner
+            )
+        ));
+
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Then: "world" deleted, "hello " remains
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "hello ",
+            "diw should delete the word under cursor, leaving trailing space"
+        );
+    }
+
+    #[test]
+    fn given_two_words_when_daw_on_first_word_then_word_and_trailing_space_deleted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "hello world" with cursor on 'h' of "hello" (col 0)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press d, a, w
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert!(matches!(
+            is,
+            super::InputState::TextObject(
+                super::Operator::Delete,
+                alfred_core::text_object::TextObjectModifier::Around
+            )
+        ));
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Then: "hello " deleted, "world" remains
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "world",
+            "daw should delete the word and trailing space"
+        );
+    }
+
+    #[test]
+    fn given_quoted_string_when_ci_quote_then_quotes_emptied_and_insert_mode() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: 'say "hello" done' with cursor inside quotes (col 6, on 'e')
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string(r#"say "hello" done"#);
+            state.cursor = cursor::new(0, 6);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press c, i, "
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('i')), is);
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('"')), is);
+
+        // Then: content between quotes deleted, mode is insert
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            r#"say "" done"#,
+            "ci\" should delete content between quotes"
+        );
+        assert_eq!(
+            state.mode,
+            alfred_core::editor_state::MODE_INSERT,
+            "ci\" should enter insert mode"
+        );
+    }
+
+    #[test]
+    fn given_parens_with_args_when_di_paren_then_args_deleted_parens_remain() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "fn(arg1, arg2)" with cursor inside parens (col 5, on 'r')
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("fn(arg1, arg2)");
+            state.cursor = cursor::new(0, 5);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press d, i, (
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('i')), is);
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('(')), is);
+
+        // Then: content between parens deleted, parens remain
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "fn()",
+            "di( should delete content between parens, leaving fn()"
+        );
+    }
+
+    #[test]
+    fn given_braces_when_di_brace_then_content_deleted_braces_remain() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "map{key: val}" with cursor inside braces (col 5)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("map{key: val}");
+            state.cursor = cursor::new(0, 5);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press d, i, {
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('i')), is);
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('{')), is);
+
+        // Then: content between braces deleted, braces remain
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "map{}",
+            "di{{ should delete content between braces"
+        );
+    }
+
+    #[test]
+    fn given_brackets_when_da_bracket_then_brackets_and_content_deleted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "a[b, c]d" with cursor inside brackets (col 3)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("a[b, c]d");
+            state.cursor = cursor::new(0, 3);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: press d, a, [
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('[')), is);
+
+        // Then: brackets and content deleted
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "ad",
+            "da[ should delete brackets and everything between them"
+        );
+    }
+
+    #[test]
+    fn given_text_object_pending_when_escape_then_cancelled() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with buffer, press d then i (entering TextObject state)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello");
+            state.cursor = cursor::new(0, 0);
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('d')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('i')), is);
+        assert!(matches!(is, super::InputState::TextObject(..)));
+
+        // When: press Escape
+        let is = dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Escape), is);
+
+        // Then: back to normal, buffer unchanged
+        assert_eq!(is, super::InputState::Normal);
+        let state = state_rc.borrow();
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
     }
 }
