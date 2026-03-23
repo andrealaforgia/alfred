@@ -422,6 +422,120 @@ pub fn til_char_backward(cursor: Cursor, buf: &Buffer, target: char) -> Option<C
     })
 }
 
+/// Returns the matching bracket character for a given bracket.
+fn matching_bracket(ch: char) -> Option<char> {
+    match ch {
+        '(' => Some(')'),
+        ')' => Some('('),
+        '[' => Some(']'),
+        ']' => Some('['),
+        '{' => Some('}'),
+        '}' => Some('{'),
+        _ => None,
+    }
+}
+
+/// Returns true if the character is an opening bracket.
+fn is_opening_bracket(ch: char) -> bool {
+    matches!(ch, '(' | '[' | '{')
+}
+
+/// Converts a (line, column) cursor position to an absolute character offset in the buffer.
+fn cursor_to_offset(cursor: Cursor, buf: &Buffer) -> Option<usize> {
+    let total_lines = buffer::line_count(buf);
+    if cursor.line >= total_lines {
+        return None;
+    }
+    let mut offset = 0;
+    for line_idx in 0..cursor.line {
+        let line_str = buffer::get_line(buf, line_idx).unwrap_or("");
+        offset += line_str.chars().count();
+    }
+    let current_line = buffer::get_line(buf, cursor.line).unwrap_or("");
+    let line_char_count = current_line.chars().count();
+    if cursor.column > line_char_count {
+        return None;
+    }
+    Some(offset + cursor.column)
+}
+
+/// Converts an absolute character offset back to a (line, column) cursor position.
+fn offset_to_cursor(offset: usize, buf: &Buffer) -> Option<Cursor> {
+    let total_lines = buffer::line_count(buf);
+    let mut remaining = offset;
+    for line_idx in 0..total_lines {
+        let line_str = buffer::get_line(buf, line_idx).unwrap_or("");
+        let line_char_count = line_str.chars().count();
+        if remaining < line_char_count
+            || (remaining == line_char_count && line_idx == total_lines - 1)
+        {
+            return Some(Cursor {
+                line: line_idx,
+                column: remaining,
+            });
+        }
+        remaining -= line_char_count;
+    }
+    None
+}
+
+/// Finds the matching bracket/parenthesis/brace for the character at the cursor position (vim `%`).
+///
+/// Supports `()`, `[]`, `{}`. If the cursor is on an opening bracket, scans forward
+/// counting nesting to find the matching closer. If on a closing bracket, scans backward
+/// to find the matching opener. Returns `None` if the cursor is not on a bracket or
+/// if the bracket is unmatched.
+///
+/// This is a pure function: it takes a cursor and buffer reference and returns an optional
+/// new cursor position.
+pub fn find_matching_bracket(cursor: Cursor, buf: &Buffer) -> Option<Cursor> {
+    // Collect all characters from the buffer
+    let total_lines = buffer::line_count(buf);
+    let mut all_chars: Vec<char> = Vec::new();
+    for line_idx in 0..total_lines {
+        let line_str = buffer::get_line(buf, line_idx).unwrap_or("");
+        all_chars.extend(line_str.chars());
+    }
+
+    let start_offset = cursor_to_offset(cursor, buf)?;
+    if start_offset >= all_chars.len() {
+        return None;
+    }
+
+    let current_char = all_chars[start_offset];
+    let target_char = matching_bracket(current_char)?;
+
+    if is_opening_bracket(current_char) {
+        // Scan forward
+        let mut depth: usize = 1;
+        for (i, &ch) in all_chars.iter().enumerate().skip(start_offset + 1) {
+            if ch == current_char {
+                depth += 1;
+            } else if ch == target_char {
+                depth -= 1;
+                if depth == 0 {
+                    return offset_to_cursor(i, buf);
+                }
+            }
+        }
+        None // Unmatched
+    } else {
+        // Scan backward
+        let mut depth: usize = 1;
+        for (i, &ch) in all_chars[..start_offset].iter().enumerate().rev() {
+            if ch == current_char {
+                depth += 1;
+            } else if ch == target_char {
+                depth -= 1;
+                if depth == 0 {
+                    return offset_to_cursor(i, buf);
+                }
+            }
+        }
+        None // Unmatched
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,6 +1058,71 @@ mod tests {
             let buf = Buffer::from_string(buffer_text);
             let result = til_char_backward(*start, &buf, *target);
             assert_eq!(result, *expected, "til_char_backward: {}", label);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Table-driven: find_matching_bracket (vim %)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn find_matching_bracket_cases() {
+        // (buffer, start_cursor, expected, label)
+        let cases: Vec<(&str, Cursor, Option<Cursor>, &str)> = vec![
+            (
+                "(hello)",
+                new(0, 0),
+                Some(new(0, 6)),
+                "opening paren jumps to matching closing paren",
+            ),
+            (
+                "(hello)",
+                new(0, 6),
+                Some(new(0, 0)),
+                "closing paren jumps to matching opening paren",
+            ),
+            (
+                "{foo {bar}}",
+                new(0, 0),
+                Some(new(0, 10)),
+                "outer opening brace jumps to outer closing brace with nesting",
+            ),
+            (
+                "{foo {bar}}",
+                new(0, 5),
+                Some(new(0, 9)),
+                "inner opening brace jumps to inner closing brace",
+            ),
+            (
+                "[\nfoo\nbar\n]",
+                new(0, 0),
+                Some(new(3, 0)),
+                "opening bracket spans multiple lines to matching closer",
+            ),
+            (
+                "hello",
+                new(0, 2),
+                None,
+                "non-bracket character returns None",
+            ),
+            (
+                "(unmatched",
+                new(0, 0),
+                None,
+                "unmatched opening bracket returns None",
+            ),
+            (
+                "unmatched)",
+                new(0, 9),
+                None,
+                "unmatched closing bracket returns None",
+            ),
+        ];
+
+        for (buffer_text, start, expected, label) in &cases {
+            let buf = Buffer::from_string(buffer_text);
+            let result = find_matching_bracket(*start, &buf);
+            assert_eq!(result, *expected, "find_matching_bracket: {}", label);
         }
     }
 }

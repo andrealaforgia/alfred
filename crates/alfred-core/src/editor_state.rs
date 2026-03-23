@@ -591,6 +591,18 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Match bracket: jump to matching bracket (vim %) ---
+    crate::command::register(
+        &mut state.commands,
+        "match-bracket".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if let Some(new_cursor) = crate::cursor::find_matching_bracket(s.cursor, &s.buffer) {
+                s.cursor = new_cursor;
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
 }
 
 /// Executes a character find operation, returning the new cursor position if found.

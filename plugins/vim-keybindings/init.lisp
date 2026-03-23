@@ -47,6 +47,7 @@
 (define-key "normal-mode" "Char:n" "search-next")
 (define-key "normal-mode" "Char:N" "search-prev")
 (define-key "normal-mode" "Char:." "repeat-last-change")
+(define-key "normal-mode" "Char:%" "match-bracket")
 (define-key "normal-mode" "Up" "cursor-up")
 (define-key "normal-mode" "Down" "cursor-down")
 (define-key "normal-mode" "Left" "cursor-left")
