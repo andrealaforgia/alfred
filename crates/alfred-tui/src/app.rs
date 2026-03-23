@@ -129,9 +129,11 @@ pub(crate) fn handle_key_event(
         }
         Some(cmd) => (InputState::Normal, DeferredAction::ExecCommand(cmd)),
         None => {
-            // Self-insert: when active keymaps exist and key is an unbound
-            // printable character, insert it at cursor and advance.
-            if !state.active_keymaps.is_empty() {
+            // Self-insert: only in insert mode with active keymaps, when key
+            // is an unbound printable character, insert it at cursor and advance.
+            if state.mode == alfred_core::editor_state::MODE_INSERT
+                && !state.active_keymaps.is_empty()
+            {
                 if let KeyCode::Char(c) = key.code {
                     let line = state.cursor.line;
                     let col = state.cursor.column;
@@ -1609,10 +1611,11 @@ mod tests {
     #[test]
     fn given_active_keymaps_when_unbound_printable_char_pressed_then_char_inserted_and_cursor_advances(
     ) {
-        // Given: editor with active keymaps (simulating basic-keybindings loaded)
+        // Given: editor in insert mode with active keymaps (simulating basic-keybindings loaded)
         let mut state = editor_state::new(80, 24);
         state.buffer = Buffer::from_string("Hello");
         state.cursor = cursor::new(0, 5);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
         setup_standard_keymaps(&mut state);
 
         // When: press 'x' (not bound in keymap)
@@ -1802,8 +1805,10 @@ mod tests {
         }
 
         // AC2: Character insertion works for printable keys (unbound char auto-insert)
+        // Self-insert only fires in insert mode.
         {
             let mut state = state_rc.borrow_mut();
+            state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
             state.cursor = cursor::new(0, 5); // end of "Hello"
             dispatch_key(
                 &mut state,
@@ -1971,5 +1976,56 @@ mod tests {
 
         // And: editor is still running (no quit occurred)
         assert!(state.running, "Editor should still be running");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (07-01): self-insert is mode-aware
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_insert_mode_with_active_keymaps_when_unbound_printable_char_then_char_inserted() {
+        // Given: editor in insert mode with active keymaps
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: press 'x' (not bound in keymap)
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+
+        // Then: 'x' is inserted
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "Hellox", "Insert mode should self-insert unbound chars");
+        assert_eq!(state.cursor.column, 6);
+    }
+
+    #[test]
+    fn given_normal_mode_with_active_keymaps_when_unbound_printable_char_then_no_insert() {
+        // Given: editor in normal mode with active keymaps
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        // mode defaults to "normal" from new()
+        setup_standard_keymaps(&mut state);
+        let content_before = alfred_core::buffer::content(&state.buffer);
+
+        // When: press 'x' (not bound in keymap)
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+
+        // Then: no insertion in normal mode
+        let content_after = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content_after, content_before,
+            "Normal mode should NOT self-insert unbound chars"
+        );
     }
 }

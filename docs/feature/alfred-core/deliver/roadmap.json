@@ -1,23 +1,23 @@
 {
   "roadmap": {
     "project_id": "alfred-core",
-    "created_at": "2026-03-23T11:00:00Z",
+    "created_at": "2026-03-23T12:00:00Z",
     "total_steps": 4
   },
   "phases": [
     {
-      "id": "06",
-      "name": "M6 Basic Keybinding Plugin",
+      "id": "07",
+      "name": "M7 Vim Keybindings Plugin",
       "steps": [
         {
-          "id": "06-01",
-          "name": "Keymap primitives in Lisp bridge",
+          "id": "07-01",
+          "name": "Mode switching primitives and set-mode bridge",
           "criteria": [
-            "make-keymap primitive creates a named keymap",
-            "define-key primitive binds key sequence to command",
-            "set-active-keymap primitive activates a keymap",
-            "Keymap operations accessible from Lisp code",
-            "Invalid key specs return error messages"
+            "set-mode primitive changes the current editor mode",
+            "Mode change triggers active keymap switch",
+            "current-mode reflects the new mode after switch",
+            "Invalid mode name returns error message",
+            "Mode stored as string in EditorState"
           ],
           "files_to_modify": [
             "crates/alfred-lisp/src/bridge.rs",
@@ -25,51 +25,51 @@
           ]
         },
         {
-          "id": "06-02",
-          "name": "Keymap-based key dispatch in event loop",
+          "id": "07-02",
+          "name": "Vim normal mode keybindings plugin",
           "criteria": [
-            "Event loop resolves keys through active keymap",
-            "Keymap match executes the bound command",
-            "Unbound keys fall through without error",
-            "No hardcoded key handlers remain in Rust",
-            "Command mode colon still works via keymap"
+            "Plugin creates normal-mode and insert-mode keymaps",
+            "Normal mode: h j k l for navigation",
+            "Normal mode: i enters insert mode",
+            "Normal mode: x deletes char under cursor",
+            "Normal mode: dd deletes current line"
           ],
           "files_to_modify": [
-            "crates/alfred-tui/src/app.rs",
-            "crates/alfred-core/src/key_event.rs"
-          ],
-          "deps": ["06-01"]
-        },
-        {
-          "id": "06-03",
-          "name": "Basic keybinding plugin in Alfred Lisp",
-          "criteria": [
-            "Plugin in plugins/basic-keybindings/init.lisp loads",
-            "Arrow keys navigate via plugin-defined bindings",
-            "Character insertion works for printable keys",
-            "Backspace deletes character before cursor",
-            "Colon enters command mode via plugin binding"
-          ],
-          "files_to_modify": [
-            "plugins/basic-keybindings/init.lisp",
+            "plugins/vim-keybindings/init.lisp",
             "crates/alfred-lisp/src/bridge.rs"
           ],
-          "deps": ["06-02"]
+          "deps": ["07-01"]
         },
         {
-          "id": "06-04",
-          "name": "Remove hardcoded keybindings from Rust",
+          "id": "07-03",
+          "name": "Vim insert mode and Escape to normal",
           "criteria": [
-            "No hardcoded key matching in app.rs handle_key_event",
-            "All navigation via keymap-resolved commands",
-            "Removing plugin means no keybindings work",
-            "Editor starts but keys have no effect without plugin",
-            "Existing tests updated to use keymap dispatch"
+            "Insert mode: typing inserts characters",
+            "Insert mode: Escape returns to normal mode",
+            "Mode transition updates the active keymap",
+            "Status bar reflects current mode change",
+            "Backspace works in insert mode"
+          ],
+          "files_to_modify": [
+            "plugins/vim-keybindings/init.lisp",
+            "crates/alfred-tui/src/app.rs"
+          ],
+          "deps": ["07-02"]
+        },
+        {
+          "id": "07-04",
+          "name": "Integration test proving full modal editing",
+          "criteria": [
+            "Start in normal mode with hjkl navigation",
+            "Press i to enter insert mode and type text",
+            "Press Escape to return to normal mode",
+            "dd deletes current line in normal mode",
+            "All behavior driven by Lisp plugin not Rust code"
           ],
           "files_to_modify": [
             "crates/alfred-tui/src/app.rs"
           ],
-          "deps": ["06-03"]
+          "deps": ["07-03"]
         }
       ]
     }

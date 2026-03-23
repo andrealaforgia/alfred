@@ -53,6 +53,7 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(cursor-move direction [count])` -- move cursor by direction and optional count
 /// - `(message text)` -- set the editor message line
 /// - `(current-mode)` -- return the current mode name as a string
+/// - `(set-mode name)` -- set the editor mode and switch active keymap
 /// - `(buffer-filename)` -- return the buffer's filename or empty string if unnamed
 /// - `(buffer-modified?)` -- return T if buffer modified, F otherwise
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
@@ -66,7 +67,8 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_message(env.clone(), state.clone());
     register_current_mode(env.clone(), state.clone());
     register_buffer_filename(env.clone(), state.clone());
-    register_buffer_modified(env, state);
+    register_buffer_modified(env.clone(), state.clone());
+    register_set_mode(env, state);
 }
 
 /// Registers the `define-command` Lisp primitive.
@@ -593,8 +595,23 @@ fn register_buffer_modified(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
 fn register_current_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "current-mode", move |_env, _args| {
         let editor = state.borrow();
-        let mode_name = editor.mode.to_string();
-        Ok(Value::String(mode_name))
+        Ok(Value::String(editor.mode.clone()))
+    });
+}
+
+/// Registers `set-mode`: changes the editor mode and updates active keymaps.
+///
+/// Usage: `(set-mode "insert")` or `(set-mode "normal")`
+///
+/// Sets `state.mode` to the given string and `state.active_keymaps`
+/// to `["{mode-name}-mode"]`, switching the active keymap to match.
+fn register_set_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-mode", move |_env, args| {
+        let mode_name = extract_string_arg(&args, "set-mode")?;
+        let mut editor = state.borrow_mut();
+        editor.mode = mode_name.clone();
+        editor.active_keymaps = vec![format!("{}-mode", mode_name)];
+        Ok(Value::NIL)
     });
 }
 
@@ -1487,5 +1504,79 @@ mod tests {
 
         // And: the active keymaps include "normal"
         assert_eq!(editor.active_keymaps, vec!["normal".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test (07-01): set-mode changes mode and active keymaps
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_normal_mode_when_set_mode_insert_then_current_mode_returns_insert_and_active_keymaps_updated(
+    ) {
+        // Given: an editor in normal mode
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // Verify initial mode is normal
+        let initial_mode = runtime.eval("(current-mode)").unwrap();
+        assert_eq!(initial_mode.as_string(), Some("normal".to_string()));
+
+        // When: set-mode to "insert"
+        runtime.eval("(set-mode \"insert\")").unwrap();
+
+        // Then: current-mode returns "insert"
+        let result = runtime.eval("(current-mode)").unwrap();
+        assert_eq!(result.as_string(), Some("insert".to_string()));
+
+        // And: active keymaps is set to ["insert-mode"]
+        let editor = state.borrow();
+        assert_eq!(editor.active_keymaps, vec!["insert-mode".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (07-01): set-mode primitive
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_insert_mode_when_set_mode_normal_then_mode_is_normal_and_active_keymaps_updated() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        // Switch to insert first
+        runtime.eval("(set-mode \"insert\")").unwrap();
+
+        // When: set-mode back to normal
+        runtime.eval("(set-mode \"normal\")").unwrap();
+
+        // Then: mode is normal
+        let result = runtime.eval("(current-mode)").unwrap();
+        assert_eq!(result.as_string(), Some("normal".to_string()));
+
+        // And: active keymaps updated
+        let editor = state.borrow();
+        assert_eq!(editor.active_keymaps, vec!["normal-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_runtime_when_set_mode_with_wrong_type_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-mode 42)");
+        assert!(result.is_err(), "set-mode with non-string should fail");
+    }
+
+    #[test]
+    fn given_runtime_when_set_mode_no_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-mode)");
+        assert!(result.is_err(), "set-mode with no args should fail");
     }
 }

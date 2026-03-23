@@ -17,22 +17,9 @@ use crate::viewport::Viewport;
 /// A keymap maps key events to command names.
 pub type Keymap = HashMap<KeyEvent, String>;
 
-/// The editor mode, determining how key events are interpreted.
-///
-/// In M1 only `Normal` mode exists. `Insert` will be added in M7.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditorMode {
-    /// Normal (command) mode -- the default mode.
-    Normal,
-}
-
-impl std::fmt::Display for EditorMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EditorMode::Normal => write!(f, "normal"),
-        }
-    }
-}
+/// Known mode name constants.
+pub const MODE_NORMAL: &str = "normal";
+pub const MODE_INSERT: &str = "insert";
 
 /// The top-level editor state, aggregating all subsystems.
 ///
@@ -44,7 +31,7 @@ pub struct EditorState {
     pub cursor: Cursor,
     pub viewport: Viewport,
     pub commands: CommandRegistry,
-    pub mode: EditorMode,
+    pub mode: String,
     pub keymaps: HashMap<String, Keymap>,
     pub active_keymaps: Vec<String>,
     pub hooks: HookRegistry,
@@ -144,7 +131,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         cursor: crate::cursor::new(0, 0),
         viewport: crate::viewport::new(0, height, width),
         commands: CommandRegistry::new(),
-        mode: EditorMode::Normal,
+        mode: MODE_NORMAL.to_string(),
         keymaps: HashMap::new(),
         active_keymaps: Vec::new(),
         hooks: HookRegistry::new(),
@@ -227,7 +214,7 @@ mod tests {
     #[test]
     fn given_new_editor_state_then_mode_is_normal() {
         let state = editor_state::new(80, 24);
-        assert_eq!(state.mode, crate::editor_state::EditorMode::Normal);
+        assert_eq!(state.mode, "normal");
     }
 
     #[test]
