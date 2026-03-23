@@ -401,6 +401,10 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
         // Set terminal cursor shape based on current mode
         renderer::apply_cursor_shape(&state_rc.borrow())?;
 
+        // Poll with timeout to avoid blocking forever if terminal doesn't deliver events
+        if !ct_event::poll(std::time::Duration::from_millis(100))? {
+            continue;
+        }
         if let Event::Key(ct_key) = ct_event::read()? {
             // Handle key press events. Accept both Press and unknown kinds
             // (some terminals don't support enhanced keyboard protocol).
