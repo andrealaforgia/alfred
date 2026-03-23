@@ -1,0 +1,13 @@
+services:
+  e2e:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile
+    # Alfred needs a TTY to enter raw mode / alternate screen
+    tty: true
+    stdin_open: true
+    volumes:
+      # Mount plugins so we can iterate without rebuilding
+      - ../../plugins:/alfred/plugins:ro
+    environment:
+      - TERM=xterm-256color

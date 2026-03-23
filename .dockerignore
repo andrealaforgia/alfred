@@ -1,0 +1,8 @@
+target/
+mutants.out/
+mutants.out.old/
+.git/
+memory/
+docs/
+scripts/
+*.md

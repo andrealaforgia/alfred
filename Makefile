@@ -1,4 +1,4 @@
-.PHONY: dev_install install uninstall test build format lint check clean ci-local
+.PHONY: dev_install install uninstall test build format lint check clean ci-local e2e
 
 CARGO_BIN_DIR := $(HOME)/.cargo/bin
 SHELL_RC := $(HOME)/.zshrc
@@ -60,6 +60,10 @@ check:
 # Clean build artifacts
 clean:
 	cargo clean
+
+# Run end-to-end tests in Docker (requires Docker)
+e2e:
+	./tests/e2e/run_tests.sh
 
 # Run GitHub Actions workflow locally via act (requires Docker)
 ci-local:

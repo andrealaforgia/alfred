@@ -399,8 +399,9 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
         )?;
 
         if let Event::Key(ct_key) = ct_event::read()? {
-            // Only handle key press events (not release/repeat)
-            if ct_key.kind == KeyEventKind::Press {
+            // Handle key press events. Accept both Press and unknown kinds
+            // (some terminals don't support enhanced keyboard protocol).
+            if ct_key.kind != KeyEventKind::Release {
                 let key = convert_crossterm_key(ct_key);
 
                 // Handle the key event (borrow state, then drop before deferred action)
