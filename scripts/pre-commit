@@ -1,0 +1,34 @@
+#!/bin/sh
+# Pre-commit hook for Alfred editor
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Or: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Format check
+echo "  Checking formatting..."
+cargo fmt --all -- --check
+if [ $? -ne 0 ]; then
+    echo "FAILED: cargo fmt. Run 'cargo fmt' to fix."
+    exit 1
+fi
+
+# Clippy
+echo "  Running clippy..."
+cargo clippy --workspace -- -D warnings
+if [ $? -ne 0 ]; then
+    echo "FAILED: clippy warnings found."
+    exit 1
+fi
+
+# Tests
+echo "  Running tests..."
+cargo test --workspace --quiet
+if [ $? -ne 0 ]; then
+    echo "FAILED: tests failed."
+    exit 1
+fi
+
+echo "All pre-commit checks passed."

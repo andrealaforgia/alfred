@@ -186,7 +186,7 @@ fn register_add_hook(
         let error_buf = hook_errors.clone();
 
         // Wrap the Lisp callback in a Rust closure compatible with HookRegistry
-        let wrapper: Rc<dyn Fn(&[String]) -> Vec<String>> =
+        let wrapper: Rc<alfred_core::hook::HookCallbackFn> =
             Rc::new(move |string_args: &[String]| {
                 // Convert &[String] args to Lisp values and build call expression
                 let mut call_values: Vec<Value> = Vec::with_capacity(string_args.len() + 1);

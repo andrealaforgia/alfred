@@ -62,6 +62,7 @@ pub struct EditorState {
 /// - Keymaps registry is empty, active keymaps are empty, hook registry is empty.
 /// - Message is None.
 /// - Running is true.
+///
 /// Resolves a key event by looking it up in the active keymaps.
 ///
 /// Iterates through active keymaps in order, returning the command name

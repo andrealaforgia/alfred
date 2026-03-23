@@ -265,9 +265,7 @@ pub fn move_word_backward(cursor: Cursor, buf: &Buffer) -> Cursor {
     }
 
     // Move back one step to look behind
-    if col > 0 {
-        col -= 1;
-    }
+    col = col.saturating_sub(1);
 
     // Skip whitespace backward
     while col > 0 && chars[col].is_whitespace() {

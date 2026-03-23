@@ -10,6 +10,9 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Type alias for hook callback closures.
+pub type HookCallbackFn = dyn Fn(&[String]) -> Vec<String>;
+
 /// Unique identifier for a registered hook callback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HookId(pub usize);
@@ -17,7 +20,7 @@ pub struct HookId(pub usize);
 /// A registered callback with its unique ID.
 struct HookCallback {
     id: HookId,
-    callback: Rc<dyn Fn(&[String]) -> Vec<String>>,
+    callback: Rc<HookCallbackFn>,
 }
 
 /// Registry mapping hook names to their registered callbacks.
@@ -47,14 +50,11 @@ impl Default for HookRegistry {
 pub fn register_hook(
     registry: &mut HookRegistry,
     hook_name: &str,
-    callback: Rc<dyn Fn(&[String]) -> Vec<String>>,
+    callback: Rc<HookCallbackFn>,
 ) -> HookId {
     let id = HookId(registry.next_id);
     registry.next_id += 1;
-    let entry = registry
-        .hooks
-        .entry(hook_name.to_string())
-        .or_insert_with(Vec::new);
+    let entry = registry.hooks.entry(hook_name.to_string()).or_default();
     entry.push(HookCallback { id, callback });
     id
 }
