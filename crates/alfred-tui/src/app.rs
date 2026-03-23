@@ -116,6 +116,12 @@ pub(crate) enum InputState {
     /// Waiting for a register name character after `"` prefix.
     /// The next 'a'-'z' selects the named register for the following command.
     PendingRegister,
+    /// Waiting for a register name character after `q` to start macro recording.
+    /// The next 'a'-'z' starts recording into that register.
+    PendingMacroRecord,
+    /// Waiting for a register name character after `@` to replay a macro.
+    /// The next 'a'-'z' replays the macro from that register; `@` replays the last macro.
+    PendingMacroPlay,
 }
 
 /// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
@@ -345,6 +351,22 @@ pub(crate) fn handle_key_event(
     input_state: InputState,
     pending_count: Option<u32>,
 ) -> (InputState, DeferredAction, Option<u32>) {
+    // Macro recording: if recording and this key is `q` (stop recording),
+    // store the accumulated buffer and return to Normal without recording the `q`.
+    // Otherwise, push the key into the macro buffer before processing.
+    if state.macro_recording.is_some() && !state.macro_replaying {
+        if input_state == InputState::Normal && key.code == KeyCode::Char('q') {
+            let register = state.macro_recording.take().unwrap();
+            state
+                .macro_registers
+                .insert(register, state.macro_buffer.drain(..).collect());
+            state.message = None;
+            return (InputState::Normal, DeferredAction::None, None);
+        }
+        // Record the key before processing it normally
+        state.macro_buffer.push(key);
+    }
+
     // Command-line mode: accumulating input after `:`
     // Count prefix is discarded when entering command mode.
     if let InputState::Command(mut cmd) = input_state {
@@ -497,6 +519,56 @@ pub(crate) fn handle_key_event(
                 return (InputState::Normal, DeferredAction::None, None);
             }
         }
+    }
+
+    // PendingMacroRecord mode: waiting for a register name character after `q`.
+    // Valid register names are 'a'-'z'. Escape cancels.
+    if let InputState::PendingMacroRecord = input_state {
+        match key.code {
+            KeyCode::Char(ch) if ch.is_ascii_lowercase() => {
+                state.macro_recording = Some(ch);
+                state.macro_buffer.clear();
+                state.message = Some(format!("recording @{}", ch));
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+            _ => {
+                // Escape or invalid character cancels
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+        }
+    }
+
+    // PendingMacroPlay mode: waiting for a register name character after `@`.
+    // Valid register names are 'a'-'z'. `@` replays the last played macro.
+    if let InputState::PendingMacroPlay = input_state {
+        let register = match key.code {
+            KeyCode::Char('@') => state.last_macro_register,
+            KeyCode::Char(ch) if ch.is_ascii_lowercase() => Some(ch),
+            _ => {
+                // Escape or invalid character cancels
+                return (InputState::Normal, DeferredAction::None, None);
+            }
+        };
+
+        if let Some(reg) = register {
+            if let Some(keys) = state.macro_registers.get(&reg).cloned() {
+                state.last_macro_register = Some(reg);
+                state.macro_replaying = true;
+                let mut replay_input_state = InputState::Normal;
+                for replay_key in keys {
+                    let (new_is, action, _count) =
+                        handle_key_event(state, replay_key, replay_input_state, None);
+                    replay_input_state = new_is;
+                    // Execute deferred commands inline during replay
+                    if let DeferredAction::ExecCommand(ref cmd_name) = action {
+                        let _ = alfred_core::command::execute(state, cmd_name);
+                    }
+                }
+                state.macro_replaying = false;
+            }
+            // If register not set, no-op
+        }
+        return (InputState::Normal, DeferredAction::None, None);
     }
 
     // OperatorPending mode: waiting for a motion key after an operator (d, c, y).
@@ -748,6 +820,12 @@ pub(crate) fn handle_key_event(
         }
         Some(ref cmd) if cmd == "enter-jump-mark" => {
             (InputState::PendingJumpMark, DeferredAction::None, None)
+        }
+        Some(ref cmd) if cmd == "enter-macro-record" => {
+            (InputState::PendingMacroRecord, DeferredAction::None, None)
+        }
+        Some(ref cmd) if cmd == "enter-macro-play" => {
+            (InputState::PendingMacroPlay, DeferredAction::None, None)
         }
         Some(ref cmd) if cmd == "enter-operator-delete" => (
             InputState::OperatorPending(Operator::Delete),
@@ -6098,5 +6176,354 @@ mod tests {
         // Cursor unchanged, no error message
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Macro tests: record, playback, repeat, edge cases
+    // -----------------------------------------------------------------------
+
+    /// Helper: add macro keybindings (q -> enter-macro-record, @ -> enter-macro-play)
+    /// and also the 'x' -> delete-char-at-cursor binding used in macro tests.
+    fn setup_macro_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('q')),
+            "enter-macro-record".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('@')),
+            "enter-macro-play".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('x')),
+            "delete-char-at-cursor".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('j')),
+            "cursor-down".to_string(),
+        );
+    }
+
+    #[test]
+    fn given_normal_mode_when_q_pressed_then_enters_pending_macro_record() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abc");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMacroRecord);
+    }
+
+    #[test]
+    fn given_pending_macro_record_when_register_char_pressed_then_starts_recording() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abc");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Press q -> PendingMacroRecord
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        // Press 'a' -> starts recording into register a
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.macro_recording, Some('a'));
+        assert_eq!(state.message, Some("recording @a".to_string()));
+    }
+
+    #[test]
+    fn given_recording_macro_when_q_pressed_then_stops_recording_and_stores_keys() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abc");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Start recording: qa
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(state.macro_recording, Some('a'));
+
+        // Record 'x' (delete char at cursor) -- dispatches and records
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        assert_eq!(is, super::InputState::Normal);
+        // 'a' has been deleted (buffer was "abc", now "bc")
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bc");
+        // Still recording
+        assert_eq!(state.macro_recording, Some('a'));
+
+        // Stop recording: q
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.macro_recording, None);
+        // Macro register 'a' should contain the 'x' key
+        assert!(state.macro_registers.contains_key(&'a'));
+        assert_eq!(state.macro_registers[&'a'].len(), 1);
+        assert_eq!(
+            state.macro_registers[&'a'][0],
+            KeyEvent::plain(KeyCode::Char('x'))
+        );
+    }
+
+    #[test]
+    fn given_recorded_macro_when_played_back_then_replays_recorded_keys() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abc");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Record: qa x q (record 'x' in register a)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(is, super::InputState::Normal);
+        // Buffer is now "bc" (first char deleted)
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bc");
+
+        // Play back: @a (should delete another char)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('@')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMacroPlay);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+        // Buffer is now "c" (second char deleted)
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "c");
+    }
+
+    #[test]
+    fn given_recorded_multi_key_macro_when_played_back_then_replays_all_keys() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line1\nline2\nline3");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Also need 'dd' support. We use 'j' (cursor-down) + 'x' (delete char at cursor)
+        // as a simpler multi-key macro: record qa j x q
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        // Record: j (move down)
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('j')), is);
+        assert_eq!(state.cursor.line, 1);
+        // Record: x (delete char at cursor)
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        // line2 becomes "ine2"
+        // Stop recording
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(state.macro_registers[&'a'].len(), 2); // j, x
+
+        // Play back: @a (should move down again and delete first char of line3)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('@')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+        // After replay: cursor moved to line 2, first char of "line3" deleted -> "ine3"
+        assert_eq!(state.cursor.line, 2);
+        let line3_content = alfred_core::buffer::get_line(&state.buffer, 2).unwrap_or("");
+        assert!(
+            line3_content.starts_with("ine3"),
+            "Expected line3 to start with 'ine3', got: {:?}",
+            line3_content
+        );
+    }
+
+    #[test]
+    fn given_played_macro_when_at_at_pressed_then_repeats_last_macro() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcdef");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Record: qa x q (delete one char)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bcdef");
+
+        // Play @a
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('@')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "cdef");
+
+        // Repeat with @@
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('@')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('@')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "def");
+    }
+
+    #[test]
+    fn given_unset_register_when_playback_attempted_then_noop() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Play @z (register z has nothing recorded)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('@')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('z')), is);
+        assert_eq!(is, super::InputState::Normal);
+        // Buffer unchanged
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+        // Cursor unchanged
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_recording_macro_when_playback_replays_then_replayed_keys_not_recorded() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abcdef");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Record macro a: qa x q (delete one char)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('x')), is);
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bcdef");
+        assert_eq!(state.macro_registers[&'a'].len(), 1); // just 'x'
+
+        // Now record macro b that plays macro a: qb @a q
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        assert_eq!(state.macro_recording, Some('b'));
+
+        // Type @a while recording macro b
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('@')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "cdef"); // played back
+
+        // Stop recording macro b
+        let _is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('q')), is);
+        assert_eq!(state.macro_recording, None);
+
+        // Macro b should contain exactly 2 keys: '@' and 'a' (the playback command)
+        // The replayed 'x' from macro a should NOT be in macro b's recording.
+        assert_eq!(state.macro_registers[&'b'].len(), 2);
+        assert_eq!(
+            state.macro_registers[&'b'][0],
+            KeyEvent::plain(KeyCode::Char('@'))
+        );
+        assert_eq!(
+            state.macro_registers[&'b'][1],
+            KeyEvent::plain(KeyCode::Char('a'))
+        );
+    }
+
+    #[test]
+    fn given_pending_macro_record_when_escape_pressed_then_cancelled() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Press q then Escape
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMacroRecord);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Not recording
+        assert_eq!(state.macro_recording, None);
+    }
+
+    #[test]
+    fn given_pending_macro_play_when_escape_pressed_then_cancelled() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Press @ then Escape
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('@')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingMacroPlay);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+        assert_eq!(is, super::InputState::Normal);
+    }
+
+    #[test]
+    fn given_recording_message_shown_while_recording_then_cleared_on_stop() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("abc");
+        setup_standard_keymaps(&mut state);
+        setup_macro_keymaps(&mut state);
+
+        // Start recording: qa
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        let _is_after_start = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(state.message, Some("recording @a".to_string()));
+
+        // Stop recording: q
+        let _is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('q')),
+            super::InputState::Normal,
+        );
+        // Message should be cleared on stop
+        assert_eq!(state.message, None);
     }
 }

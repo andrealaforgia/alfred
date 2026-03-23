@@ -102,6 +102,18 @@ pub struct EditorState {
     /// Named marks ('a'-'z') mapping to cursor positions.
     /// Users set marks with `m{a-z}` and jump to them with `'{a-z}`.
     pub marks: HashMap<char, Cursor>,
+    /// Macro registers ('a'-'z') storing recorded key sequences.
+    /// Separate from yank registers since macros store `Vec<KeyEvent>`.
+    pub macro_registers: HashMap<char, Vec<KeyEvent>>,
+    /// Which register is currently being recorded to (`q{a-z}` starts, `q` stops).
+    /// `None` means not recording.
+    pub macro_recording: Option<char>,
+    /// Keys accumulated during the current macro recording session.
+    pub macro_buffer: Vec<KeyEvent>,
+    /// True while replaying a macro, to prevent re-recording replayed keys.
+    pub macro_replaying: bool,
+    /// The register of the last played macro, for `@@` (repeat last macro).
+    pub last_macro_register: Option<char>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1116,6 +1128,11 @@ pub fn new(width: u16, height: u16) -> EditorState {
         selection_start: None,
         visual_line_mode: false,
         marks: HashMap::new(),
+        macro_registers: HashMap::new(),
+        macro_recording: None,
+        macro_buffer: Vec::new(),
+        macro_replaying: false,
+        last_macro_register: None,
     }
 }
 
