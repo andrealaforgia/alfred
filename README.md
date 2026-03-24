@@ -1,4 +1,4 @@
-# Alfred
+# Alfred (Andrea LaFoRgia EDitor)
 
 A plugin-first, Emacs-inspired terminal text editor built in Rust with an embedded Lisp extension language.
 

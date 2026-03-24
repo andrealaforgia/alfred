@@ -1201,10 +1201,8 @@ fn register_buffer_get_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
         };
 
         let editor = state.borrow();
-        let content = buffer::get_line(&editor.buffer, line_num)
-            .unwrap_or("")
-            .trim_end_matches('\n');
-        Ok(Value::String(content.to_string()))
+        let content = buffer::get_line_content(&editor.buffer, line_num);
+        Ok(Value::String(content))
     });
 }
 

@@ -3188,3 +3188,99 @@ class TestEdgeCases:
         assert exit_code == 0, \
             f"Expected no crash (exit 0) after search with no match, got {exit_code}"
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Large file / rope chunk boundary tests
+# ---------------------------------------------------------------------------
+
+class TestLargeFileRopeChunkBoundary:
+    """
+    Verifies that all lines in a large file are correctly accessible,
+    even when ropey splits the buffer across internal rope chunks.
+
+    Ropey's default chunk size is ~1KB. Lines that span chunk boundaries
+    previously caused get_line() to return None (via as_str()), making
+    those lines render as empty and causing display artifacts.
+    """
+
+    def test_large_rs_file_all_lines_preserved_after_save(self):
+        """Opening and saving a large .rs file preserves all lines."""
+        # Generate a file large enough to span multiple ropey chunks (~4KB+)
+        lines = []
+        for i in range(200):
+            lines.append(f"// Line {i:04d}: {'x' * 60}")
+        content = "\n".join(lines) + "\n"
+
+        fd, path = tempfile.mkstemp(prefix="alfred_e2e_", suffix=".rs")
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+
+        child = spawn_alfred(path)
+
+        # Save without modifications — file should be identical
+        send_colon_command(child, "w")
+        time.sleep(0.5)
+
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        saved_content = read_file(path)
+        saved_lines = saved_content.split("\n")
+
+        # Verify no lines were lost or corrupted
+        assert exit_code == 0, f"Expected exit 0, got {exit_code}"
+        for i in range(200):
+            expected = f"// Line {i:04d}: {'x' * 60}"
+            assert saved_lines[i] == expected, \
+                f"Line {i} corrupted: expected {expected!r}, got {saved_lines[i]!r}"
+
+        os.unlink(path)
+
+    def test_large_rs_file_edit_at_chunk_boundary_preserved(self):
+        """Editing a line near a rope chunk boundary preserves content."""
+        # Create ~4KB file; ropey chunk boundary is typically around 1KB
+        lines = []
+        for i in range(80):
+            lines.append(f"fn func_{i:04d}() {{ let x = {i}; }}")
+        content = "\n".join(lines) + "\n"
+
+        fd, path = tempfile.mkstemp(prefix="alfred_e2e_", suffix=".rs")
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+
+        child = spawn_alfred(path)
+
+        # Navigate to line 40 (likely near a chunk boundary) with :40
+        send_colon_command(child, "40")
+        time.sleep(0.3)
+
+        # Enter insert mode at start of line, add a comment prefix
+        send_keys(child, "I")
+        time.sleep(0.1)
+        send_keys(child, "// EDITED: ")
+        time.sleep(0.1)
+
+        # Return to normal mode and save
+        child.send("\x1b")  # Escape
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        saved_content = read_file(path)
+        saved_lines = saved_content.split("\n")
+
+        assert exit_code == 0, f"Expected exit 0, got {exit_code}"
+
+        # Line 39 (0-indexed) should have the edit prefix
+        assert saved_lines[39].startswith("// EDITED: fn func_0039"), \
+            f"Expected edited line 39, got: {saved_lines[39]!r}"
+
+        # Lines around it should be untouched
+        assert saved_lines[38] == "fn func_0038() { let x = 38; }", \
+            f"Line 38 should be untouched, got: {saved_lines[38]!r}"
+        assert saved_lines[40] == "fn func_0040() { let x = 40; }", \
+            f"Line 40 should be untouched, got: {saved_lines[40]!r}"
+
+        os.unlink(path)

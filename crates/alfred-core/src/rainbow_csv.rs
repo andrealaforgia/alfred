@@ -55,10 +55,8 @@ pub fn colorize_buffer(state: &mut EditorState) {
 
     let total_lines = buffer::line_count(&state.buffer);
     for line_idx in 0..total_lines {
-        let line_content = buffer::get_line(&state.buffer, line_idx)
-            .unwrap_or("")
-            .trim_end_matches('\n');
-        let segments = compute_line_segments(line_content, ',');
+        let line_content = buffer::get_line_content(&state.buffer, line_idx);
+        let segments = compute_line_segments(&line_content, ',');
         for (start, end, color) in segments {
             editor_state::add_line_style(state, line_idx, start, end, color);
         }

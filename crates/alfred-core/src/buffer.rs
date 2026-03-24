@@ -117,6 +117,9 @@ pub fn line_count(buffer: &Buffer) -> usize {
 /// Returns the content of line `index` (zero-indexed), or `None` if out of bounds.
 ///
 /// Lines include their trailing newline character if present.
+/// Note: returns `None` both for out-of-bounds indices AND when the line
+/// spans a rope chunk boundary (ropey's `as_str()` fails for non-contiguous
+/// slices). Use `get_line_string` for a guaranteed-to-work alternative.
 pub fn get_line(buffer: &Buffer, index: usize) -> Option<&str> {
     if index >= buffer.rope.len_lines() {
         return None;
@@ -125,6 +128,18 @@ pub fn get_line(buffer: &Buffer, index: usize) -> Option<&str> {
     // ropey::RopeSlice::as_str() returns Some when the slice is contiguous
     // in memory, which is the common case for single lines.
     line.as_str()
+}
+
+/// Returns the content of line `index` as a String, or empty string if out of bounds.
+///
+/// Unlike `get_line`, this always succeeds for valid indices because it
+/// materializes the line from ropey's chunk iterator. Use this when you
+/// need guaranteed access to every line's content.
+pub fn get_line_string(buffer: &Buffer, index: usize) -> String {
+    if index >= buffer.rope.len_lines() {
+        return String::new();
+    }
+    buffer.rope.line(index).to_string()
 }
 
 /// Returns the entire buffer content as a String.
@@ -252,9 +267,11 @@ pub fn save_to_file(buffer: &Buffer, path: &Path) -> Result<Buffer> {
 ///
 /// If the line index is out of bounds, returns an empty string.
 /// Useful for yanking: the caller gets clean text without newline artifacts.
+///
+/// This always works, even when the line spans a rope chunk boundary
+/// (where `get_line`'s `as_str()` would return `None`).
 pub fn get_line_content(buffer: &Buffer, line: usize) -> String {
-    get_line(buffer, line)
-        .unwrap_or("")
+    get_line_string(buffer, line)
         .trim_end_matches('\n')
         .to_string()
 }
