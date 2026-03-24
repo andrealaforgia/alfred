@@ -126,6 +126,9 @@ pub struct EditorState {
     /// Current index into the change list. Points one past the last entry when at the end.
     /// Decremented by change-list-back, incremented by change-list-forward.
     pub change_list_index: usize,
+    /// Number of spaces inserted when the Tab key is pressed in insert mode.
+    /// Default is 4. Configurable via `(set-tab-width N)` Lisp primitive.
+    pub tab_width: usize,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1477,6 +1480,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         jump_index: 0,
         change_list: Vec::new(),
         change_list_index: 0,
+        tab_width: 4,
     }
 }
 

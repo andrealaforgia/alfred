@@ -936,6 +936,20 @@ pub(crate) fn handle_key_event(
                         state.viewport =
                             alfred_core::viewport::adjust(state.viewport, &state.cursor);
                     }
+                    KeyCode::Tab => {
+                        alfred_core::editor_state::push_undo(state);
+                        let line = state.cursor.line;
+                        let col = state.cursor.column;
+                        let spaces = " ".repeat(state.tab_width);
+                        state.buffer =
+                            alfred_core::buffer::insert_at(&state.buffer, line, col, &spaces);
+                        for _ in 0..state.tab_width {
+                            state.cursor =
+                                alfred_core::cursor::move_right(state.cursor, &state.buffer);
+                        }
+                        state.viewport =
+                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    }
                     _ => {}
                 }
             }
@@ -7445,5 +7459,170 @@ mod tests {
             "Message should contain deleted count, got: '{}'",
             msg
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: Tab key in insert mode
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_insert_mode_when_tab_pressed_then_inserts_default_4_spaces_and_cursor_advances() {
+        // Given: editor in insert mode with buffer "Hello" and cursor at col 5
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab key is pressed
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: 4 spaces are inserted after "Hello" and cursor advances by 4
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "Hello    ",
+            "Tab should insert 4 spaces (default tab_width)"
+        );
+        assert_eq!(
+            state.cursor.column, 9,
+            "Cursor should advance by tab_width (4) columns"
+        );
+    }
+
+    #[test]
+    fn given_insert_mode_with_tab_width_2_when_tab_pressed_then_inserts_2_spaces() {
+        // Given: editor in insert mode with tab_width=2
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        state.tab_width = 2;
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab key is pressed
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: 2 spaces are inserted
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "Hello  ",
+            "Tab should insert 2 spaces when tab_width=2"
+        );
+        assert_eq!(
+            state.cursor.column, 7,
+            "Cursor should advance by tab_width (2) columns"
+        );
+    }
+
+    #[test]
+    fn given_insert_mode_with_empty_buffer_when_tab_pressed_then_inserts_spaces() {
+        // Given: editor in insert mode with empty buffer
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("");
+        state.cursor = cursor::new(0, 0);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab key is pressed
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: 4 spaces are inserted
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "    ",
+            "Tab on empty buffer should insert tab_width spaces"
+        );
+        assert_eq!(state.cursor.column, 4, "Cursor should be at column 4");
+    }
+
+    #[test]
+    fn given_insert_mode_when_tab_pressed_at_end_of_line_then_extends_line() {
+        // Given: editor in insert mode, cursor at end of first line
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("AB\nCD");
+        state.cursor = cursor::new(0, 2);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab key is pressed
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Then: spaces are appended to the first line
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "AB    \nCD",
+            "Tab at end of line should extend the line with spaces"
+        );
+        assert_eq!(state.cursor.column, 6);
+    }
+
+    #[test]
+    fn given_insert_mode_when_multiple_tabs_pressed_then_each_inserts_tab_width_spaces() {
+        // Given: editor in insert mode with empty buffer
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("");
+        state.cursor = cursor::new(0, 0);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab pressed twice
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Tab), is);
+
+        // Then: 8 spaces total
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "        ",
+            "Two tabs should insert 8 spaces (4 + 4)"
+        );
+        assert_eq!(state.cursor.column, 8);
+    }
+
+    #[test]
+    fn given_insert_mode_when_tab_then_undo_then_restores_pre_tab_state() {
+        // Given: editor in insert mode with "Hello"
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("Hello");
+        state.cursor = cursor::new(0, 5);
+        state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+        setup_standard_keymaps(&mut state);
+
+        // When: Tab is pressed, then undo
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Tab),
+            super::InputState::Normal,
+        );
+
+        // Verify tab was inserted
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "Hello    ");
+
+        // Undo
+        alfred_core::editor_state::undo(&mut state);
+
+        // Then: buffer is restored to "Hello"
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(content, "Hello", "Undo should restore pre-tab state");
     }
 }

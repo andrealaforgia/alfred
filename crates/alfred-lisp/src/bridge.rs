@@ -60,6 +60,8 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(save-buffer)` -- save buffer to its file path; `(save-buffer "path")` saves to explicit path
 /// - `(set-cursor-shape "mode" "shape")` -- set cursor shape for a mode
 /// - `(get-cursor-shape "mode")` -- get cursor shape name for a mode
+/// - `(set-tab-width n)` -- set the number of spaces per Tab (must be >= 1)
+/// - `(get-tab-width)` -- return the current tab width as an integer
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -75,6 +77,8 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_save_buffer(env.clone(), state.clone());
     register_set_cursor_shape(env.clone(), state.clone());
     register_get_cursor_shape(env.clone(), state.clone());
+    register_set_tab_width(env.clone(), state.clone());
+    register_get_tab_width(env.clone(), state.clone());
     register_set_mode(env, state);
 }
 
@@ -699,6 +703,45 @@ fn register_get_cursor_shape(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorStat
             Some(shape) => Ok(Value::String(shape.clone())),
             None => Ok(Value::NIL),
         }
+    });
+}
+
+/// Registers `set-tab-width`: configures the number of spaces inserted per Tab key press.
+///
+/// Usage: `(set-tab-width 2)` or `(set-tab-width 4)`
+///
+/// The value must be a positive integer (>= 1). Returns NIL on success.
+fn register_set_tab_width(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-tab-width", move |_env, args| {
+        let value = args.first().ok_or_else(|| RuntimeError {
+            msg: "set-tab-width: expected 1 argument, got 0".to_string(),
+        })?;
+        match value {
+            Value::Int(n) => {
+                if *n < 1 {
+                    return Err(RuntimeError {
+                        msg: format!("set-tab-width: value must be >= 1, got {}", n),
+                    });
+                }
+                state.borrow_mut().tab_width = *n as usize;
+                Ok(Value::NIL)
+            }
+            other => Err(RuntimeError {
+                msg: format!("set-tab-width: expected integer argument, got {}", other),
+            }),
+        }
+    });
+}
+
+/// Registers `get-tab-width`: returns the current tab width as an integer.
+///
+/// Usage: `(get-tab-width)`
+///
+/// Returns the current tab width (number of spaces per Tab).
+fn register_get_tab_width(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "get-tab-width", move |_env, _args| {
+        let editor = state.borrow();
+        Ok(Value::Int(editor.tab_width as i32))
     });
 }
 
@@ -2468,5 +2511,104 @@ mod tests {
 
         let result = runtime.eval("(get-cursor-shape \"visual\")").unwrap();
         assert_eq!(result.as_string(), Some("underline".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: set-tab-width and get-tab-width primitives
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_default_state_when_get_tab_width_then_returns_4() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(get-tab-width)").unwrap();
+        assert_eq!(
+            result.as_integer(),
+            Some(4),
+            "Default tab width should be 4"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_to_2_then_get_returns_2() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        runtime.eval("(set-tab-width 2)").unwrap();
+
+        let result = runtime.eval("(get-tab-width)").unwrap();
+        assert_eq!(
+            result.as_integer(),
+            Some(2),
+            "Tab width should be 2 after set"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_to_8_then_state_reflects_change() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        runtime.eval("(set-tab-width 8)").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.tab_width, 8, "EditorState.tab_width should be 8");
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_to_zero_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-tab-width 0)");
+        assert!(
+            result.is_err(),
+            "set-tab-width with 0 should return an error"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_to_negative_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-tab-width -1)");
+        assert!(
+            result.is_err(),
+            "set-tab-width with negative value should return an error"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_with_string_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-tab-width \"four\")");
+        assert!(
+            result.is_err(),
+            "set-tab-width with string argument should return an error"
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_tab_width_with_no_args_then_returns_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(set-tab-width)");
+        assert!(
+            result.is_err(),
+            "set-tab-width with no args should return an error"
+        );
     }
 }
