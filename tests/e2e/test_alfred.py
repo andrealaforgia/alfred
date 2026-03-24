@@ -3228,8 +3228,9 @@ class TestFolderBrowser:
     def test_browser_displays_directory_entries(self):
         """Opening a directory renders the folder browser with correct entries.
 
-        Uses pexpect.expect to wait for specific text in the PTY output,
-        which is more reliable than read_nonblocking for alternate-screen apps.
+        Uses sequential pexpect.expect calls to wait for each entry to appear
+        in the PTY output stream. This is reliable because ratatui writes
+        entries in order (row by row) within a single frame flush.
         """
         import shutil
 
@@ -3243,48 +3244,23 @@ class TestFolderBrowser:
 
         child = spawn_alfred(tmpdir)
 
-        # Wait for the browser to render by looking for known entry names.
-        # pexpect.expect searches the PTY output stream for the pattern.
-        try:
-            child.expect("alpha_dir/", timeout=5)
-        except pexpect.TIMEOUT:
-            # Capture whatever IS on screen for the error message
+        # Verify each entry appears in the PTY output.
+        # Sorted order: ../, alpha_dir/, beta_dir/, delta.rs, gamma.txt
+        # ratatui writes rows top-to-bottom, so entries appear in order.
+        errors = []
+        for entry_name in ["alpha_dir/", "beta_dir/", "delta.rs", "gamma.txt"]:
             try:
-                screen = child.read_nonblocking(size=16384, timeout=1)
-            except Exception:
-                screen = "(empty)"
-            send_keys(child, "q")
-            time.sleep(0.3)
-            wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail(
-                f"Browser did not render 'alpha_dir/' within 5s. "
-                f"Screen content: {repr(screen[:500])}"
-            )
-
-        # If we got here, alpha_dir/ appeared. Now verify other entries
-        # are also present by reading the accumulated output.
-        before = child.before or ""
-        after = child.after or ""
-        # Read any remaining buffered output
-        time.sleep(0.5)
-        try:
-            rest = child.read_nonblocking(size=32768, timeout=1)
-        except Exception:
-            rest = ""
-        screen = before + after + rest
+                child.expect(entry_name, timeout=5)
+            except pexpect.TIMEOUT:
+                errors.append(entry_name)
 
         send_keys(child, "q")
         time.sleep(0.3)
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        assert "beta_dir/" in screen, \
-            f"Expected 'beta_dir/' in browser listing, got: {repr(screen[:500])}"
-        assert "gamma.txt" in screen, \
-            f"Expected 'gamma.txt' in browser listing, got: {repr(screen[:500])}"
-        assert "delta.rs" in screen, \
-            f"Expected 'delta.rs' in browser listing, got: {repr(screen[:500])}"
+        assert not errors, \
+            f"Browser did not render these entries: {errors}"
 
         shutil.rmtree(tmpdir)
 
@@ -3546,8 +3522,10 @@ class TestLargeFileRopeChunkBoundary:
 
         child = spawn_alfred(path)
 
-        # Navigate to line 40 (likely near a chunk boundary) with :40
-        send_colon_command(child, "40")
+        # Navigate to line 40 (likely near a chunk boundary)
+        # Alfred doesn't support :N goto-line, so use repeated j
+        for _ in range(39):
+            send_keys(child, "j")
         time.sleep(0.3)
 
         # Enter insert mode at start of line, add a comment prefix

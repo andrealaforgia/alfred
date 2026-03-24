@@ -302,18 +302,19 @@ fn collect_browser_lines(state: &EditorState, visible_height: usize) -> Vec<Line
         let name = browser::display_name(entry);
         let is_cursor = display_idx == browser_state.cursor_index;
 
-        let (fg, bg) = if is_cursor {
-            (Color::Rgb(30, 30, 46), Color::Rgb(137, 180, 250)) // reversed: dark on blue
+        let style = if is_cursor {
+            Style::default()
+                .fg(Color::Rgb(30, 30, 46))
+                .bg(Color::Rgb(137, 180, 250))
         } else if browser::is_directory_entry(entry) {
-            (Color::Rgb(137, 180, 250), Color::Reset) // blue for dirs
+            Style::default().fg(Color::Rgb(137, 180, 250))
         } else {
-            (Color::Rgb(205, 214, 244), Color::Reset) // default text color
+            Style::default().fg(Color::Rgb(205, 214, 244))
         };
 
         let prefix = if is_cursor { " > " } else { "   " };
         let text = format!("{}{}", prefix, name);
-        let style = Style::default().fg(fg).bg(bg);
-        lines.push(Line::from(Span::styled(text, style)));
+        lines.push(Line::styled(text, style));
     }
 
     // Fill remaining lines if entries are fewer than visible height

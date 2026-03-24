@@ -598,4 +598,29 @@ mod tests {
         };
         assert!(is_directory_entry(&entry));
     }
+
+    #[test]
+    fn given_browser_with_multiple_entries_when_visible_entries_then_returns_all() {
+        let state = new_browser_state(
+            PathBuf::from("/tmp/test"),
+            PathBuf::from("/tmp/test"),
+            vec![
+                dir_entry("alpha_dir"),
+                dir_entry("beta_dir"),
+                file_entry("delta.rs"),
+                file_entry("gamma.txt"),
+            ],
+        );
+        assert_eq!(
+            state.entries.len(),
+            5,
+            "Expected 5 entries (../ + 2 dirs + 2 files)"
+        );
+        let visible = visible_entries(&state, 20);
+        assert_eq!(
+            visible.len(),
+            5,
+            "All 5 entries should be visible in 20-row viewport"
+        );
+    }
 }
