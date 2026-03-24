@@ -1,0 +1,162 @@
+{
+  "overall_score": 82,
+  "summary": "Alfred is a well-structured Rust text editor with strong architectural boundaries, comprehensive testing (183 unit tests), 6 documented ADRs, and a plugin-first design where all user-facing features are Lisp plugins. The functional-core/imperative-shell pattern is cleanly enforced by 5 Cargo crates. Main areas for improvement: inline documentation density and the concentration of logic in app.rs (7,449 lines).",
+  "documentation_coverage": {
+    "readme_present": true,
+    "adrs_count": 6,
+    "inline_doc_ratio": 0.72,
+    "api_doc_present": true,
+    "notes": "Every public function and type has a doc comment. Six ADRs cover all major decisions. A comprehensive vim commands research document exists. CLAUDE.md serves as the project README."
+  },
+  "architecture_clarity": {
+    "layers_detected": 4,
+    "layer_names": ["pure-domain (alfred-core)", "interpreter-integration (alfred-lisp)", "plugin-lifecycle (alfred-plugin)", "imperative-shell (alfred-tui + alfred-bin)"],
+    "circular_dependencies": 0,
+    "entry_points_identified": 1,
+    "naming_consistency_score": 90,
+    "notes": "All dependencies point inward toward alfred-core. No circular dependencies. Naming is consistent: kebab-case for commands, snake_case for Rust, module::function style for pure functions."
+  },
+  "crate_metrics": {
+    "alfred-core": {
+      "lines": 7842,
+      "modules": 10,
+      "external_deps": ["ropey", "thiserror"],
+      "role": "Pure domain logic"
+    },
+    "alfred-lisp": {
+      "lines": 2959,
+      "modules": 2,
+      "external_deps": ["rust_lisp", "thiserror"],
+      "role": "Lisp interpreter integration and bridge"
+    },
+    "alfred-plugin": {
+      "lines": 1160,
+      "modules": 4,
+      "external_deps": [],
+      "role": "Plugin discovery, loading, and registry"
+    },
+    "alfred-tui": {
+      "lines": 8454,
+      "modules": 2,
+      "external_deps": ["crossterm", "ratatui"],
+      "role": "Event loop, rendering, key handling"
+    },
+    "alfred-bin": {
+      "lines": 253,
+      "modules": 1,
+      "external_deps": ["crossterm"],
+      "role": "Binary entry point and wiring"
+    }
+  },
+  "test_metrics": {
+    "total_tests": 183,
+    "test_pass_rate": 1.0,
+    "execution_time_seconds": 0.01,
+    "e2e_tests_present": true,
+    "e2e_test_count": 30,
+    "e2e_framework": "pexpect (Python, Docker)",
+    "test_naming_convention": "given_X_when_Y_then_Z"
+  },
+  "hotspot_count": 3,
+  "top_hotspots": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "complexity_score": 9.2,
+      "change_frequency": 65,
+      "lines": 7449,
+      "notes": "Contains event loop, all input states (13 variants), operator-pending logic, colon commands, search, visual mode, macro replay, and more. This is the highest-risk file -- both the most complex and most frequently changed."
+    },
+    {
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "complexity_score": 6.5,
+      "change_frequency": 45,
+      "lines": 3310,
+      "notes": "EditorState struct has 30+ fields. Contains builtin command registration (80+ commands). Growing as new vim features are added."
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "complexity_score": 5.8,
+      "change_frequency": 30,
+      "lines": 2472,
+      "notes": "All bridge primitives. Each new Lisp primitive adds a function here. Pattern is consistent but file is growing."
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3
+  },
+  "risk_details": [
+    {
+      "severity": "high",
+      "file": "crates/alfred-tui/src/app.rs",
+      "description": "God-file risk. app.rs is 7,449 lines with 13 InputState variants handled in a single function. Extract operator-pending, visual mode, colon commands, and search into separate modules."
+    },
+    {
+      "severity": "medium",
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "description": "EditorState struct has 30+ fields. Consider grouping related fields into sub-structs (e.g., SearchState, MacroState, VisualState) to improve readability."
+    },
+    {
+      "severity": "medium",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "description": "Growing bridge file. Consider splitting into bridge/buffer.rs, bridge/keymap.rs, bridge/hooks.rs, bridge/theme.rs for better organization."
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Extract app.rs into sub-modules",
+      "description": "Split crates/alfred-tui/src/app.rs (7,449 lines) into focused modules: operator_pending.rs, visual_mode.rs, colon_commands.rs, search.rs, macro_replay.rs. The handle_key_event function is currently 500+ lines with 13 match arms.",
+      "effort": "medium"
+    },
+    {
+      "priority": 2,
+      "title": "Group EditorState fields into sub-structs",
+      "description": "EditorState has 30+ fields. Group them: SearchState (pattern, forward, last_char_find), MacroState (registers, recording, buffer, replaying), VisualState (selection_start, visual_line_mode), JumpState (jump_list, jump_index, change_list, change_list_index).",
+      "effort": "medium"
+    },
+    {
+      "priority": 3,
+      "title": "Split bridge.rs into category modules",
+      "description": "The bridge module registers 20+ primitives in one file. Split into bridge/buffer.rs, bridge/cursor.rs, bridge/keymap.rs, bridge/hooks.rs, bridge/theme.rs for easier navigation.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Add doc-tests for Lisp primitives",
+      "description": "Bridge primitives have doc comments describing usage but no doc-tests. Adding runnable examples in doc comments would catch regressions and serve as living documentation.",
+      "effort": "low"
+    },
+    {
+      "priority": 5,
+      "title": "Add property-based tests for cursor and buffer operations",
+      "description": "CLAUDE.md specifies property-based testing as the default strategy, but no proptest/quickcheck tests exist yet. Cursor movement functions (pure, well-defined domains) are ideal candidates.",
+      "effort": "medium"
+    }
+  ],
+  "plugins": {
+    "count": 5,
+    "names": ["vim-keybindings", "line-numbers", "status-bar", "default-theme", "test-plugin"],
+    "total_lisp_lines": 163,
+    "dependency_graph": {
+      "vim-keybindings": [],
+      "line-numbers": [],
+      "status-bar": [],
+      "default-theme": [],
+      "test-plugin": []
+    }
+  },
+  "git_metrics": {
+    "total_commits": 123,
+    "contributors": 1,
+    "primary_author": "andrea.laforgia@armakuni.com",
+    "branch": "main"
+  },
+  "ci": {
+    "platform": "GitHub Actions",
+    "jobs": ["check", "test", "format", "lint"],
+    "pre_commit_hook": true
+  }
+}
