@@ -61,6 +61,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     bridge::register_hook_primitives(&runtime, state.clone());
     bridge::register_keymap_primitives(&runtime, state.clone());
     bridge::register_theme_primitives(&runtime, state.clone());
+    bridge::register_rendering_primitives(&runtime, state.clone());
     bridge::register_rainbow_csv_primitives(&runtime, state.clone());
     bridge::register_string_primitives(&runtime);
     bridge::register_list_primitives(&runtime);

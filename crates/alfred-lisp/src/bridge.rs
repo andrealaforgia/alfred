@@ -82,6 +82,124 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_set_mode(env, state);
 }
 
+/// Registers rendering-control primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(set-status-bar text)` -- sets the status bar content string
+/// - `(set-gutter-line row text)` -- sets the gutter content for a viewport row
+/// - `(set-gutter-width width)` -- sets the gutter width in columns
+/// - `(viewport-top-line)` -- returns the first visible line number (0-indexed)
+/// - `(viewport-height)` -- returns the number of visible lines
+pub fn register_rendering_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_set_status_bar(env.clone(), state.clone());
+    register_set_gutter_line(env.clone(), state.clone());
+    register_set_gutter_width(env.clone(), state.clone());
+    register_viewport_top_line(env.clone(), state.clone());
+    register_viewport_height(env, state);
+}
+
+/// Registers `set-status-bar`: sets the status bar content string.
+///
+/// Usage: `(set-status-bar "text")`
+///
+/// The renderer reads `state.status_bar_content` and displays it directly.
+fn register_set_status_bar(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-status-bar", move |_env, args| {
+        let text = extract_string_arg(&args, "set-status-bar")?;
+        let mut editor = state.borrow_mut();
+        editor.status_bar_content = Some(text);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-gutter-line`: sets the gutter content for a viewport row.
+///
+/// Usage: `(set-gutter-line row "text")`
+///
+/// Row is a 0-based index into the viewport (not a buffer line number).
+fn register_set_gutter_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-gutter-line", move |_env, args| {
+        let row = match args.first() {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-gutter-line: expected integer for row, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-gutter-line: expected 2 arguments (row, text), got 0".to_string(),
+                });
+            }
+        };
+        let text = match args.get(1) {
+            Some(Value::String(s)) => s.clone(),
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-gutter-line: expected string for text, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-gutter-line: expected 2 arguments (row, text), got 1".to_string(),
+                });
+            }
+        };
+        let mut editor = state.borrow_mut();
+        editor.gutter_lines.insert(row, text);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-gutter-width`: sets the gutter width in columns.
+///
+/// Usage: `(set-gutter-width width)`
+fn register_set_gutter_width(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-gutter-width", move |_env, args| {
+        let width = match args.first() {
+            Some(Value::Int(n)) => *n as u16,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-gutter-width: expected integer for width, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-gutter-width: expected 1 argument (width), got 0".to_string(),
+                });
+            }
+        };
+        let mut editor = state.borrow_mut();
+        editor.viewport.gutter_width = width;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `viewport-top-line`: returns the first visible line number (0-indexed).
+///
+/// Usage: `(viewport-top-line)`
+fn register_viewport_top_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "viewport-top-line", move |_env, _args| {
+        let editor = state.borrow();
+        Ok(Value::Int(editor.viewport.top_line as i32))
+    });
+}
+
+/// Registers `viewport-height`: returns the number of visible lines.
+///
+/// Usage: `(viewport-height)`
+fn register_viewport_height(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "viewport-height", move |_env, _args| {
+        let editor = state.borrow();
+        Ok(Value::Int(editor.viewport.height as i32))
+    });
+}
+
 /// Registers the `define-command` Lisp primitive.
 ///
 /// Usage: `(define-command "name" callback-fn)`
@@ -4280,5 +4398,79 @@ mod tests {
             3,
             "line 1 should have 3 style segments (one per CSV field)"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Rendering primitives: set-status-bar, set-gutter-line, set-gutter-width,
+    // viewport-top-line, viewport-height
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    fn create_rendering_test_runtime() -> (LispRuntime, Rc<RefCell<EditorState>>) {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer =
+                alfred_core::buffer::Buffer::from_string("Line 1\nLine 2\nLine 3\nLine 4\nLine 5");
+            editor.cursor = cursor::new(0, 0);
+            editor.viewport.top_line = 3;
+        }
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_rendering_primitives(&runtime, state.clone());
+        (runtime, state)
+    }
+
+    #[test]
+    fn given_runtime_when_set_status_bar_evaluated_then_status_bar_content_is_set() {
+        let (runtime, state) = create_rendering_test_runtime();
+
+        runtime
+            .eval("(set-status-bar \" file.txt  Ln 1, Col 1  NORMAL \")")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(
+            editor.status_bar_content,
+            Some(" file.txt  Ln 1, Col 1  NORMAL ".to_string())
+        );
+    }
+
+    #[test]
+    fn given_runtime_when_set_gutter_line_evaluated_then_gutter_lines_map_is_updated() {
+        let (runtime, state) = create_rendering_test_runtime();
+
+        runtime.eval("(set-gutter-line 0 \"  1 \")").unwrap();
+        runtime.eval("(set-gutter-line 1 \"  2 \")").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.gutter_lines.get(&0), Some(&"  1 ".to_string()));
+        assert_eq!(editor.gutter_lines.get(&1), Some(&"  2 ".to_string()));
+    }
+
+    #[test]
+    fn given_runtime_when_set_gutter_width_evaluated_then_viewport_gutter_width_is_updated() {
+        let (runtime, state) = create_rendering_test_runtime();
+
+        runtime.eval("(set-gutter-width 4)").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.viewport.gutter_width, 4);
+    }
+
+    #[test]
+    fn given_viewport_at_line_3_when_viewport_top_line_evaluated_then_returns_3() {
+        let (runtime, _state) = create_rendering_test_runtime();
+
+        let result = runtime.eval("(viewport-top-line)").unwrap();
+        assert_eq!(result.as_integer(), Some(3));
+    }
+
+    #[test]
+    fn given_viewport_height_24_when_viewport_height_evaluated_then_returns_24() {
+        let (runtime, _state) = create_rendering_test_runtime();
+
+        let result = runtime.eval("(viewport-height)").unwrap();
+        assert_eq!(result.as_integer(), Some(24));
     }
 }

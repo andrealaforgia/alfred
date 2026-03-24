@@ -133,6 +133,13 @@ pub struct EditorState {
     /// Maps line number -> Vec of (start_col, end_col, ThemeColor) segments.
     /// Used by the renderer to apply per-character colors within a line.
     pub line_styles: HashMap<usize, Vec<(usize, usize, crate::theme::ThemeColor)>>,
+    /// Status bar content set by Lisp plugins via `(set-status-bar text)`.
+    /// When `Some`, the renderer displays this string as the status bar.
+    /// When `None`, no status bar is shown (unless a legacy hook is registered).
+    pub status_bar_content: Option<String>,
+    /// Gutter line content set by Lisp plugins via `(set-gutter-line row text)`.
+    /// Maps viewport row index -> formatted gutter string.
+    pub gutter_lines: HashMap<usize, String>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1486,6 +1493,8 @@ pub fn new(width: u16, height: u16) -> EditorState {
         change_list_index: 0,
         tab_width: 4,
         line_styles: HashMap::new(),
+        status_bar_content: None,
+        gutter_lines: HashMap::new(),
     }
 }
 
