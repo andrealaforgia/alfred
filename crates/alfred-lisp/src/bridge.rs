@@ -938,6 +938,74 @@ fn register_load_theme(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     });
 }
 
+/// Registers Rainbow CSV primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(rainbow-csv-colorize)` -- parses the current buffer as CSV and sets line_styles
+/// - `(clear-line-styles)` -- clears all per-line style segments
+/// - `(buffer-line-count)` -- returns the number of lines in the buffer
+/// - `(buffer-get-line n)` -- returns the text content of line n (0-indexed)
+pub fn register_rainbow_csv_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_rainbow_csv_colorize(env.clone(), state.clone());
+    register_clear_line_styles(env.clone(), state.clone());
+    register_buffer_line_count(env.clone(), state.clone());
+    register_buffer_get_line(env, state);
+}
+
+/// Registers `rainbow-csv-colorize`: parses the buffer as CSV and sets line_styles.
+fn register_rainbow_csv_colorize(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "rainbow-csv-colorize", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        alfred_core::rainbow_csv::colorize_buffer(&mut editor);
+        Ok(Value::String("CSV colorized".to_string()))
+    });
+}
+
+/// Registers `clear-line-styles`: clears all per-line style segments.
+fn register_clear_line_styles(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "clear-line-styles", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        alfred_core::editor_state::clear_line_styles(&mut editor);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `buffer-line-count`: returns the number of lines in the buffer.
+fn register_buffer_line_count(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "buffer-line-count", move |_env, _args| {
+        let editor = state.borrow();
+        let count = buffer::line_count(&editor.buffer) as i32;
+        Ok(Value::Int(count))
+    });
+}
+
+/// Registers `buffer-get-line`: returns the text content of line n (0-indexed).
+fn register_buffer_get_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "buffer-get-line", move |_env, args| {
+        let line_num = match args.first() {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("buffer-get-line: expected integer, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "buffer-get-line: expected 1 argument, got 0".to_string(),
+                });
+            }
+        };
+
+        let editor = state.borrow();
+        let content = buffer::get_line(&editor.buffer, line_num)
+            .unwrap_or("")
+            .trim_end_matches('\n');
+        Ok(Value::String(content.to_string()))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2610,5 +2678,98 @@ mod tests {
             result.is_err(),
             "set-tab-width with no args should return an error"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: rainbow-csv-colorize sets line_styles via Lisp bridge
+    // Test Budget: 4 behaviors x 2 = 8 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_csv_buffer_when_rainbow_csv_colorize_evaluated_then_line_styles_populated() {
+        // Given: an editor state with CSV content
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("name,age\nalice,30");
+        }
+
+        // And: a runtime with rainbow-csv primitives registered
+        let runtime = LispRuntime::new();
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        // When: rainbow-csv-colorize is evaluated
+        let result = runtime.eval("(rainbow-csv-colorize)").unwrap();
+        assert_eq!(*result.inner(), Value::String("CSV colorized".to_string()));
+
+        // Then: line_styles has entries for both lines
+        let editor = state.borrow();
+        assert!(
+            editor.line_styles.contains_key(&0),
+            "line 0 should have styles"
+        );
+        assert!(
+            editor.line_styles.contains_key(&1),
+            "line 1 should have styles"
+        );
+        // Line 0: "name,age" => 2 segments
+        assert_eq!(editor.line_styles[&0].len(), 2);
+        // Line 1: "alice,30" => 2 segments
+        assert_eq!(editor.line_styles[&1].len(), 2);
+    }
+
+    #[test]
+    fn given_colorized_buffer_when_clear_line_styles_evaluated_then_line_styles_empty() {
+        // Given: an editor state with CSV content already colorized
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("a,b,c");
+        }
+
+        let runtime = LispRuntime::new();
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        runtime.eval("(rainbow-csv-colorize)").unwrap();
+        assert!(!state.borrow().line_styles.is_empty());
+
+        // When: clear-line-styles is evaluated
+        runtime.eval("(clear-line-styles)").unwrap();
+
+        // Then: line_styles is empty
+        assert!(state.borrow().line_styles.is_empty());
+    }
+
+    #[test]
+    fn given_buffer_when_buffer_line_count_evaluated_then_returns_correct_count() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("a\nb\nc");
+        }
+
+        let runtime = LispRuntime::new();
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(buffer-line-count)").unwrap();
+        assert_eq!(*result.inner(), Value::Int(3));
+    }
+
+    #[test]
+    fn given_buffer_when_buffer_get_line_evaluated_then_returns_line_content() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("hello\nworld");
+        }
+
+        let runtime = LispRuntime::new();
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(buffer-get-line 0)").unwrap();
+        assert_eq!(*result.inner(), Value::String("hello".to_string()));
+
+        let result = runtime.eval("(buffer-get-line 1)").unwrap();
+        assert_eq!(*result.inner(), Value::String("world".to_string()));
     }
 }

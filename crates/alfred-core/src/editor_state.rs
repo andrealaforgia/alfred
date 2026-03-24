@@ -129,6 +129,10 @@ pub struct EditorState {
     /// Number of spaces inserted when the Tab key is pressed in insert mode.
     /// Default is 4. Configurable via `(set-tab-width N)` Lisp primitive.
     pub tab_width: usize,
+    /// Per-line style segments for syntax-highlighting / column colorization.
+    /// Maps line number -> Vec of (start_col, end_col, ThemeColor) segments.
+    /// Used by the renderer to apply per-character colors within a line.
+    pub line_styles: HashMap<usize, Vec<(usize, usize, crate::theme::ThemeColor)>>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1481,7 +1485,31 @@ pub fn new(width: u16, height: u16) -> EditorState {
         change_list: Vec::new(),
         change_list_index: 0,
         tab_width: 4,
+        line_styles: HashMap::new(),
     }
+}
+
+/// Clears all per-line style segments.
+pub fn clear_line_styles(state: &mut EditorState) {
+    state.line_styles.clear();
+}
+
+/// Adds a style segment for a specific line.
+///
+/// The segment covers columns `start_col..end_col` with the given color.
+/// Multiple segments per line are supported and stored in insertion order.
+pub fn add_line_style(
+    state: &mut EditorState,
+    line: usize,
+    start_col: usize,
+    end_col: usize,
+    color: crate::theme::ThemeColor,
+) {
+    state
+        .line_styles
+        .entry(line)
+        .or_default()
+        .push((start_col, end_col, color));
 }
 
 #[cfg(test)]

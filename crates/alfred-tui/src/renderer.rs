@@ -15,7 +15,7 @@ use crossterm::cursor::SetCursorStyle;
 use ratatui::backend::Backend;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 
@@ -130,6 +130,8 @@ fn compute_message_area(total_area: Rect) -> Rect {
 /// Collects the visible lines from the buffer based on viewport scroll position.
 ///
 /// Returns a Vec of ratatui Line values for the visible portion of the buffer.
+/// When `line_styles` contains segments for a line, the text is split into
+/// colored Spans; otherwise the line is rendered as plain text.
 fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line<'static>> {
     let top_line = state.viewport.top_line;
     let total_lines = buffer::line_count(&state.buffer);
@@ -140,13 +142,59 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
             if buffer_line_index < total_lines {
                 let line_content = buffer::get_line(&state.buffer, buffer_line_index)
                     .unwrap_or("")
-                    .trim_end_matches('\n');
-                Line::raw(line_content.to_string())
+                    .trim_end_matches('\n')
+                    .to_string();
+                build_styled_line(&line_content, state.line_styles.get(&buffer_line_index))
             } else {
                 Line::raw("")
             }
         })
         .collect()
+}
+
+/// Builds a ratatui Line from text and optional style segments.
+///
+/// If segments are provided, the text is split into styled Spans where each
+/// segment applies a foreground color. Any text not covered by a segment
+/// retains the default style. If no segments, returns a plain Line.
+fn build_styled_line(
+    text: &str,
+    segments: Option<&Vec<(usize, usize, alfred_core::theme::ThemeColor)>>,
+) -> Line<'static> {
+    match segments {
+        Some(segs) if !segs.is_empty() => {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut pos = 0usize;
+            let text_len = text.len();
+
+            for &(start, end, color) in segs {
+                let seg_start = start.min(text_len);
+                let seg_end = end.min(text_len);
+
+                // Add unstyled gap before this segment if needed
+                if pos < seg_start {
+                    spans.push(Span::raw(text[pos..seg_start].to_string()));
+                }
+
+                // Add the styled segment
+                if seg_start < seg_end {
+                    let fg = theme_color_to_ratatui(color);
+                    let style = Style::default().fg(fg);
+                    spans.push(Span::styled(text[seg_start..seg_end].to_string(), style));
+                }
+
+                pos = seg_end;
+            }
+
+            // Add any remaining text after the last segment
+            if pos < text_len {
+                spans.push(Span::raw(text[pos..].to_string()));
+            }
+
+            Line::from(spans)
+        }
+        _ => Line::raw(text.to_string()),
+    }
 }
 
 /// Splits a content area into a gutter area (left) and a text area (right).
@@ -1000,6 +1048,122 @@ mod tests {
             Color::Rgb(200, 100, 50),
             "Message fg should be themed RGB(200,100,50) but was: {:?}",
             cell.fg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: line_styles colorize CSV columns in rendered output
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_styles_when_rendered_then_columns_have_different_foreground_colors() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with CSV content and line_styles set
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("aa,bb,cc");
+        // Manually set line styles: col0 red, col1 green, col2 blue
+        state.line_styles.insert(
+            0,
+            vec![
+                (0, 2, ThemeColor::Rgb(255, 0, 0)), // "aa" in red
+                (3, 5, ThemeColor::Rgb(0, 255, 0)), // "bb" in green
+                (6, 8, ThemeColor::Rgb(0, 0, 255)), // "cc" in blue
+            ],
+        );
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+
+        // Then: column 0 ("aa") has red foreground
+        let rendered = terminal.backend();
+        let cell_a = &rendered.buffer()[(0, 0)];
+        assert_eq!(
+            cell_a.fg,
+            Color::Rgb(255, 0, 0),
+            "Column 0 should be red but was: {:?}",
+            cell_a.fg
+        );
+
+        // And: column 1 ("bb") has green foreground
+        let cell_b = &rendered.buffer()[(3, 0)];
+        assert_eq!(
+            cell_b.fg,
+            Color::Rgb(0, 255, 0),
+            "Column 1 should be green but was: {:?}",
+            cell_b.fg
+        );
+
+        // And: column 2 ("cc") has blue foreground
+        let cell_c = &rendered.buffer()[(6, 0)];
+        assert_eq!(
+            cell_c.fg,
+            Color::Rgb(0, 0, 255),
+            "Column 2 should be blue but was: {:?}",
+            cell_c.fg
+        );
+    }
+
+    #[test]
+    fn given_no_line_styles_when_rendered_then_text_uses_default_color() {
+        use ratatui::style::Color;
+
+        // Given: an EditorState with content but no line_styles
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("hello,world");
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+
+        // Then: text uses the default/reset color (no custom fg)
+        let rendered = terminal.backend();
+        let cell = &rendered.buffer()[(0, 0)];
+        assert_eq!(
+            cell.fg,
+            Color::Reset,
+            "Without line_styles, text should use default color but was: {:?}",
+            cell.fg
+        );
+    }
+
+    #[test]
+    fn given_line_styles_with_delimiter_gap_when_rendered_then_delimiter_uses_default_color() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: line_styles that skip the comma character
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("a,b");
+        state.line_styles.insert(
+            0,
+            vec![
+                (0, 1, ThemeColor::Rgb(255, 0, 0)), // "a" in red
+                (2, 3, ThemeColor::Rgb(0, 255, 0)), // "b" in green
+            ],
+        );
+
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+
+        // Then: the comma at position 1 has default color (gap between segments)
+        let rendered = terminal.backend();
+        let comma_cell = &rendered.buffer()[(1, 0)];
+        assert_eq!(
+            comma_cell.fg,
+            Color::Reset,
+            "Delimiter should use default color but was: {:?}",
+            comma_cell.fg
         );
     }
 }

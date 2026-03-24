@@ -11,6 +11,7 @@ pub mod editor_state;
 pub mod error;
 pub mod hook;
 pub mod key_event;
+pub mod rainbow_csv;
 pub mod text_object;
 pub mod theme;
 pub mod viewport;
