@@ -407,6 +407,35 @@ fn byte_offset_to_point(source: &str, byte_offset: usize) -> (usize, usize) {
 mod tests {
     use super::*;
 
+    /// Creates a SyntaxHighlighter with language set and source parsed.
+    /// Returns the highlighter for further assertions.
+    fn parsed_highlighter(filename: &str, source: &str) -> SyntaxHighlighter {
+        let mut h = SyntaxHighlighter::new();
+        h.set_language_for_file(filename);
+        h.parse(source);
+        h
+    }
+
+    /// Asserts that highlighting the given source (associated with filename)
+    /// produces at least one capture with the expected capture_name.
+    fn assert_capture_present(filename: &str, source: &str, expected_capture: &str) {
+        let h = parsed_highlighter(filename, source);
+        let line_count = source.lines().count().max(1);
+        let ranges = h.highlight_lines(source, 0, line_count);
+        let matching: Vec<_> = ranges
+            .iter()
+            .filter(|r| r.capture_name == expected_capture)
+            .collect();
+        assert!(
+            !matching.is_empty(),
+            "Expected '{}' capture for '{}' in {:?}, got ranges: {:?}",
+            expected_capture,
+            source,
+            filename,
+            ranges
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Unit tests: SyntaxHighlighter creation and language detection
     // -----------------------------------------------------------------------
@@ -488,26 +517,16 @@ mod tests {
 
     #[test]
     fn given_rust_fn_when_highlight_then_fn_keyword_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
-        let source = "fn main() {}";
-        highlighter.parse(source);
+        assert_capture_present("main.rs", "fn main() {}", "keyword");
+    }
 
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let keyword_ranges: Vec<_> = ranges
+    #[test]
+    fn given_rust_fn_when_highlight_then_keyword_at_correct_position() {
+        let h = parsed_highlighter("main.rs", "fn main() {}");
+        let ranges = h.highlight_lines("fn main() {}", 0, 1);
+        let fn_range = ranges
             .iter()
-            .filter(|r| r.capture_name == "keyword")
-            .collect();
-        assert!(
-            !keyword_ranges.is_empty(),
-            "Should capture 'fn' as keyword, got: {:?}",
-            ranges
-        );
-
-        let fn_range = keyword_ranges
-            .iter()
-            .find(|r| r.start_col == 0 && r.end_col == 2);
+            .find(|r| r.capture_name == "keyword" && r.start_col == 0 && r.end_col == 2);
         assert!(
             fn_range.is_some(),
             "Should have keyword range at 0..2 for 'fn'"
@@ -516,94 +535,29 @@ mod tests {
 
     #[test]
     fn given_rust_string_when_highlight_then_string_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
-        let source = "let x = \"hello\";";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let string_ranges: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "string")
-            .collect();
-        assert!(
-            !string_ranges.is_empty(),
-            "Should capture string literal, got: {:?}",
-            ranges
-        );
+        assert_capture_present("main.rs", "let x = \"hello\";", "string");
     }
 
     #[test]
     fn given_rust_number_when_highlight_then_number_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
-        let source = "let x = 42;";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let number_ranges: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "number")
-            .collect();
-        assert!(
-            !number_ranges.is_empty(),
-            "Should capture integer literal as number, got: {:?}",
-            ranges
-        );
+        assert_capture_present("main.rs", "let x = 42;", "number");
     }
 
     #[test]
     fn given_rust_comment_when_highlight_then_comment_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
-        let source = "// this is a comment";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let comment_ranges: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "comment")
-            .collect();
-        assert!(
-            !comment_ranges.is_empty(),
-            "Should capture comment, got: {:?}",
-            ranges
-        );
+        assert_capture_present("main.rs", "// this is a comment", "comment");
     }
 
     #[test]
     fn given_rust_function_def_when_highlight_then_function_name_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
-        let source = "fn my_func() {}";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let fn_ranges: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "function")
-            .collect();
-        assert!(
-            !fn_ranges.is_empty(),
-            "Should capture function name, got: {:?}",
-            ranges
-        );
+        assert_capture_present("main.rs", "fn my_func() {}", "function");
     }
 
     #[test]
     fn given_multiline_rust_when_highlight_line_range_then_only_visible_lines_returned() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("main.rs");
         let source = "fn main() {\n    let x = 42;\n    let y = 99;\n}";
-        highlighter.parse(source);
-
-        // Only query line 1 (let x = 42;)
-        let ranges = highlighter.highlight_lines(source, 1, 2);
-
+        let h = parsed_highlighter("main.rs", source);
+        let ranges = h.highlight_lines(source, 1, 2);
         assert!(
             ranges.iter().all(|r| r.line == 1),
             "All ranges should be on line 1, got: {:?}",
@@ -894,82 +848,22 @@ mod tests {
 
     #[test]
     fn given_python_def_when_highlight_then_def_keyword_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("app.py");
-        let source = "def hello():\n    pass";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let keywords: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "keyword")
-            .collect();
-        assert!(
-            !keywords.is_empty(),
-            "Should capture 'def' as keyword, got: {:?}",
-            ranges
-        );
+        assert_capture_present("app.py", "def hello():\n    pass", "keyword");
     }
 
     #[test]
     fn given_python_string_when_highlight_then_string_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("app.py");
-        let source = "x = \"hello world\"";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let strings: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "string")
-            .collect();
-        assert!(
-            !strings.is_empty(),
-            "Should capture string literal, got: {:?}",
-            ranges
-        );
+        assert_capture_present("app.py", "x = \"hello world\"", "string");
     }
 
     #[test]
     fn given_python_comment_when_highlight_then_comment_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("app.py");
-        let source = "# this is a comment";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let comments: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "comment")
-            .collect();
-        assert!(
-            !comments.is_empty(),
-            "Should capture comment, got: {:?}",
-            ranges
-        );
+        assert_capture_present("app.py", "# this is a comment", "comment");
     }
 
     #[test]
     fn given_python_number_when_highlight_then_number_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("app.py");
-        let source = "x = 42";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let numbers: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "number")
-            .collect();
-        assert!(
-            !numbers.is_empty(),
-            "Should capture integer as number, got: {:?}",
-            ranges
-        );
+        assert_capture_present("app.py", "x = 42", "number");
     }
 
     // -----------------------------------------------------------------------
@@ -985,101 +879,26 @@ mod tests {
 
     #[test]
     fn given_js_function_when_highlight_then_function_keyword_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("index.js");
-        let source = "function hello() {}";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let keywords: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "keyword")
-            .collect();
-        assert!(
-            !keywords.is_empty(),
-            "Should capture 'function' as keyword, got: {:?}",
-            ranges
-        );
+        assert_capture_present("index.js", "function hello() {}", "keyword");
     }
 
     #[test]
     fn given_js_string_when_highlight_then_string_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("index.js");
-        let source = "const x = \"hello\";";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let strings: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "string")
-            .collect();
-        assert!(
-            !strings.is_empty(),
-            "Should capture string literal, got: {:?}",
-            ranges
-        );
+        assert_capture_present("index.js", "const x = \"hello\";", "string");
     }
 
     #[test]
     fn given_js_comment_when_highlight_then_comment_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("index.js");
-        let source = "// this is a comment";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let comments: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "comment")
-            .collect();
-        assert!(
-            !comments.is_empty(),
-            "Should capture comment, got: {:?}",
-            ranges
-        );
+        assert_capture_present("index.js", "// this is a comment", "comment");
     }
 
     #[test]
     fn given_js_number_when_highlight_then_number_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("index.js");
-        let source = "let x = 42;";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let numbers: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "number")
-            .collect();
-        assert!(
-            !numbers.is_empty(),
-            "Should capture number literal, got: {:?}",
-            ranges
-        );
+        assert_capture_present("index.js", "let x = 42;", "number");
     }
 
     #[test]
     fn given_js_const_keyword_when_highlight_then_keyword_captured() {
-        let mut highlighter = SyntaxHighlighter::new();
-        highlighter.set_language_for_file("index.js");
-        let source = "const x = 1;";
-        highlighter.parse(source);
-
-        let ranges = highlighter.highlight_lines(source, 0, 1);
-
-        let keywords: Vec<_> = ranges
-            .iter()
-            .filter(|r| r.capture_name == "keyword")
-            .collect();
-        assert!(
-            !keywords.is_empty(),
-            "Should capture 'const' as keyword, got: {:?}",
-            ranges
-        );
+        assert_capture_present("index.js", "const x = 1;", "keyword");
     }
 }
