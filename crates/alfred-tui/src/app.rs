@@ -1072,10 +1072,10 @@ pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) 
 ///
 /// If no hook is registered, returns None (no status bar rendered).
 /// Otherwise, builds a formatted status string from EditorState fields:
-/// ` filename.txt  Ln 1, Col 0  [+]  NORMAL `
+/// ` filename.txt  Ln 1, Col 1  [+]  NORMAL `
 ///
 /// - Filename: buffer filename or "[No Name]" if unnamed
-/// - Position: 1-indexed line, 0-indexed column
+/// - Position: 1-indexed line, 1-indexed column
 /// - Modified: "[+]" if buffer modified, omitted if clean
 /// - Mode: current mode name uppercased
 pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
@@ -1088,7 +1088,7 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
     let filename = state.buffer.filename().unwrap_or("[No Name]");
 
     let line = state.cursor.line + 1; // 1-indexed for display
-    let col = state.cursor.column;
+    let col = state.cursor.column + 1; // 1-indexed for display
 
     let modified = if state.buffer.is_modified() {
         "  [+]"
@@ -2264,8 +2264,8 @@ mod tests {
             status_str
         );
         assert!(
-            status_str.contains("Ln 2") && status_str.contains("Col 3"),
-            "status should contain cursor position (1-indexed line), got: '{}'",
+            status_str.contains("Ln 2") && status_str.contains("Col 4"),
+            "status should contain cursor position (1-indexed line and col), got: '{}'",
             status_str
         );
     }
@@ -2443,10 +2443,10 @@ mod tests {
             super::compute_status_content(&state).unwrap()
         };
 
-        // Then: shows Ln 1, Col 0
+        // Then: shows Ln 1, Col 1 (1-indexed)
         assert!(
-            status_at_origin.contains("Ln 1") && status_at_origin.contains("Col 0"),
-            "cursor at origin should show Ln 1, Col 0, got: '{}'",
+            status_at_origin.contains("Ln 1") && status_at_origin.contains("Col 1"),
+            "cursor at origin should show Ln 1, Col 1, got: '{}'",
             status_at_origin
         );
 
@@ -2460,10 +2460,10 @@ mod tests {
             super::compute_status_content(&state).unwrap()
         };
 
-        // Then: shows Ln 3, Col 1
+        // Then: shows Ln 3, Col 2 (cursor at 0-indexed (2,1) = display (3,2))
         assert!(
-            status_after_move.contains("Ln 3") && status_after_move.contains("Col 1"),
-            "cursor at (2,1) should show Ln 3, Col 1, got: '{}'",
+            status_after_move.contains("Ln 3") && status_after_move.contains("Col 2"),
+            "cursor at (2,1) should show Ln 3, Col 2, got: '{}'",
             status_after_move
         );
     }
