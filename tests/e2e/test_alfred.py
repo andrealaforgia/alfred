@@ -3523,10 +3523,11 @@ class TestLargeFileRopeChunkBoundary:
         child = spawn_alfred(path)
 
         # Navigate to line 40 (likely near a chunk boundary)
-        # Alfred doesn't support :N goto-line, so use repeated j
+        # Alfred doesn't support :N goto-line, so send j keys directly
         for _ in range(39):
-            send_keys(child, "j")
-        time.sleep(0.3)
+            child.send("j")
+            time.sleep(0.02)
+        time.sleep(0.5)
 
         # Enter insert mode at start of line, add a comment prefix
         send_keys(child, "I")
