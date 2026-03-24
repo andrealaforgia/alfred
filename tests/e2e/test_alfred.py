@@ -3199,21 +3199,20 @@ class TestFolderBrowser:
 
     def test_open_directory_no_plugin_errors(self):
         """Opening a directory should not produce plugin errors."""
+        import shutil
+
         tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        # Create some files in the directory
         with open(os.path.join(tmpdir, "hello.txt"), "w") as f:
             f.write("hello world\n")
         os.mkdir(os.path.join(tmpdir, "subdir"))
 
         child = spawn_alfred(tmpdir)
 
-        # Read screen to check for errors
         try:
             screen = child.read_nonblocking(size=16384, timeout=2)
         except Exception:
             screen = ""
 
-        # Quit
         send_keys(child, "q")
         time.sleep(0.3)
         exit_code = wait_for_exit(child)
@@ -3224,7 +3223,105 @@ class TestFolderBrowser:
         assert "parse_key_spec" not in screen, \
             f"Key spec parse error in browse-mode plugin: {repr(screen[:500])}"
 
+        shutil.rmtree(tmpdir)
+
+    def test_browser_displays_directory_entries(self):
+        """Opening a directory renders the folder browser with correct entries."""
         import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        # Create a known structure with predictable names
+        os.mkdir(os.path.join(tmpdir, "alpha_dir"))
+        os.mkdir(os.path.join(tmpdir, "beta_dir"))
+        with open(os.path.join(tmpdir, "gamma.txt"), "w") as f:
+            f.write("gamma content\n")
+        with open(os.path.join(tmpdir, "delta.rs"), "w") as f:
+            f.write("fn main() {}\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Give it time to render the browser view
+        time.sleep(1.5)
+
+        # Read screen output — the browser view should show entry names
+        try:
+            screen = child.read_nonblocking(size=32768, timeout=2)
+        except Exception:
+            screen = ""
+
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+        # The directory path should appear in the header
+        assert tmpdir in screen or os.path.basename(tmpdir) in screen, \
+            f"Expected directory path in browser view, got: {repr(screen[:500])}"
+
+        # Directory entries should appear (with trailing /)
+        assert "alpha_dir/" in screen, \
+            f"Expected 'alpha_dir/' in browser listing, got: {repr(screen[:500])}"
+        assert "beta_dir/" in screen, \
+            f"Expected 'beta_dir/' in browser listing, got: {repr(screen[:500])}"
+
+        # File entries should appear
+        assert "gamma.txt" in screen, \
+            f"Expected 'gamma.txt' in browser listing, got: {repr(screen[:500])}"
+        assert "delta.rs" in screen, \
+            f"Expected 'delta.rs' in browser listing, got: {repr(screen[:500])}"
+
+        # Parent directory entry should appear
+        assert "../" in screen, \
+            f"Expected '../' in browser listing, got: {repr(screen[:500])}"
+
+        # The cursor indicator '>' should appear on the first entry
+        assert ">" in screen, \
+            f"Expected cursor '>' in browser listing, got: {repr(screen[:500])}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_browser_shows_subdirectory_after_enter(self):
+        """Entering a subdirectory updates the browser to show its contents."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        subdir = os.path.join(tmpdir, "myproject")
+        os.mkdir(subdir)
+        with open(os.path.join(subdir, "unique_file_xyz.txt"), "w") as f:
+            f.write("inside subdir\n")
+        with open(os.path.join(tmpdir, "top_level.txt"), "w") as f:
+            f.write("at root\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Sorted: ../ (0), myproject/ (1), top_level.txt (2)
+        # Navigate to myproject/ and enter it
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\r")
+        time.sleep(1.5)
+
+        # Read screen — should now show subdir contents
+        try:
+            screen = child.read_nonblocking(size=32768, timeout=2)
+        except Exception:
+            screen = ""
+
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+        # The unique file from the subdirectory should be visible
+        assert "unique_file_xyz.txt" in screen, \
+            f"Expected 'unique_file_xyz.txt' in subdirectory listing, got: {repr(screen[:500])}"
+
+        # The parent directory path should include myproject
+        assert "myproject" in screen, \
+            f"Expected 'myproject' in path after entering subdir, got: {repr(screen[:500])}"
+
         shutil.rmtree(tmpdir)
 
     def test_browse_and_open_file_then_save(self):
