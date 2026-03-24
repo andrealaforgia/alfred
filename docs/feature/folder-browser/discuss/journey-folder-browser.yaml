@@ -1,0 +1,285 @@
+journey:
+  name: "Folder Browser"
+  goal: "Browse a directory and open a file for editing without leaving Alfred"
+  persona: "Kai Nakamura -- backend developer, terminal-native, vim-comfortable"
+  traces_to_jobs:
+    - JS-01  # Navigate to a file in an unfamiliar project
+    - JS-02  # Quickly open a known file from a project root
+    - JS-03  # Explore a project structure to understand layout
+
+  emotional_arc:
+    start: "Curious / Intentional -- developer wants to browse a project"
+    middle: "Oriented / In Control -- developer can see structure and navigate fluidly"
+    end: "Productive / Satisfied -- developer is editing the right file, no friction"
+    pattern: "Confidence Building"
+
+steps:
+  - id: 1
+    name: "Detect Directory Argument"
+    action: "alfred . OR alfred /path/to/directory"
+
+    tui_mockup: |
+      +-- Terminal --------------------------------------------------+
+      | $ alfred .                                                    |
+      |                                                               |
+      |  (Alfred detects directory, enters browser mode)              |
+      +---------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "target_path"
+        source: "CLI argv[1]"
+        displayed_as: "${target_path}"
+        consumers:
+          - "step 1: directory detection"
+          - "step 2: tree view title"
+          - "step 2: status bar path"
+
+    emotional_state:
+      entry: "Curious -- developer invokes Alfred on a directory"
+      exit: "Smooth -- Alfred recognized the intent without error"
+
+    integration_checkpoint: |
+      CLI argument parsed correctly.
+      Directory existence validated.
+      Transition to browser mode triggered (not editor mode).
+
+    error_paths:
+      - condition: "Path does not exist"
+        response: "alfred: no such file or directory: ${target_path}"
+        recovery: "User corrects the path and re-runs"
+      - condition: "Path is a file"
+        response: "Open file in editor (existing behavior)"
+        recovery: "Not an error -- correct behavior"
+      - condition: "No argument given"
+        response: "Open empty buffer (existing behavior)"
+        recovery: "Not an error -- correct behavior"
+
+    gherkin: |
+      Scenario: Alfred detects a directory argument and enters browser mode
+        Given Kai runs "alfred ." in the directory ~/projects/webapi
+        When Alfred starts
+        Then Alfred enters folder browser mode
+        And the browser displays the contents of ~/projects/webapi
+
+  - id: 2
+    name: "Display Tree View"
+    action: "Alfred renders directory listing"
+
+    tui_mockup: |
+      +-- Alfred: Browse ${current_dir} --------------------------------+
+      |  ${dir_name}/                                                    |
+      |  > ${entries[0]}                                                 |
+      |    ${entries[1]}                                                 |
+      |    ${entries[2]}                                                 |
+      |    ...                                                           |
+      |                                                                  |
+      +------------------------------------------------------------------+
+      | BROWSE  ${current_dir_relative}                                  |
+      +------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "current_dir"
+        source: "Filesystem path (initially from target_path)"
+        displayed_as: "${current_dir}"
+        consumers:
+          - "step 2: title bar"
+          - "step 2: status bar"
+          - "step 3: parent navigation"
+      - name: "dir_entries"
+        source: "std::fs::read_dir(current_dir)"
+        displayed_as: "${entries[N]}"
+        consumers:
+          - "step 2: tree listing"
+          - "step 3: cursor navigation"
+          - "step 4: file selection"
+      - name: "cursor_index"
+        source: "Editor state (browser mode)"
+        displayed_as: "> prefix on selected entry"
+        consumers:
+          - "step 2: visual highlight"
+          - "step 3: navigation"
+          - "step 4: file selection"
+
+    emotional_state:
+      entry: "Anticipating -- waiting to see what's in the directory"
+      exit: "Oriented -- can see the structure, knows where things are"
+
+    integration_checkpoint: |
+      Directory entries read successfully from filesystem.
+      Entries sorted: directories first, then files, both alphabetical.
+      Cursor positioned on first entry.
+      Status bar shows BROWSE mode and current directory path.
+
+    error_paths:
+      - condition: "Empty directory"
+        response: "Display 'Directory is empty' with instruction to press q to quit"
+        recovery: "User presses q or navigates to parent with h"
+      - condition: "Permission denied reading directory"
+        response: "alfred: permission denied: ${current_dir}"
+        recovery: "User runs Alfred on a readable directory"
+
+    gherkin: |
+      Scenario: Browser displays directory contents sorted correctly
+        Given Kai has entered folder browser mode in ~/projects/webapi
+        When the browser renders
+        Then directories are listed before files
+        And directories have a trailing "/" indicator
+        And files are listed alphabetically within their group
+        And the cursor highlights the first entry
+        And the status bar shows "BROWSE" and the current directory path
+
+  - id: 3
+    name: "Navigate and Select"
+    action: "j/k to move, Enter/l to open dir, h/Backspace for parent, q/Esc to quit"
+
+    tui_mockup: |
+      +-- Alfred: Browse ${current_dir} --------------------------------+
+      |  ../                                                             |
+      |    handlers/                                                     |
+      |  > models/                                                       |
+      |    routes/                                                       |
+      |    lib.rs                                                        |
+      |    main.rs                                                       |
+      |                                                                  |
+      +------------------------------------------------------------------+
+      | BROWSE  ${current_dir_relative}                                  |
+      +------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "cursor_index"
+        source: "Browser state, updated by j/k/gg/G"
+        displayed_as: "> prefix on selected entry"
+        consumers:
+          - "step 3: visual highlight"
+          - "step 4: determines which file to open"
+      - name: "navigation_history"
+        source: "Browser state, stack of (dir, cursor_pos) tuples"
+        displayed_as: "Implicitly remembered when navigating back"
+        consumers:
+          - "step 3: restoring cursor position on parent navigation"
+
+    emotional_state:
+      entry: "Oriented -- knows the structure, ready to move"
+      exit: "Confident -- found the target, ready to open"
+
+    integration_checkpoint: |
+      j/k move cursor within bounds (no crash on empty, no overflow).
+      Enter on directory changes current_dir and re-reads entries.
+      h returns to parent directory with cursor position restored.
+      q/Esc exits Alfred cleanly.
+      Status bar updates with new path on directory change.
+
+    error_paths:
+      - condition: "Permission denied on subdirectory"
+        response: "Status bar shows 'Permission denied: ${dir_name}' for 3 seconds"
+        recovery: "Cursor stays on the entry; user selects a different directory"
+      - condition: "Symlink to directory"
+        response: "Follow symlink, display resolved path in status bar"
+        recovery: "Not an error"
+      - condition: "Broken symlink"
+        response: "Entry shown dimmed; Enter shows 'Broken symlink: ${entry_name}'"
+        recovery: "User selects a different entry"
+
+    gherkin: |
+      Scenario: Navigate down with j and up with k
+        Given Kai is in the folder browser viewing ~/projects/webapi
+        And the cursor is on the first entry "src/"
+        When Kai presses "j"
+        Then the cursor moves to the second entry ".gitignore"
+        When Kai presses "k"
+        Then the cursor moves back to "src/"
+
+      Scenario: Enter a subdirectory
+        Given Kai is in the folder browser with cursor on "src/"
+        When Kai presses Enter
+        Then the browser displays the contents of ~/projects/webapi/src
+        And the status bar shows "BROWSE webapi/src/"
+        And "../" appears as the first entry
+
+      Scenario: Navigate to parent directory
+        Given Kai is browsing ~/projects/webapi/src
+        When Kai presses "h"
+        Then the browser displays the contents of ~/projects/webapi
+        And the cursor is restored to the "src/" entry
+
+  - id: 4
+    name: "Open File in Buffer"
+    action: "Press Enter on a file entry"
+
+    tui_mockup: |
+      +-- Alfred: ${file_path} -----------------------------------------+
+      |  1  ${file_content_line_1}                                       |
+      |  2  ${file_content_line_2}                                       |
+      |  3  ${file_content_line_3}                                       |
+      |  ...                                                             |
+      +------------------------------------------------------------------+
+      | NORMAL  ${file_path_relative}                        1:1         |
+      +------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "selected_file_path"
+        source: "current_dir + entries[cursor_index]"
+        displayed_as: "${file_path}"
+        consumers:
+          - "step 4: buffer load"
+          - "step 4: status bar filename"
+          - "step 4: syntax highlighting detection"
+      - name: "file_content"
+        source: "std::fs::read_to_string(selected_file_path)"
+        displayed_as: "${file_content_line_N}"
+        consumers:
+          - "step 4: buffer content"
+
+    emotional_state:
+      entry: "Decisive -- ready to open the file"
+      exit: "Productive -- editing the right file, browser is gone"
+
+    integration_checkpoint: |
+      File loaded into Buffer via Buffer::from_file().
+      Browser mode cleanly replaced by editor mode (NORMAL).
+      Status bar shows NORMAL mode and file path.
+      Gutter, syntax highlighting, and all plugins active.
+      Cursor at position (0, 0).
+
+    error_paths:
+      - condition: "Binary file"
+        response: "Status bar shows 'Cannot open binary file: ${entry_name}'"
+        recovery: "Stay in browser, user selects a different file"
+      - condition: "Permission denied reading file"
+        response: "Status bar shows 'Permission denied: ${entry_name}'"
+        recovery: "Stay in browser, user selects a different file"
+      - condition: "File read error (IO)"
+        response: "Status bar shows 'Error reading file: ${entry_name}'"
+        recovery: "Stay in browser, user selects a different file"
+
+    gherkin: |
+      Scenario: Open a file from the browser
+        Given Kai is in the folder browser with cursor on "main.rs"
+        When Kai presses Enter
+        Then the browser closes
+        And the file ~/projects/webapi/src/main.rs is loaded into the editor buffer
+        And the mode is "NORMAL"
+        And the status bar shows the filename "src/main.rs"
+        And syntax highlighting is active for Rust
+
+      Scenario: Attempting to open a binary file stays in browser
+        Given Kai is in the folder browser with cursor on "logo.png"
+        When Kai presses Enter
+        Then the status bar shows "Cannot open binary file: logo.png"
+        And Kai remains in the folder browser
+        And the cursor stays on "logo.png"
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "target_path"
+      must_match_across: [1, 2]
+      failure_message: "CLI argument must be passed correctly to browser initialization"
+    - artifact: "current_dir"
+      must_match_across: [2, 3]
+      failure_message: "Current directory must update consistently when navigating"
+    - artifact: "cursor_index"
+      must_match_across: [2, 3, 4]
+      failure_message: "Cursor position must determine which entry is acted upon"
+    - artifact: "selected_file_path"
+      must_match_across: [3, 4]
+      failure_message: "File opened in buffer must match the entry selected in browser"

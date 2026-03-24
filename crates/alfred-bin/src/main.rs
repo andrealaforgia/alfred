@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
 
+use alfred_core::browser;
 use alfred_core::buffer::Buffer;
 use alfred_core::editor_state;
 use alfred_lisp::bridge;
@@ -48,8 +49,19 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
 
     if let Some(path_str) = file_path {
         let path = Path::new(path_str);
-        let buffer = Buffer::from_file(path)?;
-        state.borrow_mut().buffer = buffer;
+        if path.is_dir() {
+            // Directory argument: enter browse mode
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let entries = read_directory_entries(&canonical);
+            let browser_state = browser::new_browser_state(canonical.clone(), canonical, entries);
+            let mut s = state.borrow_mut();
+            s.browser = Some(browser_state);
+            s.mode = browser::MODE_BROWSE.to_string();
+            s.active_keymaps = vec!["browse-mode".to_string()];
+        } else {
+            let buffer = Buffer::from_file(path)?;
+            state.borrow_mut().buffer = buffer;
+        }
     }
 
     // Register built-in native commands (cursor movement, delete-backward)
@@ -132,6 +144,36 @@ fn load_plugins(runtime: &LispRuntime) -> Vec<String> {
     let _ = reg;
 
     errors
+}
+
+/// Reads directory entries from the filesystem and converts them to DirEntry values.
+fn read_directory_entries(dir: &Path) -> Vec<browser::DirEntry> {
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    read_dir
+        .filter_map(|entry| entry.ok())
+        .map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let file_type = entry.file_type().ok();
+            let kind = match file_type {
+                Some(ft) if ft.is_dir() => browser::EntryKind::Directory,
+                Some(ft) if ft.is_symlink() => {
+                    let target_is_dir = entry.path().is_dir();
+                    browser::EntryKind::Symlink { target_is_dir }
+                }
+                _ => browser::EntryKind::File,
+            };
+            let is_hidden = name.starts_with('.');
+            browser::DirEntry {
+                name,
+                kind,
+                is_hidden,
+            }
+        })
+        .collect()
 }
 
 /// Computes the path to the user config file from the home directory.

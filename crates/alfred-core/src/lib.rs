@@ -4,6 +4,7 @@
 //! and all domain types. It has zero runtime dependencies on IO crates
 //! (alfred-tui, alfred-lisp, alfred-plugin).
 
+pub mod browser;
 pub mod buffer;
 pub mod command;
 pub mod cursor;

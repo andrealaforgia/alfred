@@ -902,3 +902,61 @@ mod tests {
         assert_capture_present("index.js", "const x = 1;", "keyword");
     }
 }
+
+#[test]
+fn debug_blank_line_highlights() {
+    let mut h = SyntaxHighlighter::new();
+    h.set_language_for_file("buffer.rs");
+
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../alfred-core/src/buffer.rs"
+    ))
+    .unwrap();
+    h.parse(&source);
+
+    let lines: Vec<&str> = source.lines().collect();
+
+    // Check line 176 (0-indexed) = file line 177 (blank)
+    // And line 215 (0-indexed) = file line 216 (where 'A' appears)
+    for &idx in &[176usize, 215] {
+        if idx >= lines.len() {
+            continue;
+        }
+        let line = lines[idx];
+        let ranges = h.highlight_lines(&source, idx, idx + 1);
+        let line_ranges: Vec<_> = ranges.iter().filter(|r| r.line == idx).collect();
+        eprintln!(
+            "Line {} (file {}, len {}): {:?}",
+            idx,
+            idx + 1,
+            line.len(),
+            line
+        );
+        for r in &line_ranges {
+            eprintln!("  [{}-{}] @{}", r.start_col, r.end_col, r.capture_name);
+        }
+        if line_ranges.is_empty() {
+            eprintln!("  (no highlights)");
+        }
+    }
+
+    // Also check a few lines before each blank line
+    for &idx in &[174usize, 175, 176, 213, 214, 215] {
+        if idx >= lines.len() {
+            continue;
+        }
+        let line = lines[idx];
+        let ranges = h.highlight_lines(&source, idx, idx + 1);
+        let line_ranges: Vec<_> = ranges.iter().filter(|r| r.line == idx).collect();
+        let has_oob = line_ranges.iter().any(|r| r.end_col > line.len());
+        eprintln!(
+            "Line {} (len {}): ranges={}, oob={} {:?}",
+            idx,
+            line.len(),
+            line_ranges.len(),
+            has_oob,
+            &line[..line.len().min(50)]
+        );
+    }
+}
