@@ -14,9 +14,8 @@
 (define-command "word-count"
   (lambda ()
     (message
-      (str-join
+      (str-concat
         (list
           "Lines: " (to-string (buffer-line-count))
           " | Words: " (to-string (count-words))
-          " | Chars: " (to-string (str-length (buffer-content))))
-        ""))))
+          " | Chars: " (to-string (str-length (buffer-content))))))))

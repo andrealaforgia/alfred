@@ -1423,6 +1423,10 @@ pub fn register_string_primitives(runtime: &LispRuntime) {
         Value::NativeFunc(native_str_join),
     );
     env.borrow_mut().define(
+        Symbol("str-concat".to_string()),
+        Value::NativeFunc(native_str_concat),
+    );
+    env.borrow_mut().define(
         Symbol("str-length".to_string()),
         Value::NativeFunc(native_str_length),
     );
@@ -1464,7 +1468,7 @@ pub fn register_string_primitives(runtime: &LispRuntime) {
     );
     env.borrow_mut().define(
         Symbol("str".to_string()),
-        Value::NativeFunc(native_str_concat),
+        Value::NativeFunc(native_str_variadic),
     );
     env.borrow_mut().define(
         Symbol("to-string".to_string()),
@@ -1517,6 +1521,33 @@ fn native_str_join(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
         })
         .collect();
     Ok(Value::String(strings?.join(&delimiter)))
+}
+
+/// `(str-concat list)` -- concatenates all strings in a list with no delimiter.
+/// This is equivalent to `(str-join list "")` but avoids the empty-string literal
+/// which rust_lisp cannot parse.
+fn native_str_concat(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = match args.first() {
+        Some(Value::List(l)) => l,
+        Some(other) => {
+            return Err(RuntimeError {
+                msg: format!("str-concat: expected list as first arg, got {}", other),
+            })
+        }
+        None => {
+            return Err(RuntimeError {
+                msg: "str-concat: expected 1 argument (list), got 0".to_string(),
+            })
+        }
+    };
+    let strings: Result<Vec<String>, RuntimeError> = list
+        .into_iter()
+        .map(|v| match v {
+            Value::String(s) => Ok(s),
+            other => Ok(format!("{}", other)),
+        })
+        .collect();
+    Ok(Value::String(strings?.join("")))
 }
 
 /// `(str-length string)` -- returns the length of the string as an integer.
@@ -1613,7 +1644,7 @@ fn native_str_index_of(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
 }
 
 /// `(str string1 string2 ...)` -- concatenates all string arguments (variadic).
-fn native_str_concat(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+fn native_str_variadic(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     let mut result = String::new();
     for (i, arg) in args.iter().enumerate() {
         match arg {

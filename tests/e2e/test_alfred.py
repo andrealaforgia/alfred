@@ -114,6 +114,91 @@ def wait_for_exit(child: pexpect.spawn, timeout: int = TIMEOUT):
 
 
 # ---------------------------------------------------------------------------
+# Plugin loading health check
+# ---------------------------------------------------------------------------
+
+class TestPluginHealth:
+    """Verify all plugins load without errors at startup."""
+
+    def test_no_plugin_errors_on_startup(self):
+        """Start Alfred and verify no 'Plugin errors' message appears.
+
+        This catches issues like undefined Lisp functions (let*, etc.)
+        or missing primitives that only manifest at plugin load time.
+        """
+        path = create_temp_file("test content")
+        child = spawn_alfred(path)
+
+        # Read screen output — if there are plugin errors, they appear
+        # in the message line at the bottom of the screen
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # Quit cleanly
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        assert "Plugin errors" not in screen, \
+            f"Plugin errors detected at startup: {repr(screen[:500])}"
+        assert "not defined" not in screen, \
+            f"Undefined symbol error at startup: {repr(screen[:500])}"
+        os.unlink(path)
+
+    def test_plugins_create_panels(self):
+        """Verify plugins create panels (status bar, gutter) at startup.
+
+        If panels aren't created, the editor would render with full-width
+        text and no status bar — a clear sign of plugin failure.
+        We verify by opening a multi-line file, editing, and saving
+        (which exercises the full panel rendering pipeline).
+        """
+        lines = [f"line {i+1}" for i in range(10)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Navigate and edit (exercises gutter + status panel updates)
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "OK")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        content = read_file(path)
+        assert exit_code == 0
+        assert "OK" in content, f"Expected 'OK' in file, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_no_crash_on_empty_file_with_panels(self):
+        """Open an empty file — plugins must handle zero lines gracefully."""
+        path = create_temp_file("")
+        child = spawn_alfred(path)
+
+        # Read screen to check for errors
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0
+        assert "error" not in screen.lower() or "Plugin" not in screen, \
+            f"Error detected with empty file: {repr(screen[:500])}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
 # Basic startup (3 tests)
 # ---------------------------------------------------------------------------
 

@@ -9,15 +9,18 @@
 ;; Build status text from editor state
 (define build-status
   (lambda ()
-    (let* ((pos (cursor-position))
-           (line (+ (nth 0 pos) 1))
-           (col (+ (nth 1 pos) 1))
-           (fname (buffer-filename))
-           (mod-flag (if (buffer-modified?) "  [+]" " "))
-           (mode (str-upper (current-mode))))
-      (str-join
-        (list " " fname "  Ln " (to-string line) ", Col " (to-string col) mod-flag " " mode " ")
-        ""))))
+    (str-concat
+      (list
+        " "
+        (buffer-filename)
+        "  Ln "
+        (to-string (+ (nth 0 (cursor-position)) 1))
+        ", Col "
+        (to-string (+ (nth 1 (cursor-position)) 1))
+        (if (buffer-modified?) "  [+]" " ")
+        " "
+        (str-upper (current-mode))
+        " "))))
 
 ;; Update on every change
 (define update-status (lambda () (set-panel-content "status" (build-status))))

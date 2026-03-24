@@ -17,11 +17,10 @@
     (set-panel-size "gutter" (compute-gutter-width))
     (for-each
       (lambda (i)
-        (let* ((line-num (+ (viewport-top-line) i))
-               (total (buffer-line-count)))
-          (if (< line-num total)
-            (set-panel-line "gutter" i (to-string (+ line-num 1)))
-            (set-panel-line "gutter" i "~"))))
+        (if (< (+ (viewport-top-line) i) (buffer-line-count))
+          (set-panel-line "gutter" i
+            (to-string (+ (viewport-top-line) i 1)))
+          (set-panel-line "gutter" i "~")))
       (range 0 (viewport-height)))))
 
 (add-hook "cursor-moved" update-gutter)
