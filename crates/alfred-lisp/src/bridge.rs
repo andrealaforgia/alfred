@@ -1006,6 +1006,325 @@ fn register_buffer_get_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
     });
 }
 
+/// Registers pure string manipulation primitives into the Lisp runtime.
+///
+/// These are pure functions (no EditorState access) registered as `NativeFunc`
+/// function pointers. After calling this, the following Lisp functions become available:
+///
+/// - `(str-split string delimiter)` -- split string into list
+/// - `(str-join list delimiter)` -- join list elements with delimiter
+/// - `(str-length string)` -- return string length as integer
+/// - `(str-contains string substring)` -- test if string contains substring
+/// - `(str-replace string old new)` -- replace all occurrences
+/// - `(str-substring string start end)` -- extract substring (0-indexed, end exclusive)
+/// - `(str-trim string)` -- trim leading and trailing whitespace
+/// - `(str-upper string)` -- convert to uppercase
+/// - `(str-lower string)` -- convert to lowercase
+/// - `(str-starts-with string prefix)` -- test if string starts with prefix
+/// - `(str-ends-with string suffix)` -- test if string ends with suffix
+/// - `(str-index-of string substring)` -- find index of substring, or -1
+/// - `(str string1 string2 ...)` -- concatenate strings (variadic)
+/// - `(to-string value)` -- convert any value to its string representation
+/// - `(parse-int string)` -- parse string as integer
+pub fn register_string_primitives(runtime: &LispRuntime) {
+    let env = runtime.env();
+
+    env.borrow_mut().define(
+        Symbol("str-split".to_string()),
+        Value::NativeFunc(native_str_split),
+    );
+    env.borrow_mut().define(
+        Symbol("str-join".to_string()),
+        Value::NativeFunc(native_str_join),
+    );
+    env.borrow_mut().define(
+        Symbol("str-length".to_string()),
+        Value::NativeFunc(native_str_length),
+    );
+    env.borrow_mut().define(
+        Symbol("str-contains".to_string()),
+        Value::NativeFunc(native_str_contains),
+    );
+    env.borrow_mut().define(
+        Symbol("str-replace".to_string()),
+        Value::NativeFunc(native_str_replace),
+    );
+    env.borrow_mut().define(
+        Symbol("str-substring".to_string()),
+        Value::NativeFunc(native_str_substring),
+    );
+    env.borrow_mut().define(
+        Symbol("str-trim".to_string()),
+        Value::NativeFunc(native_str_trim),
+    );
+    env.borrow_mut().define(
+        Symbol("str-upper".to_string()),
+        Value::NativeFunc(native_str_upper),
+    );
+    env.borrow_mut().define(
+        Symbol("str-lower".to_string()),
+        Value::NativeFunc(native_str_lower),
+    );
+    env.borrow_mut().define(
+        Symbol("str-starts-with".to_string()),
+        Value::NativeFunc(native_str_starts_with),
+    );
+    env.borrow_mut().define(
+        Symbol("str-ends-with".to_string()),
+        Value::NativeFunc(native_str_ends_with),
+    );
+    env.borrow_mut().define(
+        Symbol("str-index-of".to_string()),
+        Value::NativeFunc(native_str_index_of),
+    );
+    env.borrow_mut().define(
+        Symbol("str".to_string()),
+        Value::NativeFunc(native_str_concat),
+    );
+    env.borrow_mut().define(
+        Symbol("to-string".to_string()),
+        Value::NativeFunc(native_to_string),
+    );
+    env.borrow_mut().define(
+        Symbol("parse-int".to_string()),
+        Value::NativeFunc(native_parse_int),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// String primitive implementations (pure functions, no captured state)
+// ---------------------------------------------------------------------------
+
+/// `(str-split string delimiter)` -- splits string by delimiter, returns list of strings.
+fn native_str_split(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-split")?;
+    let delimiter = require_string_arg(&args, 1, "str-split")?;
+    let parts: List = text
+        .split(&delimiter)
+        .map(|s| Value::String(s.to_string()))
+        .collect();
+    Ok(Value::List(parts))
+}
+
+/// `(str-join list delimiter)` -- joins list elements with delimiter, returns string.
+fn native_str_join(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = match args.first() {
+        Some(Value::List(l)) => l,
+        Some(other) => {
+            return Err(RuntimeError {
+                msg: format!("str-join: expected list as first arg, got {}", other),
+            })
+        }
+        None => {
+            return Err(RuntimeError {
+                msg: "str-join: expected 2 arguments, got 0".to_string(),
+            })
+        }
+    };
+    let delimiter = require_string_arg(&args, 1, "str-join")?;
+    let strings: Result<Vec<String>, RuntimeError> = list
+        .into_iter()
+        .map(|v| match v {
+            Value::String(s) => Ok(s),
+            other => Err(RuntimeError {
+                msg: format!("str-join: list element is not a string: {}", other),
+            }),
+        })
+        .collect();
+    Ok(Value::String(strings?.join(&delimiter)))
+}
+
+/// `(str-length string)` -- returns the length of the string as an integer.
+fn native_str_length(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-length")?;
+    Ok(Value::Int(text.len() as i32))
+}
+
+/// `(str-contains string substring)` -- returns T if string contains substring, NIL otherwise.
+fn native_str_contains(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-contains")?;
+    let substring = require_string_arg(&args, 1, "str-contains")?;
+    if text.contains(&substring) {
+        Ok(Value::True)
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+/// `(str-replace string old new)` -- replaces all occurrences of old with new.
+fn native_str_replace(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-replace")?;
+    let old = require_string_arg(&args, 1, "str-replace")?;
+    let new = require_string_arg(&args, 2, "str-replace")?;
+    Ok(Value::String(text.replace(&old, &new)))
+}
+
+/// `(str-substring string start end)` -- extracts substring (0-indexed, end exclusive).
+fn native_str_substring(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-substring")?;
+    let start = require_int_arg(&args, 1, "str-substring")? as usize;
+    let end = require_int_arg(&args, 2, "str-substring")? as usize;
+    if start > text.len() || end > text.len() || start > end {
+        return Err(RuntimeError {
+            msg: format!(
+                "str-substring: indices [{}, {}) out of bounds for string of length {}",
+                start,
+                end,
+                text.len()
+            ),
+        });
+    }
+    Ok(Value::String(text[start..end].to_string()))
+}
+
+/// `(str-trim string)` -- trims leading and trailing whitespace.
+fn native_str_trim(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-trim")?;
+    Ok(Value::String(text.trim().to_string()))
+}
+
+/// `(str-upper string)` -- converts string to uppercase.
+fn native_str_upper(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-upper")?;
+    Ok(Value::String(text.to_uppercase()))
+}
+
+/// `(str-lower string)` -- converts string to lowercase.
+fn native_str_lower(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-lower")?;
+    Ok(Value::String(text.to_lowercase()))
+}
+
+/// `(str-starts-with string prefix)` -- returns T if string starts with prefix, NIL otherwise.
+fn native_str_starts_with(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-starts-with")?;
+    let prefix = require_string_arg(&args, 1, "str-starts-with")?;
+    if text.starts_with(&prefix) {
+        Ok(Value::True)
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+/// `(str-ends-with string suffix)` -- returns T if string ends with suffix, NIL otherwise.
+fn native_str_ends_with(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-ends-with")?;
+    let suffix = require_string_arg(&args, 1, "str-ends-with")?;
+    if text.ends_with(&suffix) {
+        Ok(Value::True)
+    } else {
+        Ok(Value::NIL)
+    }
+}
+
+/// `(str-index-of string substring)` -- returns index of first occurrence, or -1 if not found.
+fn native_str_index_of(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "str-index-of")?;
+    let substring = require_string_arg(&args, 1, "str-index-of")?;
+    match text.find(&substring) {
+        Some(index) => Ok(Value::Int(index as i32)),
+        None => Ok(Value::Int(-1)),
+    }
+}
+
+/// `(str string1 string2 ...)` -- concatenates all string arguments (variadic).
+fn native_str_concat(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let mut result = String::new();
+    for (i, arg) in args.iter().enumerate() {
+        match arg {
+            Value::String(s) => result.push_str(s),
+            other => {
+                return Err(RuntimeError {
+                    msg: format!("str: expected string as argument {}, got {}", i + 1, other),
+                })
+            }
+        }
+    }
+    Ok(Value::String(result))
+}
+
+/// `(to-string value)` -- converts any value to its string representation.
+fn native_to_string(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match args.first() {
+        Some(value) => {
+            let s = match value {
+                Value::String(s) => s.clone(),
+                Value::Int(n) => n.to_string(),
+                Value::Float(f) => f.to_string(),
+                Value::True => "T".to_string(),
+                Value::False => "F".to_string(),
+                Value::List(List::NIL) => "NIL".to_string(),
+                other => format!("{}", other),
+            };
+            Ok(Value::String(s))
+        }
+        None => Err(RuntimeError {
+            msg: "to-string: expected 1 argument, got 0".to_string(),
+        }),
+    }
+}
+
+/// `(parse-int string)` -- parses a string as an integer.
+fn native_parse_int(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let text = require_string_arg(&args, 0, "parse-int")?;
+    match text.trim().parse::<i32>() {
+        Ok(n) => Ok(Value::Int(n)),
+        Err(e) => Err(RuntimeError {
+            msg: format!("parse-int: cannot parse \"{}\" as integer: {}", text, e),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Argument extraction helpers for string primitives
+// ---------------------------------------------------------------------------
+
+/// Extracts a required string argument at the given index.
+fn require_string_arg(args: &[Value], index: usize, fn_name: &str) -> Result<String, RuntimeError> {
+    match args.get(index) {
+        Some(Value::String(s)) => Ok(s.clone()),
+        Some(other) => Err(RuntimeError {
+            msg: format!(
+                "{}: expected string as argument {}, got {}",
+                fn_name,
+                index + 1,
+                other
+            ),
+        }),
+        None => Err(RuntimeError {
+            msg: format!(
+                "{}: expected argument {}, got only {}",
+                fn_name,
+                index + 1,
+                args.len()
+            ),
+        }),
+    }
+}
+
+/// Extracts a required integer argument at the given index.
+fn require_int_arg(args: &[Value], index: usize, fn_name: &str) -> Result<i32, RuntimeError> {
+    match args.get(index) {
+        Some(Value::Int(n)) => Ok(*n),
+        Some(other) => Err(RuntimeError {
+            msg: format!(
+                "{}: expected integer as argument {}, got {}",
+                fn_name,
+                index + 1,
+                other
+            ),
+        }),
+        None => Err(RuntimeError {
+            msg: format!(
+                "{}: expected argument {}, got only {}",
+                fn_name,
+                index + 1,
+                args.len()
+            ),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2771,5 +3090,289 @@ mod tests {
 
         let result = runtime.eval("(buffer-get-line 1)").unwrap();
         assert_eq!(*result.inner(), Value::String("world".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // String primitives tests
+    // Test Budget: 15 primitives x 2 (happy + edge) = 30 max
+    // -----------------------------------------------------------------------
+
+    /// Helper: creates a LispRuntime with string primitives registered.
+    fn runtime_with_string_primitives() -> LispRuntime {
+        let runtime = LispRuntime::new();
+        register_string_primitives(&runtime);
+        runtime
+    }
+
+    // -- str-split --
+
+    #[test]
+    fn given_delimited_string_when_str_split_then_returns_list_of_parts() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-split \"a,b,c\" \",\")").unwrap();
+        match result.inner() {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::String("a".to_string()));
+                assert_eq!(items[1], Value::String("b".to_string()));
+                assert_eq!(items[2], Value::String("c".to_string()));
+            }
+            other => panic!("expected list, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn given_string_without_delimiter_when_str_split_then_returns_single_element_list() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-split \"hello\" \",\")").unwrap();
+        match result.inner() {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0], Value::String("hello".to_string()));
+            }
+            other => panic!("expected list, got {:?}", other),
+        }
+    }
+
+    // -- str-join --
+
+    #[test]
+    fn given_list_of_strings_when_str_join_then_returns_joined_string() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-join (list \"a\" \"b\") \",\")").unwrap();
+        assert_eq!(result.as_string(), Some("a,b".to_string()));
+    }
+
+    #[test]
+    fn given_empty_list_when_str_join_then_returns_empty_string() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-join (list) \",\")").unwrap();
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    // -- str-length --
+
+    #[test]
+    fn given_nonempty_string_when_str_length_then_returns_correct_length() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-length \"hello\")").unwrap();
+        assert_eq!(result.as_integer(), Some(5));
+    }
+
+    #[test]
+    fn given_empty_string_when_str_length_then_returns_zero() {
+        let runtime = runtime_with_string_primitives();
+        // rust_lisp parser does not support empty string literals "",
+        // so we create one via str-substring
+        let result = runtime
+            .eval("(str-length (str-substring \"x\" 0 0))")
+            .unwrap();
+        assert_eq!(result.as_integer(), Some(0));
+    }
+
+    // -- str-contains --
+
+    #[test]
+    fn given_string_containing_substring_when_str_contains_then_returns_true() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-contains \"hello\" \"ell\")").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_string_not_containing_substring_when_str_contains_then_returns_nil() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-contains \"hello\" \"xyz\")").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- str-replace --
+
+    #[test]
+    fn given_string_with_pattern_when_str_replace_then_replaces_all_occurrences() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime
+            .eval("(str-replace \"aabbcc\" \"bb\" \"XX\")")
+            .unwrap();
+        assert_eq!(result.as_string(), Some("aaXXcc".to_string()));
+    }
+
+    #[test]
+    fn given_string_without_pattern_when_str_replace_then_returns_original() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime
+            .eval("(str-replace \"hello\" \"xyz\" \"ABC\")")
+            .unwrap();
+        assert_eq!(result.as_string(), Some("hello".to_string()));
+    }
+
+    // -- str-substring --
+
+    #[test]
+    fn given_valid_indices_when_str_substring_then_returns_substring() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-substring \"hello\" 1 3)").unwrap();
+        assert_eq!(result.as_string(), Some("el".to_string()));
+    }
+
+    #[test]
+    fn given_out_of_bounds_indices_when_str_substring_then_returns_error() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-substring \"hi\" 0 10)");
+        assert!(result.is_err(), "out-of-bounds should return error");
+    }
+
+    // -- str-trim --
+
+    #[test]
+    fn given_string_with_whitespace_when_str_trim_then_returns_trimmed() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-trim \"  hi  \")").unwrap();
+        assert_eq!(result.as_string(), Some("hi".to_string()));
+    }
+
+    #[test]
+    fn given_already_trimmed_string_when_str_trim_then_returns_same() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-trim \"hello\")").unwrap();
+        assert_eq!(result.as_string(), Some("hello".to_string()));
+    }
+
+    // -- str-upper --
+
+    #[test]
+    fn given_lowercase_string_when_str_upper_then_returns_uppercase() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-upper \"hello\")").unwrap();
+        assert_eq!(result.as_string(), Some("HELLO".to_string()));
+    }
+
+    #[test]
+    fn given_empty_string_when_str_upper_then_returns_empty() {
+        let runtime = runtime_with_string_primitives();
+        // rust_lisp parser does not support empty string literals "",
+        // so we create one via str-substring
+        let result = runtime
+            .eval("(str-upper (str-substring \"x\" 0 0))")
+            .unwrap();
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    // -- str-lower --
+
+    #[test]
+    fn given_uppercase_string_when_str_lower_then_returns_lowercase() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-lower \"HELLO\")").unwrap();
+        assert_eq!(result.as_string(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn given_empty_string_when_str_lower_then_returns_empty() {
+        let runtime = runtime_with_string_primitives();
+        // rust_lisp parser does not support empty string literals "",
+        // so we create one via str-substring
+        let result = runtime
+            .eval("(str-lower (str-substring \"x\" 0 0))")
+            .unwrap();
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    // -- str-starts-with --
+
+    #[test]
+    fn given_matching_prefix_when_str_starts_with_then_returns_true() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-starts-with \"hello\" \"he\")").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_non_matching_prefix_when_str_starts_with_then_returns_nil() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-starts-with \"hello\" \"lo\")").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- str-ends-with --
+
+    #[test]
+    fn given_matching_suffix_when_str_ends_with_then_returns_true() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-ends-with \"hello\" \"lo\")").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_non_matching_suffix_when_str_ends_with_then_returns_nil() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-ends-with \"hello\" \"he\")").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- str-index-of --
+
+    #[test]
+    fn given_string_containing_substring_when_str_index_of_then_returns_index() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-index-of \"hello\" \"ll\")").unwrap();
+        assert_eq!(result.as_integer(), Some(2));
+    }
+
+    #[test]
+    fn given_string_not_containing_substring_when_str_index_of_then_returns_negative_one() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str-index-of \"hello\" \"xyz\")").unwrap();
+        assert_eq!(result.as_integer(), Some(-1));
+    }
+
+    // -- str (concatenation) --
+
+    #[test]
+    fn given_multiple_strings_when_str_then_returns_concatenation() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str \"a\" \"b\" \"c\")").unwrap();
+        assert_eq!(result.as_string(), Some("abc".to_string()));
+    }
+
+    #[test]
+    fn given_no_args_when_str_then_returns_empty_string() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(str)").unwrap();
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    // -- to-string --
+
+    #[test]
+    fn given_integer_when_to_string_then_returns_string_representation() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(to-string 42)").unwrap();
+        assert_eq!(result.as_string(), Some("42".to_string()));
+    }
+
+    #[test]
+    fn given_string_when_to_string_then_returns_same_string() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(to-string \"hello\")").unwrap();
+        assert_eq!(result.as_string(), Some("hello".to_string()));
+    }
+
+    // -- parse-int --
+
+    #[test]
+    fn given_valid_integer_string_when_parse_int_then_returns_integer() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(parse-int \"42\")").unwrap();
+        assert_eq!(result.as_integer(), Some(42));
+    }
+
+    #[test]
+    fn given_non_numeric_string_when_parse_int_then_returns_error() {
+        let runtime = runtime_with_string_primitives();
+        let result = runtime.eval("(parse-int \"abc\")");
+        assert!(result.is_err(), "parse-int with non-numeric should error");
     }
 }
