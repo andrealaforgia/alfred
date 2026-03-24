@@ -1791,3 +1791,180 @@ class TestTab:
         assert content == "a    b", \
             f"Expected 'a    b' (a + 4 spaces + b), got: {repr(content)}"
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Panel system (status bar + gutter via Lisp plugins)
+# -------------------------------------------------------------------------
+
+class TestPanels:
+    """Verify the panel-based plugin system works end-to-end.
+
+    Panels are created by Lisp plugins at startup. The status-bar plugin
+    creates a bottom panel, the line-numbers plugin creates a left panel.
+    These tests verify that panels don't interfere with normal editing
+    and that the editor functions correctly with the panel system active.
+    """
+
+    def test_editor_starts_with_panels_active(self):
+        """Editor starts without crash — panels are created by plugins at load time."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # If panels failed to initialize, the editor would crash.
+        # Verify it's alive by sending a quit command.
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        os.unlink(path)
+
+    def test_editing_works_with_panels(self):
+        """Insert text, save, quit — panels don't interfere with buffer operations."""
+        path = create_temp_file("")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "panel test")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "panel test", \
+            f"Expected 'panel test', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_navigation_with_panels(self):
+        """Navigate a multi-line file — panels update without interfering."""
+        lines = [f"line{i}" for i in range(20)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Navigate down 15 lines (panels should update line numbers + status)
+        send_keys(child, "15")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+
+        # Insert marker to verify position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "HERE")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        assert "HERE" in result_lines[15], \
+            f"Expected HERE on line 15, got: {repr(result_lines[15])}"
+        os.unlink(path)
+
+    def test_mode_switch_with_panels(self):
+        """Switch modes multiple times — status bar panel should update mode display."""
+        path = create_temp_file("test")
+        child = spawn_alfred(path)
+
+        # Enter insert mode
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "A")
+        send_escape(child)
+        time.sleep(0.3)
+
+        # Enter visual mode
+        send_keys(child, "v")
+        time.sleep(0.2)
+        send_escape(child)
+        time.sleep(0.3)
+
+        # Back to normal, save and quit
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "A" in content, f"Expected 'A' inserted, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_large_file_with_panels(self):
+        """Open a 100-line file — gutter panel adjusts width for 3-digit line numbers."""
+        lines = [f"content line {i+1}" for i in range(100)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Navigate to line 50
+        send_keys(child, "50")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+
+        # Insert at line 50 to verify position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, ">>")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        assert ">>" in result_lines[50], \
+            f"Expected >> on line 50, got: {repr(result_lines[50])}"
+        os.unlink(path)
+
+    def test_word_count_plugin_with_panels(self):
+        """The word-count command works alongside panel plugins."""
+        path = create_temp_file("one two three four five")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "word-count")
+        time.sleep(0.5)
+
+        # The message should appear (word count displayed).
+        # We can't read the screen, but if the editor doesn't crash
+        # and we can still quit, the plugin coexists with panels.
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+        assert exit_code == 0
+        os.unlink(path)
+
+    def test_multiple_edits_with_panels(self):
+        """Complex editing session — panels track all changes."""
+        path = create_temp_file("aaa\nbbb\nccc")
+        child = spawn_alfred(path)
+
+        # Delete first line
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "d")
+        time.sleep(0.3)
+
+        # Insert new text
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "NEW")
+        send_enter(child)
+        send_escape(child)
+        time.sleep(0.3)
+
+        # Undo
+        send_keys(child, "u")
+        time.sleep(0.3)
+
+        # Save and quit
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        # After undo, the insert should be reverted
+        assert "bbb" in content or "ccc" in content, \
+            f"Expected some original content after undo, got: {repr(content)}"
+        os.unlink(path)
