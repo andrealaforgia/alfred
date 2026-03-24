@@ -7,6 +7,7 @@ description = "Terminal UI shell for the Alfred text editor"
 [dependencies]
 alfred-core = { path = "../alfred-core" }
 alfred-lisp = { path = "../alfred-lisp" }
+alfred-syntax = { path = "../alfred-syntax" }
 crossterm = "0.28"
 ratatui = "0.29"
 

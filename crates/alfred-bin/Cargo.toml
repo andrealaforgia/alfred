@@ -12,6 +12,7 @@ path = "src/main.rs"
 alfred-core = { path = "../alfred-core" }
 alfred-lisp = { path = "../alfred-lisp" }
 alfred-plugin = { path = "../alfred-plugin" }
+alfred-syntax = { path = "../alfred-syntax" }
 alfred-tui = { path = "../alfred-tui" }
 crossterm = "0.28"
 

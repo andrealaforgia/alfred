@@ -3519,7 +3519,7 @@ mod tests {
         // Filter out comment lines to only eval Lisp forms
         let lisp_forms: String = plugin_source
             .lines()
-            .filter(|line| !line.starts_with(";;;"))
+            .filter(|line| !line.trim_start().starts_with(';'))
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -3579,6 +3579,37 @@ mod tests {
             "gutter-fg should be a specific color, got: {:?}",
             gutter_fg
         );
+
+        // Verify syntax highlight color slots are set
+        let syntax_slots = [
+            "syntax-keyword",
+            "syntax-function",
+            "syntax-string",
+            "syntax-comment",
+            "syntax-type",
+            "syntax-variable",
+            "syntax-operator",
+            "syntax-number",
+            "syntax-punctuation",
+            "syntax-property",
+            "syntax-attribute",
+            "syntax-constant",
+            "syntax-constructor",
+        ];
+        for slot in &syntax_slots {
+            assert!(
+                editor.theme.contains_key(*slot),
+                "syntax slot '{}' should be set by default-theme plugin",
+                slot
+            );
+            let color = editor.theme.get(*slot).unwrap();
+            assert!(
+                matches!(color, alfred_core::theme::ThemeColor::Rgb(_, _, _)),
+                "syntax slot '{}' should be an RGB color, got: {:?}",
+                slot,
+                color
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

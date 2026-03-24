@@ -18,6 +18,7 @@ use ratatui::Terminal;
 use alfred_core::editor_state::EditorState;
 use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
 use alfred_lisp::runtime::LispRuntime;
+use alfred_syntax::highlighter::SyntaxHighlighter;
 
 use crate::renderer;
 
@@ -1321,11 +1322,88 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 // I/O: event loop
 // ---------------------------------------------------------------------------
 
-/// Runs the main editor event loop.
+/// Applies syntax highlighting to the visible lines by querying the highlighter
+/// and writing results into `EditorState.line_styles`.
 ///
-/// This function is the imperative shell. It:
-/// 1. Enters raw mode and alternate screen (via TerminalGuard for cleanup safety)
-/// 2. Creates a ratatui Terminal with CrosstermBackend
+/// This replaces any existing `line_styles` for the visible range with syntax
+/// highlight colors. Existing `line_styles` from plugins (e.g., rainbow-csv) are
+/// preserved for lines outside the visible range only if syntax highlighting
+/// is not active. When syntax highlighting IS active, it owns `line_styles` for
+/// visible lines.
+fn apply_syntax_highlights(state_rc: &Rc<RefCell<EditorState>>, highlighter: &SyntaxHighlighter) {
+    if !highlighter.has_language() || !highlighter.has_tree() {
+        return;
+    }
+
+    let state = state_rc.borrow();
+    let source = alfred_core::buffer::content(&state.buffer);
+    let top_line = state.viewport.top_line;
+    let visible_height = state.viewport.height as usize;
+    let total_lines = alfred_core::buffer::line_count(&state.buffer);
+    let end_line = (top_line + visible_height).min(total_lines);
+
+    let ranges = highlighter.highlight_lines(&source, top_line, end_line);
+
+    // Don't overwrite if no language / no ranges and there are existing styles
+    // (e.g., from rainbow-csv)
+    if ranges.is_empty() {
+        return;
+    }
+
+    drop(state);
+    let mut state = state_rc.borrow_mut();
+
+    // Clear syntax highlight styles for visible lines only
+    for line in top_line..end_line {
+        state.line_styles.remove(&line);
+    }
+
+    // Write new syntax highlight styles
+    for range in &ranges {
+        let color = SyntaxHighlighter::resolve_color(&range.capture_name, &state.theme)
+            .or_else(|| default_syntax_color(&range.capture_name));
+        if let Some(theme_color) = color {
+            alfred_core::editor_state::add_line_style(
+                &mut state,
+                range.line,
+                range.start_col,
+                range.end_col,
+                theme_color,
+            );
+        }
+    }
+}
+
+/// Returns a hardcoded default color for a syntax highlight capture name.
+///
+/// These are Catppuccin Mocha-inspired defaults used when no theme color
+/// has been set via Lisp plugins. Theme colors override these.
+fn default_syntax_color(capture_name: &str) -> Option<alfred_core::theme::ThemeColor> {
+    use alfred_core::theme::ThemeColor;
+
+    // Strip sub-capture for fallback: "function.method" -> "function"
+    let base = capture_name.split('.').next().unwrap_or(capture_name);
+
+    match base {
+        "keyword" => Some(ThemeColor::Rgb(198, 120, 221)), // mauve
+        "function" => Some(ThemeColor::Rgb(137, 180, 250)), // blue
+        "string" => Some(ThemeColor::Rgb(166, 227, 161)),  // green
+        "comment" => Some(ThemeColor::Rgb(108, 112, 134)), // overlay0
+        "type" => Some(ThemeColor::Rgb(249, 226, 175)),    // yellow
+        "variable" => Some(ThemeColor::Rgb(205, 214, 244)), // text
+        "operator" => Some(ThemeColor::Rgb(137, 220, 235)), // sky
+        "number" => Some(ThemeColor::Rgb(250, 179, 135)),  // peach
+        "punctuation" => Some(ThemeColor::Rgb(147, 153, 178)), // overlay2
+        "property" => Some(ThemeColor::Rgb(180, 190, 254)), // lavender
+        "attribute" => Some(ThemeColor::Rgb(249, 226, 175)), // yellow
+        "constant" => Some(ThemeColor::Rgb(250, 179, 135)), // peach
+        "constructor" => Some(ThemeColor::Rgb(250, 179, 135)), // peach
+        "escape" => Some(ThemeColor::Rgb(250, 179, 135)),  // peach
+        "label" => Some(ThemeColor::Rgb(137, 180, 250)),   // blue
+        _ => None,
+    }
+}
+
 /// 3. Loops while `state.running`:
 ///    a. Renders the current frame
 ///    b. Reads the next crossterm event (blocking)
@@ -1333,7 +1411,11 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 ///    d. Handles the key event (updates state)
 ///    e. If an eval expression was returned, evaluates it via the Lisp runtime
 /// 4. On exit: clears screen, terminal guard drops (leaves alternate screen, disables raw mode)
-pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Result<()> {
+pub fn run(
+    state_rc: &Rc<RefCell<EditorState>>,
+    runtime: &LispRuntime,
+    highlighter: &mut SyntaxHighlighter,
+) -> io::Result<()> {
     let _terminal_guard = renderer::TerminalGuard::new()?;
 
     let backend = CrosstermBackend::new(io::stdout());
@@ -1342,6 +1424,17 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
 
     let mut input_state = InputState::Normal;
     let mut pending_count: Option<u32> = None;
+
+    // Initial syntax highlighting: set language from filename if available
+    {
+        let state = state_rc.borrow();
+        if let Some(filename) = state.buffer.filename() {
+            highlighter.set_language_for_file(filename);
+            let source = alfred_core::buffer::content(&state.buffer);
+            drop(state);
+            highlighter.parse(&source);
+        }
+    }
 
     loop {
         // Check if still running
@@ -1381,6 +1474,10 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             state.viewport.height = term_height.saturating_sub(reserved_rows);
             state.viewport.width = term_width;
         }
+
+        // Apply syntax highlighting to line_styles before rendering
+        apply_syntax_highlights(state_rc, highlighter);
+
         renderer::render_frame(&mut terminal, &state_rc.borrow())?;
 
         // Set terminal cursor shape based on current mode
@@ -1400,6 +1497,12 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                 let prev_cursor = state_rc.borrow().cursor;
                 let prev_version = state_rc.borrow().buffer.version();
                 let prev_mode = state_rc.borrow().mode.clone();
+                // Capture old source for incremental syntax re-parsing
+                let old_source = if highlighter.has_language() {
+                    Some(alfred_core::buffer::content(&state_rc.borrow().buffer))
+                } else {
+                    None
+                };
 
                 // Handle the key event (borrow state, then drop before deferred action)
                 let (deferred, repeat) = {
@@ -1511,13 +1614,20 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                         let path = std::path::Path::new(path_str);
                         match alfred_core::buffer::Buffer::from_file(path) {
                             Ok(new_buffer) => {
-                                let mut state = state_rc.borrow_mut();
                                 let filename =
                                     new_buffer.filename().unwrap_or(path_str).to_string();
-                                state.buffer = new_buffer;
-                                state.cursor = alfred_core::cursor::new(0, 0);
-                                state.viewport.top_line = 0;
-                                state.message = Some(format!("\"{}\"", filename));
+                                {
+                                    let mut state = state_rc.borrow_mut();
+                                    state.buffer = new_buffer;
+                                    state.cursor = alfred_core::cursor::new(0, 0);
+                                    state.viewport.top_line = 0;
+                                    state.message = Some(format!("\"{}\"", filename));
+                                }
+                                // Re-initialize syntax highlighting for the new file
+                                highlighter.set_language_for_file(&filename);
+                                let source =
+                                    alfred_core::buffer::content(&state_rc.borrow().buffer);
+                                highlighter.parse(&source);
                             }
                             Err(e) => {
                                 state_rc.borrow_mut().message = Some(format!("{}", e));
@@ -1572,6 +1682,16 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                 }
                 if buffer_changed {
                     let _ = runtime.eval("(dispatch-hook \"buffer-changed\")");
+
+                    // Incremental re-parse for syntax highlighting after edits
+                    if highlighter.has_language() {
+                        let new_source = alfred_core::buffer::content(&state_rc.borrow().buffer);
+                        if let Some(ref old_src) = old_source {
+                            highlighter.incremental_update(old_src, &new_source);
+                        } else {
+                            highlighter.parse(&new_source);
+                        }
+                    }
                 }
                 if mode_changed {
                     let _ = runtime.eval("(dispatch-hook \"mode-changed\")");

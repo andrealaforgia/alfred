@@ -1,0 +1,15 @@
+[package]
+name = "alfred-syntax"
+version = "0.1.0"
+edition = "2021"
+description = "Tree-sitter syntax highlighting for the Alfred text editor"
+
+[dependencies]
+alfred-core = { path = "../alfred-core" }
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+streaming-iterator = "0.1"
+
+[dev-dependencies]

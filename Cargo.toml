@@ -4,6 +4,7 @@ members = [
     "crates/alfred-core",
     "crates/alfred-lisp",
     "crates/alfred-plugin",
+    "crates/alfred-syntax",
     "crates/alfred-tui",
     "crates/alfred-bin",
 ]

@@ -15,6 +15,7 @@ use alfred_core::editor_state;
 use alfred_lisp::bridge;
 use alfred_lisp::runtime::LispRuntime;
 use alfred_plugin::{discovery, registry};
+use alfred_syntax::highlighter::SyntaxHighlighter;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -94,7 +95,8 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    alfred_tui::app::run(&state, &runtime)?;
+    let mut highlighter = SyntaxHighlighter::new();
+    alfred_tui::app::run(&state, &runtime, &mut highlighter)?;
 
     Ok(())
 }
