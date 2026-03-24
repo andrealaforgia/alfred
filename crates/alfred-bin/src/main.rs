@@ -6,7 +6,7 @@
 //! the event loop.
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
 
@@ -71,6 +71,24 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
         state.borrow_mut().message = Some(format!("Plugin errors: {}", error_summary));
     }
 
+    // Load user config file (~/.config/alfred/init.lisp) if it exists
+    let home_dir = std::env::var("HOME").unwrap_or_default();
+    if !home_dir.is_empty() {
+        let config_path = config_file_path(&home_dir);
+        if let Some(error_msg) = load_user_config(&runtime, &config_path) {
+            // If there were also plugin errors, append; otherwise set
+            let mut editor = state.borrow_mut();
+            match &editor.message {
+                Some(existing) => {
+                    editor.message = Some(format!("{}; {}", existing, error_msg));
+                }
+                None => {
+                    editor.message = Some(error_msg);
+                }
+            }
+        }
+    }
+
     alfred_tui::app::run(&state, &runtime)?;
 
     Ok(())
@@ -107,4 +125,129 @@ fn load_plugins(runtime: &LispRuntime) -> Vec<String> {
     let _ = reg;
 
     errors
+}
+
+/// Computes the path to the user config file from the home directory.
+///
+/// Returns `~/.config/alfred/init.lisp` using the provided home directory.
+/// Pure function: no IO, no environment variable access.
+fn config_file_path(home_dir: &str) -> PathBuf {
+    Path::new(home_dir)
+        .join(".config")
+        .join("alfred")
+        .join("init.lisp")
+}
+
+/// Loads the user config file if it exists, evaluating it via the Lisp runtime.
+///
+/// Returns `None` if the config file does not exist (silently skipped).
+/// Returns `Some(error_message)` if the config file exists but evaluation fails.
+fn load_user_config(runtime: &LispRuntime, config_path: &Path) -> Option<String> {
+    if !config_path.exists() {
+        return None;
+    }
+
+    match runtime.eval_file(config_path) {
+        Ok(_) => None,
+        Err(e) => Some(format!("Config error: {}", e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- Unit: config path computation (pure function) --
+
+    #[test]
+    fn config_file_path_returns_init_lisp_under_config_alfred() {
+        let path = config_file_path("/home/testuser");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/home/testuser/.config/alfred/init.lisp")
+        );
+    }
+
+    #[test]
+    fn config_file_path_handles_trailing_slash_in_home() {
+        // PathBuf::join handles this correctly by design
+        let path = config_file_path("/home/testuser/");
+
+        assert_eq!(
+            path,
+            PathBuf::from("/home/testuser/.config/alfred/init.lisp")
+        );
+    }
+
+    // -- Integration: load_user_config with real runtime --
+
+    #[test]
+    fn load_user_config_returns_none_when_file_does_not_exist() {
+        let runtime = LispRuntime::new();
+        let nonexistent = Path::new("/nonexistent/path/init.lisp");
+
+        let result = load_user_config(&runtime, nonexistent);
+
+        assert!(result.is_none(), "Should silently skip missing config file");
+    }
+
+    #[test]
+    fn load_user_config_evaluates_valid_config_file() {
+        let runtime = LispRuntime::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("init.lisp");
+        std::fs::write(&config_path, "(define config-loaded 42)").unwrap();
+
+        let result = load_user_config(&runtime, &config_path);
+
+        assert!(result.is_none(), "Valid config should not produce an error");
+
+        // Verify the config was actually evaluated: the variable should be defined
+        let value = runtime.eval("config-loaded").unwrap();
+        assert_eq!(value.as_integer(), Some(42));
+    }
+
+    #[test]
+    fn load_user_config_returns_error_message_for_invalid_config() {
+        let runtime = LispRuntime::new();
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("init.lisp");
+        std::fs::write(&config_path, "(undefined-function 1 2 3)").unwrap();
+
+        let result = load_user_config(&runtime, &config_path);
+
+        assert!(result.is_some(), "Invalid config should produce an error");
+        let error_msg = result.unwrap();
+        assert!(
+            error_msg.starts_with("Config error:"),
+            "Error should be prefixed with 'Config error:', got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn load_user_config_with_bridge_primitives_affects_state() {
+        use alfred_core::editor_state;
+        use alfred_lisp::bridge;
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        bridge::register_core_primitives(&runtime, state.clone());
+
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("init.lisp");
+        std::fs::write(&config_path, "(message \"hello from config\")").unwrap();
+
+        let result = load_user_config(&runtime, &config_path);
+
+        assert!(result.is_none(), "Valid config should not produce an error");
+        assert_eq!(
+            state.borrow().message,
+            Some("hello from config".to_string()),
+            "Config should be able to use bridge primitives like (message ...)"
+        );
+    }
 }
