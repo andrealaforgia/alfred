@@ -2,52 +2,36 @@
 marp: true
 theme: default
 paginate: true
-header: "Alfred Editor -- System Walkthrough"
-footer: "Generated 2026-03-24 by Atlas walkthrough agent"
 style: |
   section {
-    font-size: 22px;
-  }
-  h1 {
-    font-size: 34px;
-  }
-  h2 {
-    font-size: 28px;
-  }
-  h3 {
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
     font-size: 24px;
+    padding: 40px;
   }
-  code {
-    font-size: 18px;
-  }
-  pre {
-    font-size: 16px;
-  }
-  table {
-    font-size: 18px;
-  }
-  .small {
-    font-size: 16px;
-  }
+  h1 { font-size: 40px; color: #2d3436; }
+  h2 { font-size: 32px; color: #2d3436; }
+  h3 { font-size: 26px; color: #636e72; }
+  code { font-size: 20px; }
+  pre { font-size: 18px; }
+  table { font-size: 20px; }
+  mermaid { font-size: 16px; }
+  .small { font-size: 18px; }
 ---
 
-# Alfred: System Walkthrough
+# Alfred -- Full System Walkthrough
 
-A deep dive into the architecture, code, and design decisions of the Alfred text editor.
+### A plugin-first terminal text editor built in Rust
 
-**This deck is for:** Developers joining the project who need to understand how Alfred works, why it was built this way, and how to contribute.
+Everything beyond core text editing is a Lisp plugin.
 
-**No assumed knowledge of:** Rust, Lisp, terminal editors, or vim.
+**~566 unit tests | ~66 E2E tests | ~110 Vim commands | 5 crates | 7 plugins**
 
-**Structure:**
-1. Why -- the motivation and goals
-2. Architecture -- the five crates and how they connect
-3. The Plugin System -- how plugins are discovered, loaded, and work
-4. The Lisp Engine -- how Rust and Lisp talk to each other
-5. Vim Keybindings -- how the keymap system resolves keys
-6. Themes, Files, and Testing
-7. Design Decisions -- the reasoning behind every major choice
-8. Appendices -- complete command reference, Lisp primitive reference, plugin tutorial
+<!--
+Presenter notes:
+This walkthrough covers the full system: architecture, plugin system,
+Lisp engine, Vim keybindings, themes, file operations, testing, and all
+six Architecture Decision Records. Allow approximately 60-90 minutes.
+-->
 
 ---
 
@@ -55,1205 +39,1226 @@ A deep dive into the architecture, code, and design decisions of the Alfred text
 
 # Part 1: Why Alfred Exists
 
+### The Motivation
+
+Most editors fall into two camps:
+
+**Camp A -- Hardcoded.** Everything is built into the binary. Fast, but changing behavior means recompiling. Example: Helix. Its most-cited limitation? No plugin system.
+
+**Camp B -- Bolted-on.** The plugin system is an afterthought. Core features bypass it. Plugins are second-class citizens. Many editors live here.
+
+**Alfred aims for Camp C -- Plugin-first.** The kernel provides only raw primitives. Every user-visible feature is a plugin. This is the Emacs philosophy taken to its logical conclusion.
+
+<!--
+Presenter notes:
+Alfred is also a proof that AI agents can build architecturally sound
+software. Every feature was built incrementally with clear boundaries.
+-->
+
 ---
 
-# The Motivation
+# Goals
 
-**Question:** Can AI agents build software that is architecturally sound, not just functional?
+Alfred was built to answer specific questions:
 
-Most AI-generated code works but lacks structure. Alfred is designed to prove the opposite: that an AI agent, guided by a clear methodology, can produce software with:
+| Question | How Alfred answers it |
+|----------|----------------------|
+| Can Vim-style modal editing work as a plugin? | Yes. 128 lines of Lisp define all keybindings and mode switching |
+| Can a thin kernel support complex features? | Yes. The kernel has no concept of "normal mode" or "status bar" |
+| Can compile-time boundaries enforce architecture? | Yes. Cargo crate boundaries prevent the core from importing terminal I/O |
+| Can functional-core / imperative-shell work for an editor? | Yes. Domain logic is pure functions. I/O lives at the boundary |
+| Can you test an editor without mocks? | Yes. ~566 unit tests, zero mock tautology |
 
-- Documented architecture decisions (6 ADRs)
-- Clean boundaries between components (5 crates enforced by Rust's compiler)
-- Comprehensive testing (183 unit tests, E2E tests)
-- A real plugin system used by real features
-- Code that a human developer can read, understand, and extend
-
-**The editor is the vehicle. The architecture is the point.**
+<!--
+Presenter notes:
+Each goal maps to an ADR. The project is deliberate about documenting
+decisions with context, alternatives considered, and consequences.
+-->
 
 ---
 
-# The Goals
+# Design Philosophy
 
-1. **Plugin-first architecture:** Everything beyond storing text and moving the cursor is a plugin. Keybindings, line numbers, status bar, and color theme are all Lisp files.
+Three principles guide every decision:
 
-2. **Functional core / imperative shell:** Pure logic in the center, side effects at the edges. This makes the core easy to test and reason about.
+**1. Plugin-first.** If a feature can be a plugin, it must be a plugin. The kernel grows only when a primitive is genuinely missing.
 
-3. **Emacs-inspired extensibility:** Like Emacs, where most of the editor is written in Lisp. Unlike Emacs, Alfred uses Rust for the engine (for safety and speed).
+**2. Functional core, imperative shell.** Domain logic (buffer operations, keymap resolution, theme parsing) is pure -- no I/O, no side effects. Terminal I/O lives at the boundary in `alfred-tui`.
 
-4. **Vim-compatible editing:** Users get a familiar editing experience with modal editing, operator-motion composition, and common commands.
+**3. Types before components.** Data types and domain models are designed first. Algebraic data types (enums with variants) model the domain. Components are composed from these types.
 
-5. **Single-process simplicity:** One process, one thread, synchronous execution. The same model Emacs has used successfully for 40+ years.
+Think of it as: define the nouns (types), then define the verbs (pure functions), then wire them together at the boundary (imperative shell).
+
+<!--
+Presenter notes:
+ADR-005 documents the paradigm choice. The three alternatives were pure FP
+(fights Rust's ownership model), pure OOP (too much indirection), and the
+chosen hybrid approach.
+-->
 
 ---
 
 <!-- Part 2: ARCHITECTURE -->
 
-# Part 2: Architecture
-
----
-
-# The Five Crates
-
-Alfred is a Cargo workspace (Rust's term for a multi-package project) with five crates:
+# Part 2: The Five Crates
 
 ```mermaid
 graph TD
-    BIN["alfred-bin<br/>253 lines<br/><i>Startup, wiring,<br/>CLI arguments</i>"]
-    TUI["alfred-tui<br/>8,454 lines<br/><i>Event loop, rendering,<br/>key handling</i>"]
-    PLUGIN["alfred-plugin<br/>1,160 lines<br/><i>Discovery, loading,<br/>registry, lifecycle</i>"]
-    LISP["alfred-lisp<br/>2,959 lines<br/><i>Runtime wrapper,<br/>bridge primitives</i>"]
-    CORE["alfred-core<br/>7,842 lines<br/><i>Buffer, cursor, commands,<br/>keymaps, hooks, themes</i>"]
+    BIN("alfred-bin<br/>Entry point<br/>wires everything")
+    TUI("alfred-tui<br/>Terminal I/O<br/>event loop + renderer")
+    PLUGIN("alfred-plugin<br/>Plugin lifecycle<br/>discover, load, unload")
+    LISP("alfred-lisp<br/>Lisp engine<br/>interpreter + bridge")
+    CORE("alfred-core<br/>Pure domain<br/>buffer, cursor, hooks, commands")
 
-    BIN --> TUI
-    BIN --> PLUGIN
-    BIN --> LISP
-    BIN --> CORE
-    TUI --> CORE
-    TUI --> LISP
-    PLUGIN --> LISP
-    PLUGIN --> CORE
-    LISP --> CORE
+    BIN -->|"starts"| TUI
+    BIN -->|"loads"| PLUGIN
+    BIN -->|"creates"| LISP
+    TUI -->|"reads/writes"| CORE
+    LISP -->|"reads/writes"| CORE
+    PLUGIN -->|"uses"| CORE
+    PLUGIN -->|"evaluates via"| LISP
 
-    style CORE fill:#e8f4f8,stroke:#333
-    style LISP fill:#f0f8e8,stroke:#333
-    style PLUGIN fill:#fff3e0,stroke:#333
-    style TUI fill:#fce4ec,stroke:#333
-    style BIN fill:#f3e5f5,stroke:#333
+    style BIN fill:#f3e5f5,stroke:#7b1fa2
+    style TUI fill:#fce4ec,stroke:#c62828
+    style PLUGIN fill:#fff3e0,stroke:#e65100
+    style LISP fill:#f0f8e8,stroke:#2e7d32
+    style CORE fill:#e8f4f8,stroke:#0277bd
 ```
 
-**The key rule:** All arrows point toward `alfred-core`. The core never depends on any other Alfred crate. This is enforced by Rust's compiler -- if you accidentally import `crossterm` in `alfred-core`, the build fails.
+Each crate has one job. Dependencies only point inward.
+
+<!--
+Presenter notes:
+alfred-core depends only on ropey (rope data structure) and thiserror.
+It has zero dependencies on crossterm, ratatui, or rust_lisp. This is
+enforced by Cargo -- not by convention.
+-->
 
 ---
 
-# alfred-core: The Pure Heart
+# What Each Crate Contains
 
-`alfred-core` is where all the editing logic lives. It has **zero knowledge** of the terminal, Lisp, or plugins.
+| Crate | Modules | Key types | I/O? |
+|-------|---------|-----------|------|
+| **alfred-core** | buffer, cursor, viewport, editor_state, command, hook, panel, theme, key_event, text_object, rainbow_csv, error | Buffer, Cursor, Viewport, EditorState, CommandRegistry, HookRegistry, PanelRegistry, Theme | No |
+| **alfred-lisp** | runtime, bridge | LispRuntime, LispValue, LispError | File reads only |
+| **alfred-plugin** | discovery, registry, metadata, error | PluginMetadata, PluginRegistry, LoadedPlugin, PluginError | File system scan |
+| **alfred-tui** | app, renderer | InputState, Operator | Yes -- terminal I/O |
+| **alfred-bin** | main | (none -- wiring only) | Yes -- startup |
 
-**Modules:**
+**Notice:** The largest crate (`alfred-core`) has no I/O. That is the functional core.
 
-| Module | Purpose | Key Types |
-|--------|---------|-----------|
-| `buffer.rs` | Text storage using the ropey rope data structure. Insert, delete, search, replace. | `Buffer` |
-| `cursor.rs` | Cursor position and all movement functions (up, down, left, right, word-forward, etc.) | `Cursor` |
-| `editor_state.rs` | The "god struct" -- aggregates buffer, cursor, viewport, commands, mode, keymaps, hooks, registers, undo stack, and more. | `EditorState` |
-| `command.rs` | Named command registry. Commands can be native (Rust functions) or dynamic (Lisp closures). | `CommandRegistry`, `CommandHandler` |
-| `key_event.rs` | Keyboard input representation: key code + modifiers (Ctrl, Alt, Shift). | `KeyEvent`, `KeyCode`, `Modifiers` |
-| `hook.rs` | Extension points that plugins use to inject behavior (e.g., the "render-gutter" hook). | `HookRegistry`, `HookId` |
-| `viewport.rs` | The visible window into the buffer. Pure scrolling logic. | `Viewport` |
-| `theme.rs` | Color parsing and theme storage. Hex colors, named ANSI colors. | `ThemeColor`, `Theme` |
-| `text_object.rs` | Vim text objects (`iw`, `aw`, `i"`, `a(`, etc.) -- compute start/end ranges. | `TextObjectModifier` |
-| `error.rs` | A unified error type for all core operations. | `AlfredError` |
-
-**External dependencies:** Only `ropey` (text storage) and `thiserror` (error formatting). Nothing else.
+<!--
+Presenter notes:
+EditorState is the single mutable container. It aggregates buffer, cursor,
+viewport, commands, hooks, panels, mode, keymaps, registers, marks, macros,
+undo stack, theme, and more. Everything flows through it.
+-->
 
 ---
 
-# alfred-core: Pure Functions in Practice
+# Functional Core vs Imperative Shell
 
-Every function in `alfred-core` is **pure** -- it takes inputs and returns outputs without side effects.
+**What do these terms mean?**
 
-**Example: Moving the cursor down**
+A *pure function* always gives the same output for the same input and changes nothing outside itself. Like a calculator: 2 + 3 is always 5, and pressing the button does not turn off the lights.
 
-```rust
-/// Moves the cursor down by one line.
-/// If already on the last line, the cursor stays unchanged.
-pub fn move_down(cursor: Cursor, buf: &Buffer) -> Cursor {
-    let last_line = last_line_index(buf);
-    let new_line = if cursor.line < last_line {
-        cursor.line + 1
-    } else {
-        cursor.line
-    };
-    clamp_column_to_line(new_line, cursor.column, buf)
-}
-```
+An *imperative shell* is code that talks to the outside world: reading keyboard input, drawing to the screen, saving files.
 
-Notice: no `&mut self`. No side effects. Takes a `Cursor` and a `&Buffer`, returns a new `Cursor`. The old cursor is unchanged.
+| Functional core (`alfred-core`) | Imperative shell (`alfred-tui`) |
+|---------------------------------|---------------------------------|
+| `cursor::move_down(cursor, buffer)` returns a new cursor | `crossterm::event::read()` waits for a keypress |
+| `viewport::adjust(viewport, cursor)` returns a new viewport | `terminal.draw(...)` paints pixels on screen |
+| `command::execute(state, "undo")` modifies state | `std::fs::write(path, content)` saves to disk |
 
-**Why this matters:** To test this function, you just call it with inputs and check the output. No mocking, no setup, no teardown. This is why `alfred-core` has the most tests.
+**Why this matters:** Pure functions are trivially testable. Pass input, check output. No setup, no teardown, no mocks. That is why Alfred has 566 unit tests with zero mock tautology.
 
----
-
-# alfred-core: EditorState (The "God Struct")
-
-`EditorState` is the single mutable container passed through the event loop. It aggregates everything:
-
-```rust
-pub struct EditorState {
-    pub buffer: Buffer,              // The text being edited
-    pub cursor: Cursor,              // Current cursor position
-    pub viewport: Viewport,          // Visible window into buffer
-    pub commands: CommandRegistry,   // Named command lookup table
-    pub mode: String,                // "normal", "insert", or "visual"
-    pub keymaps: HashMap<String, Keymap>,   // Key -> command mappings
-    pub active_keymaps: Vec<String>,        // Which keymaps are active
-    pub hooks: HookRegistry,         // Extension points for plugins
-    pub registers: HashMap<char, RegisterEntry>,  // Yank/delete registers
-    pub undo_stack: Vec<UndoSnapshot>,  // Undo history
-    pub redo_stack: Vec<UndoSnapshot>,  // Redo history
-    pub theme: Theme,                // Color settings
-    pub marks: HashMap<char, Cursor>,   // Named cursor positions
-    pub macro_registers: HashMap<char, Vec<KeyEvent>>,  // Recorded macros
-    // ... and more (search, jump list, change list, etc.)
-}
-```
-
-**Why one big struct?** Because it is passed by `&mut` reference to every command handler. This avoids complex ownership graphs. Undo is cheap because ropey's Rope uses structural sharing (cloning a Rope is O(1)).
+<!--
+Presenter notes:
+The viewport::adjust function is a perfect example. It takes a Viewport
+and a Cursor, returns a new Viewport. The test just creates values and
+asserts the result. No terminal needed, no rendering, no setup.
+-->
 
 ---
 
-# alfred-lisp: The Lisp Bridge
+# Data Flow: Keypress to Screen
 
-`alfred-lisp` wraps the `rust_lisp` interpreter and provides the "bridge" -- Rust functions callable from Lisp.
-
-**Two modules:**
-
-| Module | Purpose |
-|--------|---------|
-| `runtime.rs` | Wraps `rust_lisp` into a clean `LispRuntime` with `eval(source)` and `eval_file(path)` APIs |
-| `bridge.rs` | Registers all Rust closures as Lisp functions: `buffer-insert`, `cursor-move`, `define-command`, etc. |
-
-**How the bridge works:**
-
-```
-Lisp code:  (buffer-insert "hello")
-               |
-               v
-rust_lisp evaluates the expression, finds "buffer-insert" is a NativeClosure
-               |
-               v
-The closure (registered in bridge.rs) runs:
-  1. Borrows EditorState via Rc<RefCell<EditorState>>
-  2. Calls buffer::insert_at(&editor.buffer, line, col, "hello")
-  3. Returns Value::NIL to Lisp
-```
-
-**Key design choice:** `EditorState` is wrapped in `Rc<RefCell<...>>` (Rust's reference-counted shared mutable container). This lets both the Rust event loop and the Lisp bridge access the same state.
-
----
-
-# alfred-plugin: Discovery and Loading
-
-`alfred-plugin` handles the full plugin lifecycle:
+Here is exactly what happens when you press `j` (move cursor down) in normal mode:
 
 ```mermaid
 graph LR
-    SCAN["1. Scan<br/>plugins/ dir"]
-    PARSE["2. Parse<br/>metadata"]
-    SORT["3. Sort by<br/>dependencies"]
-    LOAD["4. Evaluate<br/>init.lisp"]
-    TRACK["5. Track in<br/>registry"]
+    K("Terminal:<br/>key event") --> C("app.rs:<br/>convert to<br/>KeyEvent")
+    C --> R("editor_state:<br/>resolve_key<br/>in normal-mode<br/>keymap")
+    R --> E("app.rs:<br/>execute<br/>cursor-down<br/>command")
+    E --> H("Hooks fire:<br/>cursor-moved")
+    H --> P("status-bar<br/>plugin updates<br/>panel content")
+    P --> D("renderer.rs:<br/>draw frame")
 
-    SCAN --> PARSE --> SORT --> LOAD --> TRACK
-
-    style SCAN fill:#e8f4f8,stroke:#333
-    style PARSE fill:#e8f4f8,stroke:#333
-    style SORT fill:#f0f8e8,stroke:#333
-    style LOAD fill:#fff3e0,stroke:#333
-    style TRACK fill:#fce4ec,stroke:#333
+    style K fill:#f3e5f5,stroke:#7b1fa2
+    style C fill:#fce4ec,stroke:#c62828
+    style R fill:#fff3e0,stroke:#e65100
+    style E fill:#f0f8e8,stroke:#2e7d32
+    style H fill:#e8f4f8,stroke:#0277bd
+    style D fill:#fce4ec,stroke:#c62828
 ```
 
-**Step 1 -- Scan:** Read the `plugins/` directory. Each subdirectory is a potential plugin. Skip directories ending in `.disabled`.
+1. crossterm delivers the raw key event
+2. `convert_crossterm_key` maps it to an `alfred-core` KeyEvent
+3. `resolve_key` walks the active keymaps and finds `"cursor-down"`
+4. The built-in `cursor-down` command calls `cursor::move_down`
+5. Hooks fire -- the status-bar plugin updates its panel content
+6. The renderer draws the frame with the new cursor position and status bar
 
-**Step 2 -- Parse:** Read `init.lisp` header comments for metadata:
+<!--
+Presenter notes:
+This is synchronous. No async, no channels, no message passing.
+The entire cycle runs on the main thread before the next key is read.
+ADR-003 documents this decision.
+-->
+
+---
+
+# Dependency Rules
+
+```
+alfred-bin depends on: alfred-tui, alfred-plugin, alfred-lisp, alfred-core
+alfred-tui depends on: alfred-core, crossterm, ratatui
+alfred-plugin depends on: alfred-core, alfred-lisp
+alfred-lisp depends on: alfred-core, rust_lisp
+alfred-core depends on: ropey, thiserror (ONLY)
+```
+
+**Three rules enforced by the compiler:**
+
+1. `alfred-core` never imports from any other Alfred crate
+2. `alfred-tui` never imports from `alfred-lisp` or `alfred-plugin`
+3. Only `alfred-bin` depends on all four other crates (it is the composition root)
+
+**Why?** If the core imported the terminal library, you could not test buffer operations without a terminal. If the TUI imported the Lisp engine, rendering would be coupled to the extension language. Clean boundaries make each piece testable and replaceable independently.
+
+<!--
+Presenter notes:
+ADR-006 documents this decision. The alternative of a single crate with
+modules was rejected because module-level visibility is weaker than
+crate-level boundaries. The compiler cannot prevent buffer.rs from
+importing crossterm in a single-crate project.
+-->
+
+---
+
+<!-- Part 3: PLUGIN SYSTEM -->
+
+# Part 3: What Is a Plugin?
+
+A plugin is a directory under `plugins/` containing an `init.lisp` file.
+
+```
+plugins/
+  status-bar/
+    init.lisp       <-- evaluated at startup
+  line-numbers/
+    init.lisp
+  vim-keybindings/
+    init.lisp
+  default-theme/
+    init.lisp
+  rainbow-csv/
+    init.lisp
+  word-count/
+    init.lisp
+  test-plugin/
+    init.lisp
+```
+
+Every `init.lisp` starts with metadata comments:
 ```lisp
-;;; name: my-plugin
-;;; version: 0.1.0
-;;; description: Does something useful
-;;; depends: other-plugin
+;;; name: status-bar
+;;; version: 3.0.0
+;;; description: Status bar showing filename, position, mode
+;;; depends: default-theme
 ```
 
-**Step 3 -- Sort:** Topological sort using Kahn's algorithm. If plugin B depends on plugin A, A loads first. Circular dependencies are detected and reported as errors.
+The `depends` field is optional. When present, the plugin system sorts plugins so dependencies load first (topological sort using Kahn's algorithm).
 
-**Step 4 -- Load:** Evaluate `init.lisp` in the Lisp runtime. If evaluation fails, the error is collected (not a crash), and the plugin is not registered.
-
-**Step 5 -- Track:** The `PluginRegistry` records which commands and hooks each plugin registered. On unload, these are cleaned up.
+<!--
+Presenter notes:
+Disabling a plugin is as simple as renaming its directory to end in
+.disabled -- the discovery scanner skips those directories.
+-->
 
 ---
 
-# alfred-tui: The Imperative Shell
-
-`alfred-tui` is where side effects live. It reads the keyboard, draws the screen, and runs the main event loop.
-
-**Two modules:**
-
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `app.rs` | 7,449 | Event loop, key conversion, key handling, colon commands, operator-pending logic |
-| `renderer.rs` | 1,005 | Drawing buffer content, gutter, status bar, message line, cursor positioning |
-
-**External dependencies:** `crossterm` (terminal raw mode, key events) and `ratatui` (immediate-mode TUI rendering).
-
-**The event loop (simplified):**
-```
-loop {
-    1. Compute gutter content (dispatch "render-gutter" hook)
-    2. Compute status bar content (dispatch "render-status" hook)
-    3. Render the frame to the terminal
-    4. Read the next key event from crossterm
-    5. Convert crossterm key to alfred-core KeyEvent
-    6. Handle the key event (resolve keymap, update state)
-    7. If a deferred action was returned, execute it
-       (eval Lisp, execute command, save file, etc.)
-}
-```
-
----
-
-# alfred-bin: The Composition Root
-
-`alfred-bin` is the binary entry point -- just 253 lines. It wires everything together:
-
-```rust
-fn run_editor(file_path: Option<&str>) -> Result<()> {
-    // 1. Query terminal size
-    let (width, height) = crossterm::terminal::size()?;
-
-    // 2. Create EditorState in Rc<RefCell<>> for shared access
-    let state = Rc::new(RefCell::new(editor_state::new(width, height)));
-
-    // 3. Load file into buffer (if path provided)
-    if let Some(path_str) = file_path {
-        state.borrow_mut().buffer = Buffer::from_file(path)?;
-    }
-
-    // 4. Register built-in commands (cursor movement, etc.)
-    editor_state::register_builtin_commands(&mut state.borrow_mut());
-
-    // 5. Create Lisp runtime and register ALL bridge primitives
-    let runtime = LispRuntime::new();
-    bridge::register_core_primitives(&runtime, state.clone());
-    bridge::register_define_command(&runtime, state.clone());
-    bridge::register_hook_primitives(&runtime, state.clone());
-    bridge::register_keymap_primitives(&runtime, state.clone());
-    bridge::register_theme_primitives(&runtime, state.clone());
-
-    // 6. Discover and load plugins from plugins/ directory
-    let errors = load_plugins(&runtime);
-
-    // 7. Load user config (~/.config/alfred/init.lisp)
-    load_user_config(&runtime, &config_path);
-
-    // 8. Run the event loop
-    alfred_tui::app::run(&state, &runtime)?;
-    Ok(())
-}
-```
-
----
-
-<!-- Part 3: THE PLUGIN SYSTEM -->
-
-# Part 3: The Plugin System
-
----
-
-# What Is a Plugin?
-
-A plugin is a folder inside `plugins/` containing an `init.lisp` file. That is it.
-
-When Alfred starts, it scans `plugins/`, reads each `init.lisp`, and evaluates it. The Lisp code can:
-
-- **Define commands** -- Register new named commands that can be bound to keys
-- **Create keymaps** -- Build key-to-command lookup tables
-- **Set hooks** -- Attach callbacks to extension points (e.g., "run this when rendering the gutter")
-- **Set theme colors** -- Configure the editor's color scheme
-- **Call bridge primitives** -- Insert text, move the cursor, show messages
-
-**Currently shipped plugins:**
-
-| Plugin | What it does | Lines of Lisp |
-|--------|-------------|---------------|
-| `vim-keybindings` | Defines all vim normal, insert, and visual mode keybindings | 128 |
-| `line-numbers` | Enables line number display in the gutter | 9 |
-| `status-bar` | Enables the status bar showing filename, position, mode | 9 |
-| `default-theme` | Sets the color scheme (gutter, status bar, message) | 12 |
-| `test-plugin` | Registers a "hello" command (example/test) | 5 |
-
----
-
-# Plugin Metadata Format
-
-Every `init.lisp` starts with header comments that declare metadata:
-
-```lisp
-;;; name: my-plugin
-;;; version: 0.1.0
-;;; description: A short description of what this plugin does
-;;; depends: other-plugin, another-plugin
-```
-
-**Required fields:** `name` (must be unique)
-**Optional fields:** `version` (defaults to "0.0.0"), `description` (defaults to ""), `depends` (comma-separated list of plugin names)
-
-**How parsing works:** The discovery module reads each line. Lines starting with `;;; ` are parsed as `key: value` pairs. Everything after the metadata comments is the Lisp code that gets evaluated.
-
-**Disabling a plugin:** Rename the folder to end with `.disabled` (e.g., `vim-keybindings.disabled/`). The scanner skips it.
-
----
-
-# How to Create a New Plugin: Word Count Example
-
-**Goal:** Create a plugin that adds a `:wc` command showing the word count.
-
-**Step 1:** Create the plugin folder:
-```bash
-mkdir plugins/word-count
-```
-
-**Step 2:** Create `plugins/word-count/init.lisp`:
-```lisp
-;;; name: word-count
-;;; version: 0.1.0
-;;; description: Adds a word-count command
-
-(define-command "word-count"
-  (lambda ()
-    (define text (buffer-content))
-    (define words (length (filter
-      (lambda (s) (> (length s) 0))
-      (split text " "))))
-    (message (+ "Word count: " (to-string words)))))
-```
-
-**Step 3:** Restart Alfred. The plugin is discovered, loaded, and the `word-count` command is available.
-
-**Step 4:** Run it with `:word-count` and press Enter. The message line shows the word count.
-
-That is all. No compilation. No configuration file. No registration step. Just a folder with an `init.lisp`.
-
----
-
-# Plugin Lifecycle: Load, Track, Unload
+# Plugin Lifecycle
 
 ```mermaid
 graph TD
-    D["Discovery<br/>scan plugins/ dir"]
-    M["Parse Metadata<br/>read ;;; headers"]
-    V["Validate<br/>check dependencies"]
-    S["Sort<br/>topological order"]
-    E["Evaluate<br/>run init.lisp"]
-    T["Track<br/>record commands & hooks"]
-    U["Unload<br/>remove commands & hooks"]
+    SCAN("1. Scan<br/>plugins/ directory") --> PARSE("2. Parse<br/>metadata from<br/>init.lisp headers")
+    PARSE --> SORT("3. Sort<br/>topological order<br/>by dependencies")
+    SORT --> EVAL("4. Evaluate<br/>each init.lisp<br/>in the Lisp runtime")
+    EVAL --> TRACK("5. Track<br/>commands and hooks<br/>per plugin")
 
-    D --> M --> V --> S --> E --> T
-    T -.->|"on unload"| U
-
-    style D fill:#e8f4f8,stroke:#333
-    style M fill:#e8f4f8,stroke:#333
-    style V fill:#f0f8e8,stroke:#333
-    style S fill:#f0f8e8,stroke:#333
-    style E fill:#fff3e0,stroke:#333
-    style T fill:#fce4ec,stroke:#333
-    style U fill:#fce4ec,stroke:#333
+    style SCAN fill:#fff3e0,stroke:#e65100
+    style PARSE fill:#fff3e0,stroke:#e65100
+    style SORT fill:#fff3e0,stroke:#e65100
+    style EVAL fill:#f0f8e8,stroke:#2e7d32
+    style TRACK fill:#fff3e0,stroke:#e65100
 ```
 
-**Tracking:** When a plugin calls `define-command`, the command name is associated with that plugin in the registry. Same for hooks.
+**Error handling:** If a plugin fails to load (bad Lisp syntax, undefined function), the error is collected as a message -- not a crash. Other plugins continue loading. The message bar shows any errors on startup.
 
-**Unloading:** When a plugin is unloaded, all its tracked commands are removed from the `CommandRegistry` and its tracked hooks are cleared. Other plugins are unaffected.
+**Unloading:** Each plugin tracks which commands and hooks it registered. Unloading a plugin removes those commands and hooks cleanly without affecting other plugins.
 
-**Error handling:** If `init.lisp` fails (syntax error, undefined function, etc.), the plugin is NOT added to the registry. The error message is collected and shown in the editor's message line. Other plugins continue loading normally.
-
----
-
-<!-- Part 4: THE LISP ENGINE -->
-
-# Part 4: The Lisp Engine
-
----
-
-# What Is rust_lisp?
-
-`rust_lisp` is a small Lisp interpreter written in Rust. Alfred chose it over alternatives (Janet, custom Lisp) for two reasons:
-
-1. **No C FFI:** Unlike Janet (written in C), rust_lisp is pure Rust. Registering a Rust function as a Lisp callable is just `env.define(name, Value::NativeClosure(closure))`. No C-compatible wrappers needed.
-
-2. **Build simplicity:** `cargo build` handles everything. No C compiler, no bindgen, no platform-specific build issues.
-
-**What rust_lisp provides:**
-- Basic types: integers, strings, booleans, lists, symbols
-- Lambda functions and closures
-- `define` for variable binding
-- Arithmetic, string concatenation, comparisons
-- List operations (`car`, `cdr`, `cons`, `map`, `filter`)
-- `if`, `cond`, `begin` control flow
-
-**What it does NOT provide:** modules, green threads, regex, file I/O, networking. For Alfred's scope, this is fine -- plugins only need to call bridge primitives.
+<!--
+Presenter notes:
+The topological sort detects circular dependencies and reports them as
+errors. It also detects missing dependencies (plugin A depends on
+plugin B, but B does not exist).
+-->
 
 ---
 
-# Bridge Primitives: The Complete API
+# The Event Model
 
-The bridge registers Rust closures as Lisp functions. Here is the complete list:
+Plugins interact with the editor through three mechanisms:
 
-### Buffer Operations
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(buffer-insert text)` | Insert text at cursor position | `(buffer-insert "hello")` |
-| `(buffer-delete)` | Delete one character at cursor | `(buffer-delete)` |
-| `(buffer-content)` | Return entire buffer as a string | `(define txt (buffer-content))` |
-| `(buffer-filename)` | Return filename or empty string | `(buffer-filename)` |
-| `(buffer-modified?)` | Return `T` if modified, `F` otherwise | `(buffer-modified?)` |
-| `(save-buffer)` | Save to current file path | `(save-buffer)` |
-| `(save-buffer "path")` | Save to explicit path | `(save-buffer "/tmp/out.txt")` |
+| Mechanism | Direction | Example |
+|-----------|-----------|---------|
+| **Commands** | Plugin defines, user invokes | `(define-command "hello" (lambda () (message "Hi!")))` |
+| **Hooks** | Kernel fires, plugin listens | `(add-hook "cursor-moved" update-status)` |
+| **Keymaps** | Plugin defines, kernel resolves | `(define-key "normal-mode" "Char:j" "cursor-down")` |
 
-### Cursor and Mode
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(cursor-position)` | Return `(line column)` as a list | `(cursor-position)` |
-| `(cursor-move direction [count])` | Move cursor by direction | `(cursor-move ':down 3)` |
-| `(current-mode)` | Return mode name as string | `(current-mode)` |
-| `(set-mode name)` | Switch editor mode and keymap | `(set-mode "insert")` |
+**Commands** are named actions. Any plugin can register one. Users invoke them via keybindings or `:command-name`.
+
+**Hooks** are broadcast events. The kernel fires them at key moments. Any number of plugins can listen. Current hooks: `cursor-moved`, `buffer-changed`, `mode-changed`.
+
+**Keymaps** map key events to command names. Each mode has its own keymap. The kernel resolves keys by walking the active keymaps in order.
+
+<!--
+Presenter notes:
+This is a classic event-driven architecture. Commands are the command
+pattern. Hooks are the observer pattern. Keymaps are a lookup table
+from KeyEvent to command name string.
+-->
 
 ---
 
-# Bridge Primitives (continued)
+# The Panel System
 
-### Commands
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(define-command "name" fn)` | Register a Lisp function as a named command | `(define-command "hello" (lambda () (message "Hi!")))` |
+Panels are generic named screen regions. The kernel does not know what a "status bar" or "gutter" is. It only knows:
 
-### Keymaps
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(make-keymap "name")` | Create a named keymap | `(make-keymap "my-mode")` |
-| `(define-key "keymap" "key" "cmd")` | Bind a key to a command | `(define-key "my-mode" "Char:x" "hello")` |
-| `(set-active-keymap "name")` | Activate a keymap | `(set-active-keymap "my-mode")` |
+- A panel has a **name**, **position** (top/bottom/left/right), and **size**
+- A panel has **content** (single string for top/bottom, per-line map for left/right)
+- A panel has optional **foreground and background colors**
 
-### Hooks
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(add-hook "name" fn)` | Register a callback for a named hook | `(add-hook "render-gutter" (lambda (s e t) s))` |
-| `(dispatch-hook "name" args...)` | Call all callbacks for a hook | `(dispatch-hook "on-save" "file.txt")` |
-| `(remove-hook "name" id)` | Remove a callback by its ID | `(remove-hook "on-save" 3)` |
+**Creating a panel from Lisp:**
+```lisp
+(define-panel "status" "bottom" 1)            ;; 1 row, bottom of screen
+(set-panel-style "status" "#cdd6f4" "#313244") ;; light text, dark background
+(set-panel-content "status" " NORMAL | main.rs")
+```
 
-### Theme and Cursor Shape
-| Lisp Function | What It Does | Example |
-|--------------|-------------|---------|
-| `(set-theme-color "slot" "color")` | Set a theme color slot | `(set-theme-color "status-bar-bg" "#313244")` |
-| `(set-cursor-shape "mode" "shape")` | Set cursor shape for a mode | `(set-cursor-shape "normal" "block")` |
-| `(get-cursor-shape "mode")` | Get cursor shape for a mode | `(get-cursor-shape "insert")` |
-| `(message text)` | Display a message in the message line | `(message "File saved!")` |
+**The renderer** iterates all panels, computes layout (subtract panel sizes from the text area), and draws each panel generically. Adding a new panel position (e.g., a top toolbar) is just `(define-panel "toolbar" "top" 1)`.
+
+<!--
+Presenter notes:
+The panel system replaced earlier direct gutter/status-bar support.
+It generalizes screen layout so any plugin can claim screen real estate
+without kernel changes.
+-->
+
+---
+
+# Creating a Word Count Plugin
+
+Let us build a plugin from scratch. Goal: a `:word-count` command that shows stats in the message bar.
+
+**Step 1.** Create `plugins/word-count/init.lisp`
+
+**Step 2.** Add metadata:
+```lisp
+;;; name: word-count
+;;; version: 1.0.0
+;;; description: Displays word count, line count, and character count
+```
+
+**Step 3.** Write the logic:
+```lisp
+(define count-words
+  (lambda ()
+    (length
+      (filter
+        (lambda (w) (> (str-length w) 0))
+        (str-split (buffer-content) " ")))))
+
+(define-command "word-count"
+  (lambda ()
+    (message
+      (str-concat
+        (list "Lines: " (to-string (buffer-line-count))
+              " | Words: " (to-string (count-words))
+              " | Chars: " (to-string (str-length (buffer-content))))))))
+```
+
+**Step 4.** Restart Alfred. Type `:word-count` and press Enter.
+
+<!--
+Presenter notes:
+No Rust code changed. No recompilation. The plugin uses existing
+primitives: buffer-content, buffer-line-count, str-split, filter,
+length, str-concat, to-string, message.
+-->
+
+---
+
+# How the Status Bar Plugin Works
+
+The `status-bar` plugin (33 lines) demonstrates the full pattern:
+
+```lisp
+;; 1. Create a bottom panel
+(define-panel "status" "bottom" 1)
+(set-panel-style "status" "#cdd6f4" "#313244")
+
+;; 2. Build status text from editor state
+(define build-status
+  (lambda ()
+    (str-concat
+      (list " " (buffer-filename)
+            "  Ln " (to-string (+ (nth 0 (cursor-position)) 1))
+            ", Col " (to-string (+ (nth 1 (cursor-position)) 1))
+            (if (buffer-modified?) "  [+]" " ")
+            " " (str-upper (current-mode)) " "))))
+
+;; 3. Update on every change
+(define update-status (lambda () (set-panel-content "status" (build-status))))
+(add-hook "cursor-moved" update-status)
+(add-hook "buffer-changed" update-status)
+(add-hook "mode-changed" update-status)
+
+;; 4. Initial render
+(update-status)
+```
+
+This is a reactive pattern: state changes trigger hooks, hooks update panel content, the renderer draws the panel. The kernel does not know what the status bar shows.
+
+<!--
+Presenter notes:
+The status bar hooks into three events: cursor-moved, buffer-changed,
+and mode-changed. Every time any of these fires, it rebuilds the status
+string from live editor state and sets the panel content.
+-->
+
+---
+
+<!-- Part 4: LISP ENGINE -->
+
+# Part 4: What Is Alfred Lisp?
+
+Alfred Lisp is a small dialect based on the `rust_lisp` interpreter. It is not Emacs Lisp or Common Lisp. It is simpler -- just enough for editor extensions.
+
+**What it has:** Numbers, strings, booleans, lists, symbols, `define`, `lambda`, `if`, `let`, `quote`, closures, tail calls, standard arithmetic, and comparison operators.
+
+**What Alfred adds:** ~50 bridge primitives that connect Lisp to the editor kernel. These are Rust closures registered as native functions in the Lisp environment.
+
+**How it runs:** The Lisp runtime wraps `rust_lisp` in a clean `eval(source) -> Result<LispValue, LispError>` API. Plugin files are loaded via `eval_file(path)`. Every expression is evaluated synchronously on the main thread.
+
+**Performance:** Tree-walking interpreter. Under 1ms per primitive call (validated by performance benchmark tests with a kill-signal threshold).
+
+<!--
+Presenter notes:
+ADR-001 decided to adopt an existing interpreter rather than build one.
+ADR-004 chose rust_lisp over Janet. The key tradeoff: Janet is a better
+language, but rust_lisp provides better Rust integration (no C FFI).
+-->
+
+---
+
+# Bridge Primitives by Category
+
+| Category | Primitives | What they do |
+|----------|-----------|-------------|
+| **Buffer** | `buffer-insert`, `buffer-delete`, `buffer-content`, `buffer-get-line`, `buffer-filename`, `buffer-modified?`, `buffer-line-count`, `save-buffer` | Read and modify the text buffer |
+| **Cursor** | `cursor-position`, `cursor-move` | Query and move the cursor |
+| **Mode** | `current-mode`, `set-mode` | Query and switch editing modes |
+| **Commands** | `define-command` | Register named commands callable via `:name` |
+| **Keymaps** | `make-keymap`, `define-key`, `set-active-keymap` | Create key-to-command mappings |
+| **Hooks** | `add-hook`, `dispatch-hook`, `remove-hook` | Subscribe to editor events |
+| **Theme** | `set-theme-color`, `get-theme-color`, `define-theme`, `load-theme` | Configure colors |
+
+<!--
+Presenter notes:
+Each primitive is a Rust closure that captures Rc<RefCell<EditorState>>.
+When Lisp calls (buffer-insert "hello"), the closure borrows the editor
+state, calls buffer::insert_char_at_cursor, and returns Value::NIL.
+-->
+
+---
+
+# Standard Library Primitives
+
+Beyond the editor bridge, Alfred Lisp includes string and list manipulation:
+
+| Category | Functions |
+|----------|----------|
+| **Strings** | `str-split`, `str-join`, `str-concat`, `str-length`, `str-contains`, `str-replace`, `str-substring`, `str-trim`, `str-upper`, `str-lower`, `str-starts-with`, `str-ends-with`, `str-index-of`, `str`, `to-string`, `parse-int` |
+| **Lists** | `length`, `nth`, `first`, `rest`, `cons`, `append`, `reverse`, `range`, `map`, `filter`, `reduce`, `for-each` |
+| **Type checks** | `list?`, `string?`, `number?`, `nil?` |
+| **Rendering** | `set-status-bar`, `set-gutter-line`, `set-gutter-width`, `viewport-top-line`, `viewport-height` |
+| **Panels** | `define-panel`, `remove-panel`, `set-panel-content`, `set-panel-line`, `set-panel-style`, `set-panel-size` |
+| **Display** | `message`, `set-line-style`, `clear-line-styles`, `set-cursor-shape`, `get-cursor-shape`, `set-tab-width`, `get-tab-width` |
+
+These are pure functions implemented in Rust with no captured editor state (except the rendering and panel groups).
+
+<!--
+Presenter notes:
+The string and list primitives are needed because rust_lisp's built-in
+library is minimal. Alfred adds what plugins actually need: string
+splitting for CSV parsing, list mapping for gutter rendering, etc.
+-->
+
+---
+
+# Example: Rainbow CSV in Pure Lisp
+
+```lisp
+;;; name: rainbow-csv
+;;; description: Colorizes CSV columns with rainbow colors
+
+(define csv-colors
+  '("#ff6b6b" "#4ecdc4" "#45b7d1" "#96ceb4"
+    "#ffeaa7" "#dda0dd" "#98d8c8" "#f7dc6f"))
+
+(define build-field-styles
+  (lambda (fields col field-idx)
+    (if (nil? fields) '()
+      (cons
+        (list col (+ col (str-length (first fields)))
+              (get-csv-color field-idx))
+        (build-field-styles (rest fields)
+          (+ col (str-length (first fields)) 1)
+          (+ field-idx 1))))))
+
+(define-command "rainbow-csv"
+  (lambda ()
+    (clear-line-styles)
+    (for-each colorize-csv-line (range 0 (buffer-line-count)))
+    (message "Rainbow CSV applied")))
+```
+
+This plugin splits each line by commas, computes column boundaries, and sets per-character color styles. The renderer reads `line_styles` from EditorState and applies them during rendering. All in Lisp -- no Rust changes.
+
+<!--
+Presenter notes:
+The recursive build-field-styles function is a classic functional pattern:
+process the head of the list, then recurse on the tail. Each field gets
+a color from the cycling palette (8 colors, modulo index).
+-->
 
 ---
 
 <!-- Part 5: VIM KEYBINDINGS -->
 
-# Part 5: Vim Keybindings
+# Part 5: Modes Explained
+
+If you have never used Vim or a modal editor, here is the key concept:
+
+**Most editors have one mode.** You press a key, it types that letter. Always.
+
+**Alfred has three modes.** The same key does different things depending on which mode you are in. Think of it like gears in a car:
+
+| Mode | Analogy | What keys do |
+|------|---------|-------------|
+| **Normal** | Steering mode | Keys are commands: `j` moves down, `d` starts a delete, `:` opens command line |
+| **Insert** | Typing mode | Keys type letters into the document. Press `Escape` to return to Normal |
+| **Visual** | Selection mode | Movement keys extend a selection. Then `d` deletes it, `y` copies it |
+
+**How it works under the hood:** Each mode has its own keymap. When you switch modes, the active keymap changes. The same key event (`j`) maps to `"cursor-down"` in normal mode and to "type the letter j" in insert mode.
+
+<!--
+Presenter notes:
+The vim-keybindings plugin defines three keymaps: normal-mode,
+insert-mode, and visual-mode. Mode switching is done via
+(set-mode "normal") which triggers the mode-changed hook and
+switches the active keymap.
+-->
 
 ---
 
-# How Vim Modes Work in Alfred
+# Keymap Resolution
 
-Alfred has three modes, just like vim:
+When a key is pressed, the kernel walks the active keymaps in order:
 
-**Normal mode** (default): Keys are commands. `h` moves left, `d` starts a delete operation, `:` opens the command line.
+```
+Active keymaps: ["normal-mode"]
 
-**Insert mode** (press `i`): Keys are typed as text. Press `Escape` to go back to normal mode.
+Key: Char('j') with no modifiers
 
-**Visual mode** (press `v` or `V`): Select text by moving the cursor. Then apply an operator (`d` to delete, `y` to yank, `c` to change).
-
-**How mode switching works:**
-1. In normal mode, pressing `i` is bound to the command `enter-insert-mode`
-2. That command calls `(set-mode "insert")` which does two things:
-   - Sets `state.mode = "insert"`
-   - Switches `state.active_keymaps` to `["insert-mode"]`
-3. Now key resolution uses the insert-mode keymap (where Escape maps to `enter-normal-mode`, Backspace maps to `delete-backward`, and everything else is "self-insert")
-
----
-
-# How Keys Are Resolved
-
-When you press a key, this is what happens:
-
-```mermaid
-graph TD
-    KEY["User presses a key<br/>(e.g., 'j')"]
-    CONVERT["Convert crossterm key<br/>to alfred-core KeyEvent"]
-    CHECK["Check input state<br/>(Normal? Command? Search?<br/>OperatorPending?)"]
-    RESOLVE["Look up key in<br/>active keymaps"]
-    EXEC["Execute the command<br/>(e.g., cursor-down)"]
-    SELF["Self-insert the character<br/>(insert mode only)"]
-    NOOP["No-op<br/>(key not bound)"]
-
-    KEY --> CONVERT --> CHECK
-    CHECK -->|"Normal input state"| RESOLVE
-    CHECK -->|"Command mode (:)"| COLON["Accumulate into<br/>command string"]
-    CHECK -->|"Operator pending (d)"| MOTION["Resolve as motion,<br/>execute operator"]
-    RESOLVE -->|"Found: cursor-down"| EXEC
-    RESOLVE -->|"Not found, insert mode"| SELF
-    RESOLVE -->|"Not found, normal mode"| NOOP
-
-    style KEY fill:#e8f4f8,stroke:#333
-    style CONVERT fill:#e8f4f8,stroke:#333
-    style CHECK fill:#f0f8e8,stroke:#333
-    style RESOLVE fill:#fff3e0,stroke:#333
-    style EXEC fill:#fce4ec,stroke:#333
-    style SELF fill:#fce4ec,stroke:#333
+1. Look up in "normal-mode" keymap
+2. Found: "cursor-down"
+3. Execute the "cursor-down" command
 ```
 
-**Key resolution iterates through active keymaps** in order. The first keymap that has a binding for the key wins. This allows layered keymaps (e.g., a mode-specific keymap on top of a global keymap).
+**The keymap is just a HashMap.** Each entry maps a `KeyEvent` (key code + modifiers) to a command name string:
+
+```lisp
+(define-key "normal-mode" "Char:j" "cursor-down")
+(define-key "normal-mode" "Char:d" "enter-operator-delete")
+(define-key "normal-mode" "Char::" "enter-command-mode")
+(define-key "normal-mode" "Ctrl:r" "redo")
+```
+
+The key format is `"Type:value"` for character keys and modifier keys, or just the name for special keys (`"Escape"`, `"Enter"`, `"Backspace"`, `"Up"`, etc.).
+
+<!--
+Presenter notes:
+The resolve_key function in editor_state.rs iterates active_keymaps
+(a Vec<String>) and checks each keymap HashMap for the key. First
+match wins. This allows stacking keymaps for priority.
+-->
 
 ---
 
 # Operator-Pending Mode
 
-This is the heart of vim's composability. When you press `d` (delete), Alfred enters **operator-pending mode**. The next key is interpreted as a motion:
+When you press `d` (delete operator), Alfred does not delete anything yet. It enters **operator-pending mode** and waits for a motion or text object to define the range.
 
-| You type | What happens |
-|----------|-------------|
-| `dw` | Delete from cursor to start of next word |
-| `d$` | Delete from cursor to end of line |
-| `dd` | Delete entire line (operator doubled = line-wise) |
-| `dj` | Delete current line and the line below (line-wise motion) |
-| `diw` | Delete inner word (text object) |
-| `da"` | Delete around double-quotes (text object) |
+```mermaid
+graph LR
+    D("Press d") --> OP("Operator<br/>Pending:<br/>Delete")
+    OP -->|"w"| DW("Delete word")
+    OP -->|"$"| DE("Delete to<br/>end of line")
+    OP -->|"d"| DD("Delete<br/>entire line")
+    OP -->|"i then w"| DIW("Delete<br/>inner word")
+    OP -->|"Escape"| CANCEL("Cancel")
 
-**How it works internally:**
-1. `d` is bound to `enter-operator-delete` in the keymap
-2. `handle_key_event` returns `InputState::OperatorPending(Operator::Delete)`
-3. The next key press is resolved through the keymap to get a motion command name
-4. `execute_motion()` computes the target cursor position and motion kind (char-wise or line-wise)
-5. `execute_delete_with_motion()` deletes the text between cursor and target
-6. State returns to `InputState::Normal`
+    style D fill:#f3e5f5,stroke:#7b1fa2
+    style OP fill:#fff3e0,stroke:#e65100
+    style DW fill:#f0f8e8,stroke:#2e7d32
+    style DE fill:#f0f8e8,stroke:#2e7d32
+    style DD fill:#f0f8e8,stroke:#2e7d32
+    style DIW fill:#f0f8e8,stroke:#2e7d32
+    style CANCEL fill:#fce4ec,stroke:#c62828
+```
 
-**Text objects** add another layer: after `d`, pressing `i` or `a` enters `TextObject` state, then the next key selects the object type (`w` for word, `"` for quotes, `(` for parentheses, etc.).
+The `InputState` enum in `app.rs` tracks this:
+- `Normal` -- regular key dispatch
+- `OperatorPending(Delete)` -- waiting for a motion after `d`
+- `TextObject(Delete, Inner)` -- waiting for a text object type after `di`
+
+This state machine is in Rust (the imperative shell), not in Lisp, because it involves multi-key sequences that span multiple event loop iterations.
+
+<!--
+Presenter notes:
+The same state machine handles Change (c) and Yank (y) operators.
+The Operator enum has three variants: Delete, Change, Yank. After
+the motion executes, the operator is applied to the resulting range.
+-->
+
+---
+
+# Text Objects
+
+Text objects are *things* you can operate on. They answer the question "what chunk of text?"
+
+| Text object | Inner (`i`) | Around (`a`) |
+|-------------|-------------|-------------|
+| **Word** | `iw` -- the word itself | `aw` -- the word plus surrounding space |
+| **Double quotes** | `i"` -- text between quotes | `a"` -- text including the quotes |
+| **Single quotes** | `i'` -- text between quotes | `a'` -- text including the quotes |
+| **Parentheses** | `i(` -- text inside parens | `a(` -- text including the parens |
+| **Braces** | `i{` -- text inside braces | `a{` -- text including the braces |
+| **Brackets** | `i[` -- text inside brackets | `a[` -- text including the brackets |
+
+**Example:** With the cursor on `hello` in `say("hello")`, pressing `ci"` does: change-inside-quotes. It deletes `hello`, leaves the quotes, and enters insert mode. You type the replacement.
+
+Text object functions in `text_object.rs` are pure: they take a cursor and buffer, return an `Option<(Cursor, Cursor)>` range. Multi-line bracket matching is supported.
+
+<!--
+Presenter notes:
+The text_object module contains around 300 lines of pure functions.
+Every function takes (Cursor, &Buffer) and returns Option<(Cursor, Cursor)>.
+They are tested with table-driven tests covering edge cases like empty
+buffers, nested brackets, and cursor-on-delimiter positions.
+-->
 
 ---
 
 # Visual Mode
 
-Visual mode lets you select text and then apply an operator.
+Visual mode lets you see what you are selecting before you act on it.
 
-**Character-wise visual mode (`v`):**
-- Sets `state.selection_start = Some(state.cursor)` and `state.visual_line_mode = false`
-- As you move the cursor, the selection extends from `selection_start` to `cursor`
-- Pressing `d` deletes the selection, `y` yanks it, `c` changes it
-- Pressing `Escape` cancels and returns to normal mode
+| Key | What it does |
+|-----|-------------|
+| `v` | Enter character-wise visual mode. Selection starts at cursor |
+| `V` | Enter line-wise visual mode. Selection covers entire lines |
+| Movement keys | Extend the selection (same keys as normal mode) |
+| `d` | Delete the selection |
+| `y` | Yank (copy) the selection |
+| `c` | Change the selection (delete + insert mode) |
+| `Escape` | Cancel and return to normal mode |
 
-**Line-wise visual mode (`V`):**
-- Same as character-wise, but `state.visual_line_mode = true`
-- Operators expand the selection to full lines before acting
-- Useful for deleting, yanking, or indenting multiple lines
+**Under the hood:** `selection_start` stores where the selection began. The current cursor is the other end. The renderer highlights everything between these two positions. When you press `d`, the text between the anchors is deleted.
 
-**Keybindings in visual mode** are defined in the `visual-mode` keymap. Navigation keys (`h`, `j`, `k`, `l`, `w`, `b`, etc.) work the same as normal mode. Operator keys (`d`, `y`, `c`) act on the selection instead of waiting for a motion.
+Line-wise visual mode (`V`) expands the selection to full lines before operating. This is tracked by the `visual_line_mode` boolean on EditorState.
 
----
-
-# Count Prefix: Repeating Commands
-
-In normal mode, digit keys (`1`-`9`) start a count prefix. Subsequent digits (`0`-`9`) are appended.
-
-**Examples:**
-- `5j` = move down 5 lines
-- `3dw` = delete 3 words
-- `10x` = delete 10 characters
-
-**How it works:**
-1. `handle_key_event` checks if the key is a digit in normal mode
-2. If starting or continuing a count, it accumulates into `pending_count` and returns without executing a command
-3. When a non-digit key arrives, the accumulated count is passed back to the event loop
-4. The event loop executes the command `repeat` times (defaulting to 1 if no count)
-
-**Special case:** `0` alone (no pending count) maps to `cursor-line-start` (move to column 0), not a count. `10` starts count at 1, then appends 0.
+<!--
+Presenter notes:
+Visual mode uses a separate keymap (visual-mode) that has the same
+navigation keys as normal-mode but different operator keys. The d/y/c
+keys in visual mode are mapped to visual-delete, visual-yank,
+visual-change commands that operate on the selection rather than
+entering operator-pending mode.
+-->
 
 ---
 
-<!-- Part 6: THEMES, FILES, TESTING -->
+<!-- Part 6: THEMES AND APPEARANCE -->
 
-# Part 6: The Theme System
+# Part 6: The Color System
 
----
+Colors are managed through a theme -- a mapping from slot names to color values.
 
-# How Colors Work
+| Slot name | What it colors | Default value |
+|-----------|---------------|---------------|
+| `text-fg` | Buffer text foreground | Terminal default |
+| `text-bg` | Buffer text background | Terminal default |
+| `gutter-fg` | Line numbers foreground | `#6c7086` (gray) |
+| `gutter-bg` | Line numbers background | Terminal default |
+| `status-bar-fg` | Status bar text | `#cdd6f4` (light) |
+| `status-bar-bg` | Status bar background | `#313244` (dark) |
+| `message-fg` | Message line foreground | Terminal default |
+| `message-bg` | Message line background | Terminal default |
 
-The theme system is plugin-driven. Colors are stored in a `HashMap<String, ThemeColor>` on `EditorState`.
+The `default-theme` plugin sets all these. You can override any in your `~/.config/alfred/init.lisp`:
+```lisp
+(set-theme-color "status-bar-bg" "#1e1e2e")
+```
 
-**Color slots** follow a naming convention: `component-property` (e.g., `status-bar-bg`, `gutter-fg`):
+**ThemeColor** is an enum: either `Rgb(u8, u8, u8)` or `Named(NamedColor)`. The core stores these pure values. Conversion to terminal-specific colors happens only in the renderer.
 
-| Slot | What it colors |
-|------|---------------|
-| `text-fg` / `text-bg` | Buffer text foreground/background |
-| `gutter-fg` / `gutter-bg` | Line number gutter |
-| `status-bar-fg` / `status-bar-bg` | Status bar |
-| `message-fg` / `message-bg` | Message line at the bottom |
-
-**Color formats supported:**
-- Hex RGB: `"#ff5733"` (parsed into `ThemeColor::Rgb(255, 87, 51)`)
-- Named ANSI colors: `"red"`, `"blue"`, `"dark-gray"`, `"light-cyan"`, etc.
-- `"default"` = use the terminal's default color
-
-**The conversion boundary:** `ThemeColor` is a pure domain type in `alfred-core`. Conversion to `ratatui::Color` (a rendering library type) happens in `alfred-tui/renderer.rs`. The core never knows about ratatui.
-
-**Cursor shapes** are also configured per mode via Lisp: `(set-cursor-shape "normal" "block")` and `(set-cursor-shape "insert" "bar")`.
-
----
-
-# Part 7: File Operations
-
----
-
-# Save, Open, Quit
-
-**Saving:**
-- `:w` saves to the buffer's existing file path
-- `:w /path/to/file` saves to an explicit path
-- `:wq` saves and quits
-- The `save_to_file()` function in `buffer.rs` writes the content and returns a new Buffer with `modified = false`
-
-**Opening:**
-- `:e filename` opens a file into the buffer
-- `Buffer::from_file(path)` reads the file using `std::fs::read_to_string()` and wraps it in a ropey Rope
-- The cursor resets to (0, 0) and the viewport resets
-
-**Quitting:**
-- `:q` quits if the buffer is not modified. If modified, it shows "Unsaved changes! Use :q! to force quit"
-- `:q!` quits without saving, even with unsaved changes
-- The event loop checks `state.running` and breaks when it becomes `false`
-
-**Other colon commands:**
-- `:eval (+ 1 2)` evaluates a Lisp expression and shows the result
-- `:s/old/new/g` search-and-replace on the current line
-- `:%s/old/new/g` search-and-replace on the entire buffer
-- `:g/pattern/d` delete all lines matching a pattern
-- `:v/pattern/d` delete all lines NOT matching a pattern
+<!--
+Presenter notes:
+The theme system supports named themes via define-theme and load-theme.
+You can define multiple themes and switch between them. The parse_color
+function handles both hex (#rrggbb) and named colors (red, dark-gray, etc.).
+-->
 
 ---
 
-# Part 8: Testing
+# Cursor Shapes
+
+Alfred changes the terminal cursor shape based on the current mode:
+
+| Mode | Default shape | What it looks like |
+|------|--------------|-------------------|
+| Normal | `block` | A solid rectangle covering the character |
+| Insert | `bar` | A thin vertical line between characters |
+
+The vim-keybindings plugin sets this:
+```lisp
+(set-cursor-shape "normal" "block")
+(set-cursor-shape "insert" "bar")
+```
+
+You can customize it to use blinking variants:
+```lisp
+(set-cursor-shape "insert" "blinking-bar")
+(set-cursor-shape "normal" "steady-block")
+```
+
+Available shapes: `default`, `block`, `steady-block`, `blinking-block`, `bar`, `steady-bar`, `blinking-bar`, `underline`, `steady-underline`, `blinking-underline`.
+
+The shape is resolved per-mode via `cursor_shape_for_mode()` -- a pure lookup in the `cursor_shapes` HashMap on EditorState.
+
+<!--
+Presenter notes:
+The renderer converts the shape name string to a crossterm SetCursorStyle
+command. This conversion happens at the boundary, keeping the core
+free of terminal-specific types.
+-->
 
 ---
 
-# Testing Strategy
+<!-- Part 7: FILE OPERATIONS -->
 
-**183 unit tests** across all crates. All pass in under 1 second.
+# Part 7: Save, Open, Quit
 
-**Test naming convention:** `given_X_when_Y_then_Z` (behavior-driven style)
+All file operations go through the command-line interface (triggered by `:`):
 
-**Testing by crate:**
+| Command | What it does | Error handling |
+|---------|-------------|----------------|
+| `:w` | Save to current file path | Error if no filename set |
+| `:w path` | Save to specified path | Error if write fails |
+| `:wq` | Save and quit | Error if save fails (does not quit) |
+| `:q` | Quit | Warns if unsaved changes |
+| `:q!` | Force quit | Discards unsaved changes |
+| `:e path` | Open a different file | Error if file not found |
 
-| Crate | Test Count | Strategy |
-|-------|-----------|----------|
-| `alfred-core` | ~80 | Table-driven tests for pure functions. Each movement/buffer function has 3-8 test cases covering boundary conditions. |
-| `alfred-lisp` | ~15 | Runtime eval tests (arithmetic, strings, variables, errors). Performance baseline tests (under 1ms per eval call). |
-| `alfred-plugin` | ~20 | Discovery and registry tests using `tempfile` for isolated filesystem. Dependency ordering tests. |
-| `alfred-tui` | ~65 | Key conversion tests. `handle_key_event` tests for every input state (normal, command, search, operator-pending, text object, visual, etc.). |
-| `alfred-bin` | ~3 | Config file path computation, user config loading. |
+**The save path:** `save-buffer` primitive writes the rope content to disk. The buffer tracks its file path (set on load or on first `:w path`). After saving, the `modified` flag is cleared.
 
-**E2E tests** (in `tests/e2e/test_alfred.py`):
-- Use `pexpect` to spawn Alfred in a real PTY
-- Send keystrokes, wait for exit, check file content
-- Cover: startup, insert mode, navigation, arrow keys, operator-pending, visual mode, marks, macros, undo, search-and-replace, and more
-- Run in Docker for consistency
+**The quit path:** The `running` flag on EditorState is set to `false`. The event loop checks this flag and exits cleanly, restoring the terminal to normal mode.
+
+<!--
+Presenter notes:
+The buffer uses ropey::Rope for efficient text storage. Rope cloning
+is O(1) due to structural sharing, which makes undo snapshots cheap.
+The Buffer struct tracks id, rope, filename, file_path, modified flag,
+and a monotonic version counter.
+-->
 
 ---
 
-# CI Pipeline and Pre-Commit
+# Unsaved Changes Protection
 
-**GitHub Actions CI** runs on every push to `main` and every pull request:
+When you type `:q` with unsaved changes:
+
+1. The command handler checks `buffer.is_modified()`
+2. If true, it sets `state.message = Some("No write since last change (use :q! to force quit)")`
+3. The editor does NOT quit
+4. The message appears in the message bar at the bottom of the screen
+
+To actually quit, you must either:
+- Save first (`:wq` or `:w` then `:q`)
+- Force quit (`:q!`)
+
+The `modified` flag is set to `true` whenever the buffer content changes (any insert or delete operation). It is set to `false` after a successful save.
+
+<!--
+Presenter notes:
+Search and replace commands (`:s/old/new/g`, `:%s/old/new/g`) also
+modify the buffer and set the modified flag. Global commands
+(`:g/pattern/d`, `:v/pattern/d`) work similarly.
+-->
+
+---
+
+<!-- Part 8: TESTING -->
+
+# Part 8: Unit Testing Strategy
+
+**The key insight:** Because the core is pure functions, unit tests need no setup or mocking.
+
+```rust
+// Testing viewport adjustment -- pure function, no terminal needed
+#[test]
+fn cursor_below_viewport_causes_scroll_down() {
+    let viewport = viewport::new(0, 24, 80);
+    let cursor = Cursor { line: 24, column: 0 };
+    let adjusted = viewport::adjust(viewport, &cursor);
+    assert_eq!(adjusted.top_line, 1);
+}
+```
+
+**Test naming convention:** `given_X_when_Y_then_Z` for acceptance tests. Shorter names for unit tests.
+
+**Test organization:** Tests live in the same file as the code they test (`#[cfg(test)] mod tests`). This keeps tests close to the implementation and makes them easy to find.
+
+| Crate | Test count | What they test |
+|-------|-----------|----------------|
+| alfred-core | ~350 | Buffer ops, cursor movement, viewport, commands, hooks, panels, theme, text objects |
+| alfred-lisp | ~100 | Runtime eval, bridge primitives, string/list functions |
+| alfred-plugin | ~80 | Discovery, registry, load/unload, dependency ordering |
+| alfred-tui | ~30 | Key conversion, key handling, command execution |
+| alfred-bin | ~6 | Config file path, config loading |
+
+<!--
+Presenter notes:
+Property-based testing is the default strategy per CLAUDE.md, though
+the current test suite uses mostly example-based tests with table-driven
+patterns for combinatorial cases (text objects, cursor movements).
+-->
+
+---
+
+# E2E Testing in Docker
+
+End-to-end tests run Alfred as a real process inside a Docker container:
+
+```python
+def test_insert_text_and_save(self):
+    """Type text in insert mode, save, verify file content."""
+    path = create_temp_file("")
+    child = spawn_alfred(path)
+
+    send_keys(child, "i")           # Enter insert mode
+    send_keys(child, "Hello world") # Type text
+    send_escape(child)              # Back to normal mode
+    send_colon_command(child, "wq") # Save and quit
+    child.wait()
+
+    assert read_file(path) == "Hello world\n"
+```
+
+**Why Docker?** Alfred uses the alternate screen buffer. You cannot read screen content from outside. Instead, tests send real keystrokes via pexpect (a Python library that drives a PTY) and verify outcomes by reading the saved file.
+
+**66 tests** cover: basic editing, Vim motions, visual mode, search, text objects, undo/redo, macros, marks, registers, ex commands, and plugin loading.
+
+<!--
+Presenter notes:
+The tests run via `make e2e` which executes `tests/e2e/run_tests.sh`.
+This builds a Docker image with Alfred, Python, and pexpect, then
+runs pytest inside the container. Tests use generous timeouts (10s)
+to handle startup and plugin loading.
+-->
+
+---
+
+# CI Pipeline
+
+GitHub Actions runs four parallel jobs on every push and pull request:
 
 ```mermaid
 graph LR
-    PUSH["Push / PR"]
-    CHECK["Check<br/>cargo check"]
-    TEST["Test<br/>cargo test"]
-    FORMAT["Format<br/>cargo fmt --check"]
-    LINT["Lint<br/>cargo clippy -D warnings"]
+    PUSH("Push / PR") --> CHECK("Check<br/>cargo check")
+    PUSH --> TEST("Test<br/>cargo test")
+    PUSH --> FORMAT("Format<br/>cargo fmt --check")
+    PUSH --> LINT("Lint<br/>cargo clippy<br/>-D warnings")
 
-    PUSH --> CHECK
-    PUSH --> TEST
-    PUSH --> FORMAT
-    PUSH --> LINT
-
-    style CHECK fill:#e8f4f8,stroke:#333
-    style TEST fill:#f0f8e8,stroke:#333
-    style FORMAT fill:#fff3e0,stroke:#333
-    style LINT fill:#fce4ec,stroke:#333
+    style PUSH fill:#f3e5f5,stroke:#7b1fa2
+    style CHECK fill:#e8f4f8,stroke:#0277bd
+    style TEST fill:#f0f8e8,stroke:#2e7d32
+    style FORMAT fill:#fff3e0,stroke:#e65100
+    style LINT fill:#fce4ec,stroke:#c62828
 ```
 
-All four jobs run in parallel on `ubuntu-latest`. Rust toolchain caching is enabled for speed.
+**Pre-commit hook** runs the same checks locally before every commit: format, lint, test.
 
-**Pre-commit hook** (`scripts/pre-commit`):
-```bash
-make format    # Check code formatting
-make lint      # Run clippy linter with -D warnings (warnings = errors)
-make test      # Run all 183 tests
-```
+**Clippy warnings are errors.** The `-D warnings` flag means any clippy warning fails the build. This keeps the codebase clean.
 
-Install with: `make dev_install` (sets up the hook automatically).
+**E2E tests** are not in CI (they require Docker-in-Docker). They run locally via `make e2e`.
+
+<!--
+Presenter notes:
+The CI uses rust-cache for faster builds. The four jobs run in parallel
+on ubuntu-latest. The pre-commit hook (scripts/pre-commit) calls the
+same Makefile targets as CI for consistency.
+-->
 
 ---
 
 <!-- Part 9: DESIGN DECISIONS -->
 
-# Part 9: Design Decisions
+# Part 9: ADR-001 and ADR-004 -- Choosing Lisp
+
+**ADR-001: Adopt an existing Lisp interpreter, do not build one.**
+
+Building a Lisp interpreter (the MAL approach has 11 steps) would take 3-4 weeks and produce interpreter bugs that mask architecture issues. The goal is proving the plugin architecture, not building a language.
+
+**ADR-004: Choose rust_lisp over Janet.**
+
+| | Janet | rust_lisp |
+|-|-------|-----------|
+| Language quality | Better (bytecode VM, green threads, larger community) | Adequate (tree-walking, minimal features) |
+| Rust integration | Requires C FFI bridge | Native Rust closures |
+| Build complexity | Needs C compiler | `cargo build` just works |
+| Migration risk | High coupling through FFI | Isolated in `alfred-lisp` crate |
+
+**The decision:** rust_lisp wins on integration quality. Janet is the better language, but the FFI boundary would introduce a category of bugs (memory management, type marshalling) that obscure architecture issues. If rust_lisp proves insufficient later, migration is isolated to one crate.
+
+<!--
+Presenter notes:
+A Lua alternative was also rejected. Alfred's identity is Emacs-inspired
+with Lisp as the extension language. Lua does not provide homoiconicity
+or macros. Neovim chose Lua because Vimscript was already there;
+Alfred starts fresh.
+-->
 
 ---
 
-# ADR-001: Adopt an Existing Lisp Interpreter
+# ADR-002 and ADR-003 -- Architecture Choices
 
-**Context:** Alfred needs a Lisp extension language. Should we build one from scratch or adopt an existing one?
+**ADR-002: Plugin-first architecture.**
 
-**Decision:** Adopt an existing Lisp interpreter. Do not build a custom one.
+Three options were considered: full-featured kernel, balanced split, or thin kernel with everything as plugins. Alfred chose the thin kernel.
 
-**Why:** Building a Lisp interpreter is a project-sized effort (the MAL process has 11 steps, from tokenizer to self-hosting). Interpreter bugs would obscure plugin architecture issues. The goal is to prove the plugin architecture, not to build a programming language.
+Why? If keybindings are in Rust, the plugin system is untested for its most important use case. Every feature in the kernel is a missed opportunity to validate the plugin API. The walking skeleton's purpose is to push the boundary toward plugins as far as possible.
 
-**Consequences:**
-- Saved an estimated 3-4 weeks of interpreter development
-- Inherited reliability from a proven interpreter
-- Less control over language syntax and semantics
-- Must work within the adopted interpreter's constraints
+**ADR-003: Single-process synchronous execution.**
 
----
+The Xi editor (multi-process, async-everywhere) famously failed. Its author wrote: "I now firmly believe that the process separation was not a good idea." Emacs has been single-threaded for 40+ years.
 
-# ADR-002: Plugin-First Architecture
+Alfred chose the simplest model: one process, one thread, synchronous. No async runtime, no channels, no mutexes. This is sufficient for the current scope and matches the proven Emacs approach.
 
-**Context:** How much functionality lives in Rust vs. Lisp? Three options: (1) full-featured kernel with optional plugins, (2) balanced split, (3) thin kernel where everything is a plugin.
-
-**Decision:** Thin kernel. Everything beyond core primitives is a plugin.
-
-**Why:** The project's goal is proving AI can build architecturally sound software. The strongest proof is a system where even modal editing works entirely as a plugin. This forces the plugin API to be good enough for real features.
-
-**Evidence from editor case studies:**
-- Emacs: ~70% Lisp, ~30% C. Even cursor movement commands are Lisp.
-- Helix: No plugin system. Most-cited limitation by the community.
-
-**Consequences:**
-- The plugin API is battle-tested by the walking skeleton itself
-- Clean kernel boundary -- the kernel is small and focused
-- More Lisp code needed for basic features
-- Performance-sensitive operations run through the interpreter
+<!--
+Presenter notes:
+ADR-003 explicitly notes that async can be added later for specific
+needs (LSP, syntax highlighting). But adding it prematurely introduces
+synchronization complexity without benefit.
+-->
 
 ---
 
-# ADR-003: Single-Process Synchronous Execution
+# ADR-005 and ADR-006 -- Code Structure
 
-**Context:** Should Alfred use multi-process, async, or single-threaded architecture?
+**ADR-005: Functional core, imperative shell.**
 
-**Decision:** Single-process, synchronous. No async runtime, no threads, no IPC.
+Pure FP fights Rust's ownership model. Pure OOP adds too much indirection. The hybrid approach gives the best of both: pure functions for domain logic (testable without mocks), imperative code for I/O (straightforward to write).
 
-**Why:** The strongest evidence is the Xi editor post-mortem. Xi's author wrote: "I now firmly believe that the process separation between front-end and core was not a good idea." Xi's async-everywhere approach made basic features exponentially harder. Emacs has been single-threaded for 40+ years and remains the most extensible editor.
+Concrete impact: `alfred-core` has ~350 unit tests. Almost none use mocks. You create test data, call a function, assert the result.
 
-**Consequences:**
-- Simplest possible execution model
-- No synchronization bugs (no mutexes, no channels)
-- Long-running Lisp expressions freeze the UI (acceptable for this scope)
-- Will need evolution when async capabilities are added
+**ADR-006: Five crates, not one and not ten.**
 
----
+One crate cannot enforce the "core has no I/O" rule at compile time. Ten crates create circular dependency pressure (keymaps, hooks, and commands are tightly related). Five crates hit the sweet spot: one crate per distinct concern.
 
-# ADR-004: rust_lisp Over Janet
+The key constraint: `alfred-core` must have zero dependencies on other Alfred crates. All dependencies point inward. The Rust compiler enforces this -- adding a wrong import fails the build.
 
-**Context:** Two Lisp interpreters were candidates: Janet (C-based, more features) and rust_lisp (Rust-native, simpler).
-
-**Decision:** rust_lisp. Integration quality over language features.
-
-**Why:** Janet requires C FFI (foreign function interface) -- every Rust function exposed to Lisp needs a C-compatible wrapper. This adds build complexity, cross-language debugging, and type marshalling overhead. rust_lisp lets you register Rust closures directly with `Value::NativeClosure(closure)`. For a walking skeleton where the goal is proving the architecture, integration friction matters more than language features.
-
-**Migration path:** If rust_lisp proves insufficient, migration is isolated to the `alfred-lisp` crate. All other crates are unaffected due to the dependency inversion boundary.
+<!--
+Presenter notes:
+The alternative of a single crate with modules was explicitly rejected.
+Module-level visibility (pub(crate)) is weaker than crate-level
+boundaries. Nothing prevents buffer.rs from importing crossterm types
+in a single-crate project.
+-->
 
 ---
 
-# ADR-005: Functional Core / Imperative Shell
+<!-- APPENDIX A -->
 
-**Context:** Rust is multi-paradigm. How should the code be structured?
+# Appendix A: Supported Vim Commands (1/2)
 
-**Decision:** Pure functional core in `alfred-core`, imperative shell in `alfred-tui` and `alfred-bin`.
+### Movement and Navigation
 
-**Why:** The editor domain naturally splits: buffer transformations and key resolution are pure math (input -> output, no side effects). Terminal I/O and Lisp state are inherently effectful. Keeping the split explicit makes the core trivially testable.
+| Command | Description | | Command | Description |
+|---------|-------------|-|---------|-------------|
+| `h j k l` | Character movement | | `w b e` | Word movement |
+| `0 $ ^` | Line start/end/first-non-blank | | `gg G` | Document start/end |
+| `H M L` | Screen top/middle/bottom | | `Ctrl-d Ctrl-u` | Half-page scroll |
+| `f{c} F{c}` | Find char forward/backward | | `t{c} T{c}` | Till char forward/backward |
+| `; ,` | Repeat/reverse find | | `%` | Match bracket |
+| `/pattern` | Search forward | | `n N` | Next/prev match |
+| Arrow keys | Movement (all modes) | | `Ctrl-o Ctrl-i` | Jump back/forward |
 
-**Alternatives rejected:**
-- Pure FP: Rust's ownership model fights persistent data structures and monadic patterns
-- OOP with deep trait hierarchies: Dynamic dispatch prevents monomorphization, and the data flow is naturally a pipeline, not an object graph
+### Operators and Editing
 
----
+| Command | Description | | Command | Description |
+|---------|-------------|-|---------|-------------|
+| `d{motion}` | Delete range | | `c{motion}` | Change range |
+| `y{motion}` | Yank range | | `dd cc yy` | Operate on line |
+| `D C` | Delete/change to end | | `x X` | Delete char at/before cursor |
+| `p P` | Paste after/before | | `J` | Join lines |
+| `u Ctrl-r` | Undo/redo | | `.` | Repeat last change |
+| `r{c}` | Replace character | | `s S` | Substitute char/line |
+| `~ > <` | Toggle case, indent | | `Ctrl-a Ctrl-x` | Increment/decrement number |
 
-# ADR-006: 5-Crate Cargo Workspace
-
-**Context:** How should the code be organized? One crate? Many crates?
-
-**Decision:** Five crates, one per distinct concern.
-
-**Why:** Rust's Cargo workspaces enforce visibility at the crate level. Code in `alfred-core` physically cannot import `crossterm` or `ratatui` -- the build will fail. This makes the architectural boundary compiler-enforced, not convention-enforced.
-
-**Why not more crates?** Over-decomposition. Splitting keymaps, hooks, and commands into separate crates creates circular dependency pressure. Five crates hit the sweet spot: one per concern (core, Lisp, plugins, UI, binary).
-
-**Why not one crate?** Module-level visibility (`pub(crate)`) is weaker. Nothing would prevent the buffer module from importing terminal types. For a project showcasing architecture quality, this is insufficient.
-
----
-
-<!-- APPENDICES -->
-
-# Appendix A: Supported Vim Commands
-
----
-
-# Normal Mode: Movement Commands
-
-| Key | Command | Description |
-|-----|---------|-------------|
-| `h` / Left arrow | `cursor-left` | Move left one character |
-| `l` / Right arrow | `cursor-right` | Move right one character |
-| `j` / Down arrow | `cursor-down` | Move down one line |
-| `k` / Up arrow | `cursor-up` | Move up one line |
-| `w` | `cursor-word-forward` | Move to start of next word |
-| `b` | `cursor-word-backward` | Move to start of previous word |
-| `e` | `cursor-word-end` | Move to end of current word |
-| `0` | `cursor-line-start` | Move to first column |
-| `$` | `cursor-line-end` | Move to last character on line |
-| `^` | `cursor-first-non-blank` | Move to first non-space character |
-| `gg` | `cursor-document-start` | Move to first line |
-| `G` | `cursor-document-end` | Move to last line |
-| `H` | `cursor-screen-top` | Move to top of visible screen |
-| `M` | `cursor-screen-middle` | Move to middle of visible screen |
-| `L` | `cursor-screen-bottom` | Move to bottom of visible screen |
-| `f{char}` | `enter-char-find-forward` | Move forward to character |
-| `F{char}` | `enter-char-find-backward` | Move backward to character |
-| `t{char}` | `enter-char-til-forward` | Move forward to before character |
-| `T{char}` | `enter-char-til-backward` | Move backward to after character |
-| `;` | `repeat-char-find` | Repeat last f/F/t/T |
-| `,` | `reverse-char-find` | Reverse last f/F/t/T |
-| `%` | `match-bracket` | Jump to matching bracket |
+<!--
+Presenter notes:
+This is approximately 110 commands. The comprehensive Vim research
+document identifies 150+ normal mode commands. The gap is primarily
+g-prefix commands, z-prefix commands, and count multipliers.
+-->
 
 ---
 
-# Normal Mode: Editing Commands
+# Appendix A: Supported Vim Commands (2/2)
 
-| Key | Command | Description |
-|-----|---------|-------------|
-| `i` | `enter-insert-mode` | Enter insert mode at cursor |
-| `I` | `insert-at-line-start` | Enter insert mode at first non-blank |
-| `a` | `insert-after-cursor` | Enter insert mode after cursor |
-| `A` | `insert-at-line-end` | Enter insert mode at end of line |
-| `o` | `open-line-below` | Open new line below, enter insert mode |
-| `O` | `open-line-above` | Open new line above, enter insert mode |
-| `x` | `delete-char-at-cursor` | Delete character at cursor |
-| `X` | `delete-char-before` | Delete character before cursor |
-| `r{char}` | `enter-replace-char` | Replace character under cursor |
-| `s` | `substitute-char` | Delete character and enter insert mode |
-| `S` | `substitute-line` | Clear line and enter insert mode |
-| `D` | `delete-to-end` | Delete from cursor to end of line |
-| `C` | `change-to-end` | Delete to end of line, enter insert mode |
-| `J` | `join-lines` | Join current line with next line |
-| `~` | `toggle-case` | Toggle case of character under cursor |
-| `Ctrl+a` | `increment-number` | Increment number under cursor |
-| `Ctrl+x` | `decrement-number` | Decrement number under cursor |
-| `u` | `undo` | Undo last change |
-| `Ctrl+r` | `redo` | Redo last undone change |
-| `.` | `repeat-last-change` | Repeat last buffer-mutating command |
-| `>` | `indent-line` | Indent current line |
-| `<` | `unindent-line` | Unindent current line |
+### Mode Switching
+
+| Command | Description | | Command | Description |
+|---------|-------------|-|---------|-------------|
+| `i` | Insert before cursor | | `I` | Insert at line start |
+| `a` | Insert after cursor | | `A` | Insert at line end |
+| `o` | Open line below | | `O` | Open line above |
+| `v` | Visual character-wise | | `V` | Visual line-wise |
+| `Escape` | Return to Normal | | | |
+
+### Ex Commands
+
+| Command | Description | | Command | Description |
+|---------|-------------|-|---------|-------------|
+| `:w` | Save | | `:wq` | Save and quit |
+| `:q` | Quit | | `:q!` | Force quit |
+| `:e path` | Open file | | `:s/o/n/g` | Replace on line |
+| `:%s/o/n/g` | Replace in file | | `:g/pat/d` | Delete matching lines |
+| `:v/pat/d` | Delete non-matching | | `:eval (expr)` | Evaluate Lisp |
+| `:rainbow-csv` | Colorize CSV | | `:hello` | Test plugin greeting |
+| `:word-count` | Show word count | | | |
 
 ---
 
-# Normal Mode: Operators, Visual, Scrolling, and More
-
-### Operators (followed by a motion or text object)
-| Key | Description |
-|-----|-------------|
-| `d{motion}` | Delete text in motion range (e.g., `dw`, `d$`, `dj`) |
-| `c{motion}` | Change text in motion range (delete + insert mode) |
-| `y{motion}` | Yank (copy) text in motion range |
-| `dd` / `cc` / `yy` | Line-wise: delete, change, or yank entire line |
-
-### Text Objects (used after an operator)
-| Key | Description |
-|-----|-------------|
-| `iw` / `aw` | Inner / around word |
-| `i"` / `a"` | Inner / around double quotes |
-| `i'` / `a'` | Inner / around single quotes |
-| `i(` / `a(` | Inner / around parentheses |
-| `i[` / `a[` | Inner / around brackets |
-| `i{` / `a{` | Inner / around braces |
-
-### Registers, Marks, Macros
-| Key | Description |
-|-----|-------------|
-| `"x` | Select register `x` for next yank/delete/paste |
-| `p` / `P` | Paste after / before cursor |
-| `m{a-z}` | Set mark at cursor position |
-| `'{a-z}` | Jump to mark |
-| `q{a-z}` / `q` | Start / stop macro recording |
-| `@{a-z}` / `@@` | Play macro / repeat last macro |
-
----
-
-# Normal Mode: Scrolling, Search, and Command Line
-
-### Scrolling
-| Key | Description |
-|-----|-------------|
-| `Ctrl+d` | Scroll half page down |
-| `Ctrl+u` | Scroll half page up |
-
-### Search
-| Key | Description |
-|-----|-------------|
-| `/pattern` | Search forward for pattern |
-| `n` | Repeat search in same direction |
-| `N` | Repeat search in opposite direction |
-
-### Jump List
-| Key | Description |
-|-----|-------------|
-| `Ctrl+o` | Jump back in jump list |
-| `Ctrl+i` | Jump forward in jump list |
-
-### Visual Mode
-| Key | Description |
-|-----|-------------|
-| `v` | Enter character-wise visual mode |
-| `V` | Enter line-wise visual mode |
-| `Escape` | Exit visual mode |
-
-### Command Line
-| Command | Description |
-|---------|-------------|
-| `:w` | Save file |
-| `:w path` | Save to path |
-| `:q` | Quit (fails if unsaved) |
-| `:q!` | Force quit |
-| `:wq` | Save and quit |
-| `:e path` | Open file |
-| `:eval expr` | Evaluate Lisp expression |
-| `:s/old/new/[g]` | Substitute on current line |
-| `:%s/old/new/[g]` | Substitute in entire buffer |
-| `:g/pattern/d` | Delete lines matching pattern |
-| `:v/pattern/d` | Delete lines NOT matching pattern |
-
----
+<!-- APPENDIX B -->
 
 # Appendix B: Not Yet Implemented
 
----
+| Feature | Tier | Complexity | Notes |
+|---------|------|-----------|-------|
+| Count prefix (`3dw`, `5j`) | Core | Medium | Multiplies operator/motion |
+| Block visual mode (`Ctrl-V`) | Core | Medium | Column-wise selection |
+| `g` prefix commands (`gj`, `gk`, `g~`, `gu`, `gU`) | Core | Medium | Screen-line movement, case operators |
+| `z` prefix commands (`zz`, `zt`, `zb`) | Core | Low | Scroll cursor to screen position |
+| Syntax highlighting | Plugin | High | Tree-sitter or regex-based |
+| LSP integration | New crate | High | Language intelligence |
+| Multiple buffers / splits | Core + Plugin | High | Window management |
+| System clipboard | Core | Low | `"+y`, `"+p` integration |
+| File browser | Plugin | Medium | `:Explore` equivalent |
+| Auto-indent | Plugin | Medium | Language-aware indentation |
+| Word wrap display | Core | Medium | Soft wrap long lines |
 
-# Tier 1: High Priority (Daily Editing)
-
-| Command | Description | Category |
-|---------|-------------|----------|
-| `W` / `B` / `E` | WORD motions (whitespace-delimited) | Movement |
-| `:{n}` | Jump to line number | Command |
-| `Ctrl+f` / `Ctrl+b` | Full page scroll | Scrolling |
-| `?pattern` | Backward search | Search |
-| `*` / `#` | Search word under cursor forward/backward | Search |
-| `.` with insert text | Repeat last change including typed text | Editing |
-| `g_` | Last non-blank character | Movement |
-| `+` / `-` | First char of next/previous line | Movement |
-| `{` / `}` | Move to previous/next blank line | Movement |
-
-# Tier 2: Medium Priority (Power User)
-
-| Command | Description | Category |
-|---------|-------------|----------|
-| `zt` / `zz` / `zb` | Scroll line to top/middle/bottom | Scrolling |
-| `gU{motion}` / `gu{motion}` | Uppercase/lowercase with motion | Operator |
-| `g~{motion}` | Toggle case with motion | Operator |
-| `>>` / `<<` with motion | Indent/unindent with count | Operator |
-| `=` | Auto-indent | Operator |
-| `Ctrl+e` / `Ctrl+y` | Scroll one line without moving cursor | Scrolling |
+<!--
+Presenter notes:
+The architecture supports all of these. Syntax highlighting would use
+set-line-style (already used by rainbow-csv). LSP would be a new crate.
+Multiple buffers would require EditorState to manage a Vec<Buffer>.
+-->
 
 ---
 
-# Tier 3: Low Priority (Advanced)
+<!-- APPENDIX C -->
 
-| Command | Description | Category |
-|---------|-------------|----------|
-| `Ctrl+w` commands | Window splitting and navigation | Windows |
-| Tab commands | Tab page management | Tabs |
-| `Ctrl+n` / `Ctrl+p` | Completion | Insert mode |
-| `gi` | Go to last insert position | Movement |
-| `gv` | Reselect last visual selection | Visual |
-| `gf` | Go to file under cursor | Navigation |
-| `g;` / `g,` | Change list navigation | Navigation |
-| `[{` / `]}` | Navigate to enclosing braces | Movement |
-
----
-
-# Appendix C: Lisp Primitives Reference
-
----
-
-# Complete Lisp Primitives
+# Appendix C: Lisp Primitives Reference (1/2)
 
 ### Buffer Primitives
-```lisp
-(buffer-insert "text")        ;; Insert text at cursor position
-(buffer-delete)               ;; Delete one char at cursor
-(buffer-content)              ;; Returns entire buffer as string
-(buffer-filename)             ;; Returns filename or ""
-(buffer-modified?)            ;; Returns T or F
-(save-buffer)                 ;; Save to buffer's file path
-(save-buffer "/path/to/file") ;; Save to explicit path
-```
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `buffer-insert` | `text` (string) | NIL -- inserts at cursor |
+| `buffer-delete` | (none) | NIL -- deletes char at cursor |
+| `buffer-content` | (none) | String -- entire buffer text |
+| `buffer-get-line` | `line-num` (int) | String -- line content |
+| `buffer-filename` | (none) | String -- filename or "" |
+| `buffer-modified?` | (none) | Boolean -- T if modified |
+| `buffer-line-count` | (none) | Int -- number of lines |
+| `save-buffer` | `[path]` (optional string) | NIL -- saves to disk |
 
 ### Cursor and Mode Primitives
-```lisp
-(cursor-position)             ;; Returns (line column) list
-(cursor-move ':up 1)          ;; Move cursor (directions: :up :down :left :right)
-(cursor-move ':down 5)        ;; Move down 5 lines
-(current-mode)                ;; Returns "normal", "insert", or "visual"
-(set-mode "insert")           ;; Switch mode and active keymap
-```
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `cursor-position` | (none) | List -- (line column) |
+| `cursor-move` | `direction`, `count` | NIL -- moves cursor |
+| `current-mode` | (none) | String -- mode name |
+| `set-mode` | `name` (string) | NIL -- switches mode + keymap |
 
-### UI Primitives
-```lisp
-(message "Hello!")            ;; Display in message line
-(set-theme-color "slot" "color")  ;; Set a theme color
-(set-cursor-shape "mode" "shape") ;; Set cursor shape for mode
-(get-cursor-shape "mode")         ;; Get cursor shape for mode
-```
+### Command and Hook Primitives
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `define-command` | `name`, `lambda` | NIL -- registers command |
+| `add-hook` | `hook-name`, `callback` | NIL -- subscribes to event |
+| `remove-hook` | `hook-name`, `hook-id` | NIL -- unsubscribes |
+| `dispatch-hook` | `hook-name`, `args...` | List -- callback results |
 
 ---
 
-# Complete Lisp Primitives (continued)
-
-### Command Primitives
-```lisp
-(define-command "name" (lambda () (message "executed!")))
-;; Registers a Lisp function as a named editor command.
-;; The command can then be bound to keys or called via :name
-```
+# Appendix C: Lisp Primitives Reference (2/2)
 
 ### Keymap Primitives
-```lisp
-(make-keymap "my-keymap")
-;; Creates a new empty keymap
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `make-keymap` | `name` | NIL -- creates empty keymap |
+| `define-key` | `keymap`, `key-spec`, `command` | NIL -- binds key to command |
+| `set-active-keymap` | `name` | NIL -- activates keymap |
 
-(define-key "my-keymap" "Char:x" "my-command")
-;; Binds key 'x' to command "my-command" in the keymap
-;; Key spec formats: "Char:x", "Ctrl:q", "Up", "Down",
-;;   "Escape", "Enter", "Backspace", "Tab", "DoubleQuote"
+### Theme and Display Primitives
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `set-theme-color` | `slot`, `color` | NIL -- sets theme color |
+| `get-theme-color` | `slot` | String -- color value |
+| `define-theme` | `name`, `pairs...` | NIL -- creates named theme |
+| `load-theme` | `name` | NIL -- activates named theme |
+| `set-cursor-shape` | `mode`, `shape` | NIL -- sets cursor shape |
+| `message` | `text` | NIL -- sets message bar |
+| `set-line-style` | `line`, `start`, `end`, `color` | NIL -- sets per-char color |
+| `clear-line-styles` | (none) | NIL -- removes all line styles |
 
-(set-active-keymap "my-keymap")
-;; Makes this keymap the active one for key resolution
-```
-
-### Hook Primitives
-```lisp
-(add-hook "hook-name" (lambda (arg1 arg2) "result"))
-;; Returns a hook ID (integer) for later removal
-
-(dispatch-hook "hook-name" "arg1" "arg2")
-;; Calls all registered callbacks, returns list of results
-
-(remove-hook "hook-name" 42)
-;; Removes the callback with the given hook ID
-```
-
----
-
-# Appendix D: How to Create a Plugin
+### Panel Primitives
+| Primitive | Arguments | Returns |
+|-----------|----------|---------|
+| `define-panel` | `name`, `position`, `size` | NIL -- creates panel |
+| `set-panel-content` | `name`, `text` | NIL -- sets panel text |
+| `set-panel-line` | `name`, `row`, `text` | NIL -- sets line text |
+| `set-panel-style` | `name`, `fg`, `bg` | NIL -- sets colors |
+| `set-panel-size` | `name`, `size` | NIL -- resizes panel |
 
 ---
 
-# Step-by-Step Plugin Tutorial
+<!-- APPENDIX D -->
 
-**Goal:** Create a plugin that adds a `:timestamp` command which inserts the current date and time at the cursor position.
+# Appendix D: How To Create a Plugin (1/2)
 
-**Step 1 -- Create the plugin folder:**
+### Step-by-step guide
+
+**1. Create the directory and file:**
 ```bash
-mkdir plugins/timestamp
+mkdir plugins/my-plugin
+touch plugins/my-plugin/init.lisp
 ```
 
-**Step 2 -- Create `plugins/timestamp/init.lisp`:**
+**2. Add metadata header** (name is required, others are optional):
+```lisp
+;;; name: my-plugin
+;;; version: 0.1.0
+;;; description: What this plugin does
+;;; depends: other-plugin
+```
+
+**3. Choose your pattern.** Most plugins use one of these:
+
+| Pattern | When to use | Example plugins |
+|---------|------------|-----------------|
+| Command | User-invoked actions | word-count, rainbow-csv, test-plugin |
+| Hook listener | Reactive updates | status-bar, line-numbers |
+| Keymap | New keybindings | vim-keybindings |
+| Theme | Colors and appearance | default-theme |
+
+<!--
+Presenter notes:
+Plugins can combine patterns. The vim-keybindings plugin creates keymaps
+AND defines commands. The status-bar plugin creates a panel AND listens
+to hooks. There is no restriction on mixing patterns.
+-->
+
+---
+
+# Appendix D: How To Create a Plugin (2/2)
+
+### Complete example: a "timestamp" plugin
+
+This plugin adds a `:timestamp` command that inserts the current date at the cursor.
+
 ```lisp
 ;;; name: timestamp
 ;;; version: 0.1.0
-;;; description: Inserts a timestamp at the cursor position
+;;; description: Insert a timestamp at the cursor position
 
+;; Define a command that inserts a placeholder timestamp
+;; (Alfred Lisp does not have a date function yet,
+;;  so we use a static string as demonstration)
 (define-command "timestamp"
   (lambda ()
-    (buffer-insert "[TIMESTAMP]")
+    (buffer-insert "[2026-03-24]")
     (message "Timestamp inserted")))
 ```
 
-Note: `rust_lisp` does not have a built-in date function, so this example inserts a placeholder. A real implementation would use a bridge primitive for the current time.
+### Testing your plugin
 
-**Step 3 -- Restart Alfred.** The plugin is discovered automatically.
+1. Save the file in `plugins/timestamp/init.lisp`
+2. Start Alfred: `alfred myfile.txt`
+3. Type `:timestamp` and press Enter
+4. The text `[2026-03-24]` appears at the cursor position
 
-**Step 4 -- Use it:** Type `:timestamp` and press Enter. The text `[TIMESTAMP]` is inserted and the message line shows "Timestamp inserted".
+### Debugging
 
----
-
-# Plugin Anatomy: What Can init.lisp Do?
-
-A plugin's `init.lisp` can use any of these actions:
-
-**1. Define commands:**
-```lisp
-(define-command "my-cmd" (lambda () (message "Hello!")))
+If your plugin has an error, Alfred shows the error in the message bar at startup:
 ```
-
-**2. Create and populate keymaps:**
-```lisp
-(make-keymap "my-mode")
-(define-key "my-mode" "Char:x" "my-cmd")
+Plugin errors: init error for plugin timestamp: Runtime error: undefined symbol
 ```
-
-**3. Register hooks:**
-```lisp
-(add-hook "render-gutter" (lambda (start end total) start))
-```
-
-**4. Set theme colors:**
-```lisp
-(set-theme-color "status-bar-bg" "#1e1e2e")
-```
-
-**5. Use control flow and variables:**
-```lisp
-(define greeting "Hello, Alfred!")
-(define-command "greet" (lambda () (message greeting)))
-```
-
-**6. Declare dependencies on other plugins:**
-```lisp
-;;; depends: default-theme
-```
-
-**Important:** Plugins execute at startup. Their commands and hooks remain active for the entire editor session.
-
----
-
-# Plugin Tips and Best Practices
-
-**Naming:** Use kebab-case for plugin names (`my-cool-plugin`), command names (`do-something`), and hook names (`on-save`).
-
-**Error handling:** If your `init.lisp` has a bug (undefined variable, syntax error), Alfred will still start. The error message appears in the message line. Fix the plugin and restart.
-
-**Testing:** You can test Lisp code interactively using `:eval` from within Alfred:
-```
-:eval (+ 1 2)           ;; Shows "3" in message line
-:eval (buffer-content)   ;; Shows buffer text
-:eval (cursor-position)  ;; Shows "(line column)"
-```
-
-**Dependencies:** If your plugin depends on another, declare it in the header. Alfred will ensure the dependency loads first.
-
-**Disabling:** Rename the plugin folder to add `.disabled` suffix:
-```bash
-mv plugins/my-plugin plugins/my-plugin.disabled
-```
+The error tells you which plugin failed and why. Other plugins still load normally.
 
 ---
 
 # End of Walkthrough
 
-**Files produced:**
-- `docs/walkthrough/alfred-overview.md` -- Quick overview (15 slides)
-- `docs/walkthrough/alfred-walkthrough.md` -- Full walkthrough (this deck, 39 slides)
+### Quick reference for new developers
 
-**Key takeaways:**
-1. Alfred is five crates with clear boundaries, all enforced by Rust's compiler
-2. The core is pure functions -- easy to test, easy to reason about
-3. Every user-facing feature is a Lisp plugin, not hardcoded Rust
-4. The bridge connects Lisp to Rust through shared mutable state (`Rc<RefCell<EditorState>>`)
-5. Six documented ADRs explain every major architectural choice
+| I want to... | Look at... |
+|-------------|-----------|
+| Understand the architecture | This walkthrough, Part 2 |
+| See how a plugin works | `plugins/status-bar/init.lisp` (33 lines) |
+| See the full keybinding setup | `plugins/vim-keybindings/init.lisp` (128 lines) |
+| Understand the Lisp bridge | `crates/alfred-lisp/src/bridge.rs` |
+| Read the domain logic | `crates/alfred-core/src/` (buffer, cursor, viewport, etc.) |
+| See the event loop | `crates/alfred-tui/src/app.rs` |
+| Understand the renderer | `crates/alfred-tui/src/renderer.rs` |
+| Read the startup wiring | `crates/alfred-bin/src/main.rs` |
+| Check design decisions | `docs/adrs/adr-001` through `adr-006` |
+| Run tests | `make test` (unit), `make e2e` (E2E) |
 
-**Where to go next:**
-- Read the ADRs: `docs/adrs/adr-001-*.md` through `adr-006-*.md`
-- Browse the plugins: `plugins/vim-keybindings/init.lisp` is the most interesting
-- Run the tests: `make test`
-- Try it: `make install && alfred myfile.txt`
+**One rule to remember:** Dependencies point inward. `alfred-core` is the center. Everything else depends on it, never the reverse.
