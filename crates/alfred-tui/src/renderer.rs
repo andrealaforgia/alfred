@@ -283,6 +283,24 @@ fn build_styled_line(
                 let seg_start = start.min(text_len);
                 let seg_end = end.min(text_len);
 
+                // Skip segments that overlap with already-rendered text.
+                // This prevents duplicate character rendering when segments
+                // are not perfectly non-overlapping.
+                if seg_start < pos {
+                    // Partial overlap: only render the non-overlapping tail
+                    let adjusted_start = pos;
+                    if adjusted_start < seg_end {
+                        let fg = theme_color_to_ratatui(color);
+                        let style = Style::default().fg(fg);
+                        spans.push(Span::styled(
+                            text[adjusted_start..seg_end].to_string(),
+                            style,
+                        ));
+                        pos = seg_end;
+                    }
+                    continue;
+                }
+
                 // Add unstyled gap before this segment if needed
                 if pos < seg_start {
                     spans.push(Span::raw(text[pos..seg_start].to_string()));
