@@ -90,9 +90,9 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
 /// When the command is later executed, the callback is invoked via the Lisp runtime.
 pub fn register_define_command(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
-    let lisp_env = runtime.env();
+    let _lisp_env = runtime.env(); // no longer used; current_env captures the right scope
 
-    define_native_closure(&env, "define-command", move |_env, args| {
+    define_native_closure(&env, "define-command", move |current_env, args| {
         let name = extract_string_arg(&args, "define-command")?;
 
         let callback = args.get(1).ok_or_else(|| RuntimeError {
@@ -113,7 +113,9 @@ pub fn register_define_command(runtime: &LispRuntime, state: Rc<RefCell<EditorSt
         }
 
         let callback_value = callback.clone();
-        let call_env = lisp_env.clone();
+        // Use the current environment (at define-command call time) so the callback
+        // can access variables defined earlier in the same plugin file.
+        let call_env = current_env;
 
         let handler = command::CommandHandler::Dynamic(Rc::new(move |_editor_state| {
             // Build a call expression: (callback)
