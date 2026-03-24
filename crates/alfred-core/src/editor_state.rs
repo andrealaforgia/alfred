@@ -12,6 +12,7 @@ use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
 use crate::hook::HookRegistry;
 use crate::key_event::KeyEvent;
+use crate::panel::PanelRegistry;
 use crate::theme::Theme;
 use crate::viewport::Viewport;
 
@@ -140,6 +141,9 @@ pub struct EditorState {
     /// Gutter line content set by Lisp plugins via `(set-gutter-line row text)`.
     /// Maps viewport row index -> formatted gutter string.
     pub gutter_lines: HashMap<usize, String>,
+    /// Generic panel registry for named screen regions managed by plugins.
+    /// Panels are positioned at screen edges (top, bottom, left, right).
+    pub panels: PanelRegistry,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1495,6 +1499,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         line_styles: HashMap::new(),
         status_bar_content: None,
         gutter_lines: HashMap::new(),
+        panels: crate::panel::new(),
     }
 }
 
