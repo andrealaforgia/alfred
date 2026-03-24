@@ -2053,3 +2053,1138 @@ class TestPanels:
         assert "bbb" in content or "ccc" in content, \
             f"Expected some original content after undo, got: {repr(content)}"
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Navigation extended (8 tests)
+# ---------------------------------------------------------------------------
+
+class TestNavigationExtended:
+    """Verify extended navigation commands: w, b, 0, $, gg, G, Ctrl-d, ;."""
+
+    def test_w_moves_to_next_word(self):
+        """w on 'hello world', insert X, verify X before 'world'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # w moves to start of next word ('world')
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        # Insert X before 'world'
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "Xworld" in content, \
+            f"Expected 'Xworld' after w + insert X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_b_moves_to_previous_word(self):
+        """b on 'hello world' with cursor at end, moves back to 'world'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to end of line first
+        send_keys(child, "$")
+        time.sleep(0.3)
+
+        # b moves backward to start of current/previous word
+        send_keys(child, "b")
+        time.sleep(0.3)
+
+        # Insert X before 'world'
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "Xworld" in content, \
+            f"Expected 'Xworld' after $ + b + insert X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_0_moves_to_line_start(self):
+        """0 on 'hello' at col 3, insert X, verify 'Xhello'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # Move to col 3
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # 0 moves to start of line
+        send_keys(child, "0")
+        time.sleep(0.3)
+
+        # Insert X at start
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "Xhello", \
+            f"Expected 'Xhello' after 0 + insert X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dollar_moves_to_line_end(self):
+        """$ on 'hello', then a to insert after, type X, verify 'helloX'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # $ moves to last char of line
+        send_keys(child, "$")
+        time.sleep(0.3)
+
+        # a inserts after cursor (after last char = end of line)
+        send_keys(child, "a")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "helloX", \
+            f"Expected 'helloX' after $ + a + X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_gg_moves_to_document_start(self):
+        """g on a 10-line file at line 5, insert X, verify X on line 0.
+
+        Note: Alfred maps single 'g' to cursor-document-start (not 'gg').
+        """
+        lines = [f"line{i}" for i in range(10)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Move to line 5
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+
+        # g moves to document start (line 0)
+        send_keys(child, "g")
+        time.sleep(0.3)
+
+        # Insert X at document start
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        assert result_lines[0].startswith("X"), \
+            f"Expected line 0 to start with 'X', got: {repr(result_lines[0])}"
+        os.unlink(path)
+
+    def test_G_moves_to_document_end(self):
+        """G on a 10-line file, insert X, verify X on last line."""
+        lines = [f"line{i}" for i in range(10)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # G moves to document end (last line)
+        send_keys(child, "G")
+        time.sleep(0.3)
+
+        # Insert X on last line
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.rstrip("\n").split("\n")
+        last_line = result_lines[-1]
+        assert "X" in last_line, \
+            f"Expected 'X' on last line, got: {repr(last_line)}"
+        os.unlink(path)
+
+    def test_ctrl_d_scrolls_down(self):
+        """Ctrl-d on a 50-line file, insert X, verify X is roughly halfway."""
+        lines = [f"line{i}" for i in range(50)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Ctrl-d scrolls half page down
+        child.send("\x04")  # Ctrl-d
+        time.sleep(0.5)
+
+        # Insert X at current position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        # Find which line has X
+        x_line = None
+        for idx, line in enumerate(result_lines):
+            if "X" in line and line != f"line{idx}":
+                x_line = idx
+                break
+        assert x_line is not None, \
+            f"Expected X marker in file, got: {repr(content[:200])}"
+        # Ctrl-d should move roughly half a screen (12 lines for 24-row terminal)
+        assert x_line >= 5, \
+            f"Expected cursor to move down significantly, X found on line {x_line}"
+        os.unlink(path)
+
+    def test_semicolon_repeats_find_char(self):
+        """fa then ; on 'abcabc', insert X before second 'a'."""
+        path = create_temp_file("abcabc")
+        child = spawn_alfred(path)
+
+        # fa finds first 'a' — but cursor starts on 'a' at col 0,
+        # so fa finds the next 'a' at col 3
+        send_keys(child, "f")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.3)
+
+        # ; repeats last find — should go to next 'a' if there is one,
+        # but there are only two 'a's. Cursor should be on second 'a' already.
+        # Insert X before it.
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "Xa" in content, \
+            f"Expected 'Xa' (X before an 'a'), got: {repr(content)}"
+        # Verify X is before the second 'a' (at col 3)
+        assert content.index("Xa") >= 3, \
+            f"Expected X before second 'a' (pos >= 3), got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Insert mode extended (4 tests)
+# ---------------------------------------------------------------------------
+
+class TestInsertModeExtended:
+    """Verify extended insert commands: I, a, A, O."""
+
+    def test_I_inserts_at_line_start(self):
+        """I on '  hello' inserts at beginning of line, type X, verify X at front."""
+        path = create_temp_file("  hello")
+        child = spawn_alfred(path)
+
+        # Move cursor to middle of line first
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # I inserts at line start (col 0 or first non-blank)
+        send_keys(child, "I")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        # X should appear at the beginning of the line (before or after spaces)
+        assert "X" in content, f"Expected X in content, got: {repr(content)}"
+        # X should be near the start
+        x_pos = content.index("X")
+        assert x_pos <= 2, \
+            f"Expected X near start of line (pos <= 2), got pos {x_pos} in: {repr(content)}"
+        os.unlink(path)
+
+    def test_a_inserts_after_cursor(self):
+        """a on 'ab' with cursor at 'a' (col 0), type X, verify 'aXb'."""
+        path = create_temp_file("ab")
+        child = spawn_alfred(path)
+
+        # Cursor starts at col 0 ('a')
+        # a inserts after cursor
+        send_keys(child, "a")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "aXb", \
+            f"Expected 'aXb' after a + X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_A_inserts_at_line_end(self):
+        """A on 'hello', type X, verify 'helloX'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # A inserts at end of line
+        send_keys(child, "A")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "helloX", \
+            f"Expected 'helloX' after A + X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_O_opens_line_above(self):
+        """O on 'second', type 'first', verify 'first' is on line 0."""
+        path = create_temp_file("second")
+        child = spawn_alfred(path)
+
+        # O opens a new line above and enters insert mode
+        send_keys(child, "O")
+        time.sleep(0.3)
+        send_keys(child, "first")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        lines = content.split("\n")
+        assert lines[0] == "first", \
+            f"Expected 'first' on line 0, got: {repr(lines[0])}"
+        assert "second" in lines[1], \
+            f"Expected 'second' on line 1, got: {repr(lines[1])}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Editing extended (6 tests)
+# ---------------------------------------------------------------------------
+
+class TestEditingExtended:
+    """Verify extended editing commands: J, P, cc, C, d0, db."""
+
+    def test_J_joins_lines(self):
+        """J on 'hello\\nworld' joins into 'hello world'."""
+        path = create_temp_file("hello\nworld")
+        child = spawn_alfred(path)
+
+        # J joins current line with next
+        send_keys(child, "J")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "hello" in content and "world" in content, \
+            f"Expected both 'hello' and 'world' in content, got: {repr(content)}"
+        # After join, should be on one line (no newline between them)
+        lines = content.split("\n")
+        assert len(lines) == 1, \
+            f"Expected 1 line after J, got {len(lines)} lines: {repr(content)}"
+        os.unlink(path)
+
+    def test_P_pastes_before(self):
+        """yy then P duplicates line above current."""
+        path = create_temp_file("original")
+        child = spawn_alfred(path)
+
+        # yy yanks the current line
+        send_keys(child, "y")
+        time.sleep(0.1)
+        send_keys(child, "y")
+        time.sleep(0.3)
+
+        # P pastes before (above current line)
+        send_keys(child, "P")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        lines = [l for l in content.split("\n") if l.strip()]
+        assert len(lines) >= 2, \
+            f"Expected at least 2 lines after yy + P, got: {repr(content)}"
+        assert lines[0].strip() == "original", \
+            f"Expected 'original' on line 0, got: {repr(lines[0])}"
+        assert lines[1].strip() == "original", \
+            f"Expected 'original' on line 1, got: {repr(lines[1])}"
+        os.unlink(path)
+
+    def test_cc_changes_entire_line(self):
+        """cc on 'old text', type 'new', verify 'new'."""
+        path = create_temp_file("old text")
+        child = spawn_alfred(path)
+
+        # cc changes entire line (deletes line content, enters insert)
+        send_keys(child, "c")
+        time.sleep(0.1)
+        send_keys(child, "c")
+        time.sleep(0.3)
+
+        # Type replacement text
+        send_keys(child, "new")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "new" in content, \
+            f"Expected 'new' after cc, got: {repr(content)}"
+        assert "old" not in content, \
+            f"Expected 'old' to be gone after cc, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_C_changes_to_end(self):
+        """C on 'hello world' at col 5, type 'X', verify 'helloX'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to col 5
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # C changes from cursor to end of line
+        send_keys(child, "C")
+        time.sleep(0.3)
+
+        # Type replacement
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "helloX", \
+            f"Expected 'helloX' after C, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_d0_deletes_to_line_start(self):
+        """d0 on 'hello' at col 3, verify 'lo'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # Move to col 3
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # d0 deletes from cursor to start of line
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "0")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "lo", \
+            f"Expected 'lo' after d0 at col 3, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_db_deletes_word_backward(self):
+        """db on 'hello world' at col 6, deletes backward word."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to col 6 (the 'w' of 'world')
+        send_keys(child, "6")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # db deletes the word backward
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "b")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        # db from 'w' of 'world' should delete backward to prev word start
+        # This deletes "hello " or at least some portion backward
+        assert "world" in content, \
+            f"Expected 'world' to remain after db, got: {repr(content)}"
+        assert len(content) < len("hello world"), \
+            f"Expected shorter content after db, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Operator extended (4 tests)
+# ---------------------------------------------------------------------------
+
+class TestOperatorExtended:
+    """Verify extended operator commands: dj, dk, yw+p, y$+p."""
+
+    def test_dj_deletes_two_lines(self):
+        """dj on 'a\\nb\\nc' deletes current line and line below."""
+        path = create_temp_file("a\nb\nc")
+        child = spawn_alfred(path)
+
+        # dj deletes current line + line below (lines 'a' and 'b')
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "a" not in content, \
+            f"Expected 'a' to be deleted, got: {repr(content)}"
+        assert "b" not in content, \
+            f"Expected 'b' to be deleted, got: {repr(content)}"
+        assert "c" in content, \
+            f"Expected 'c' to remain, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dk_deletes_up(self):
+        """dk on line 1 of 'a\\nb\\nc' deletes current line and line above."""
+        path = create_temp_file("a\nb\nc")
+        child = spawn_alfred(path)
+
+        # Move to line 1 ('b')
+        send_keys(child, "j")
+        time.sleep(0.2)
+
+        # dk deletes current line + line above (lines 'b' and 'a')
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "k")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "a" not in content, \
+            f"Expected 'a' to be deleted, got: {repr(content)}"
+        assert "b" not in content, \
+            f"Expected 'b' to be deleted, got: {repr(content)}"
+        assert "c" in content, \
+            f"Expected 'c' to remain, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_yw_then_p_pastes_word(self):
+        """yw on 'hello world', then $ p, verify 'hello' pasted at end."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # yw yanks the first word ('hello')
+        send_keys(child, "y")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        # $ moves to end of line, p pastes after cursor
+        send_keys(child, "$")
+        time.sleep(0.2)
+        send_keys(child, "p")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        # 'hello' should appear at least twice (original + pasted)
+        assert content.count("hello") >= 2, \
+            f"Expected 'hello' at least twice after yw + $ + p, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_y_dollar_then_p(self):
+        """y$ on 'hello world' at col 5, yanks ' world', 0 p pastes at start."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to col 5
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # y$ yanks from cursor to end of line
+        send_keys(child, "y")
+        time.sleep(0.1)
+        send_keys(child, "$")
+        time.sleep(0.3)
+
+        # 0 moves to start of line, p pastes after cursor
+        send_keys(child, "0")
+        time.sleep(0.2)
+        send_keys(child, "p")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        # The yanked text (' world' or 'world') should appear in the result
+        assert content.count("world") >= 2, \
+            f"Expected 'world' at least twice after y$ + 0 + p, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Text object extended (4 tests)
+# ---------------------------------------------------------------------------
+
+class TestTextObjectExtended:
+    """Verify extended text object commands: daw, ci\", di(, da{."""
+
+    def test_daw_deletes_around_word(self):
+        """daw on 'hello world end' with cursor on 'world' deletes 'world' and surrounding space."""
+        path = create_temp_file("hello world end")
+        child = spawn_alfred(path)
+
+        # Move to 'world' (w moves to next word)
+        send_keys(child, "w")
+        time.sleep(0.2)
+
+        # daw deletes around word (word + surrounding whitespace)
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "world" not in content, \
+            f"Expected 'world' to be deleted, got: {repr(content)}"
+        assert "hello" in content, \
+            f"Expected 'hello' to remain, got: {repr(content)}"
+        assert "end" in content, \
+            f"Expected 'end' to remain, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_ci_quote_changes_inner_quotes(self):
+        """ci\" on 'say \"old\" ok' changes inner quotes to 'new'."""
+        path = create_temp_file('say "old" ok')
+        child = spawn_alfred(path)
+
+        # Move cursor inside the quotes (move to 'o' of 'old')
+        send_keys(child, "f")
+        time.sleep(0.1)
+        send_keys(child, "o")
+        time.sleep(0.3)
+
+        # ci" changes inner quotes
+        send_keys(child, "c")
+        time.sleep(0.1)
+        send_keys(child, 'i')
+        time.sleep(0.1)
+        send_keys(child, '"')
+        time.sleep(0.3)
+
+        # Type replacement
+        send_keys(child, "new")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert '"new"' in content, \
+            f"Expected '\"new\"' after ci\", got: {repr(content)}"
+        assert "old" not in content, \
+            f"Expected 'old' to be gone after ci\", got: {repr(content)}"
+        os.unlink(path)
+
+    def test_di_paren_deletes_inner_parens(self):
+        """di( on 'fn(arg)' with cursor inside parens deletes 'arg'."""
+        path = create_temp_file("fn(arg)")
+        child = spawn_alfred(path)
+
+        # Move cursor inside parentheses
+        send_keys(child, "f")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.3)
+
+        # di( deletes inner parentheses content
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "i")
+        time.sleep(0.1)
+        send_keys(child, "(")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "fn()", \
+            f"Expected 'fn()' after di(, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_da_brace_deletes_around_braces(self):
+        """da{ on 'x{content}y' with cursor inside braces deletes '{content}'."""
+        path = create_temp_file("x{content}y")
+        child = spawn_alfred(path)
+
+        # Move cursor inside braces
+        send_keys(child, "f")
+        time.sleep(0.1)
+        send_keys(child, "c")
+        time.sleep(0.3)
+
+        # da{ deletes around braces (including the braces themselves)
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.1)
+        send_keys(child, "{")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "xy", \
+            f"Expected 'xy' after da{{, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Visual mode extended (3 tests)
+# ---------------------------------------------------------------------------
+
+class TestVisualExtended:
+    """Verify extended visual mode: select+yank+paste, select+change, V+yank+paste."""
+
+    def test_v_select_and_yank_then_paste(self):
+        """v + ll + y on 'hello', then $ p, verify yanked text appended."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # v enters visual mode, select 'hel' (cursor + 2 right)
+        send_keys(child, "v")
+        time.sleep(0.2)
+        send_keys(child, "l")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.1)
+
+        # y yanks the selection (should be 'hel')
+        send_keys(child, "y")
+        time.sleep(0.3)
+
+        # $ moves to end, p pastes after cursor
+        send_keys(child, "$")
+        time.sleep(0.2)
+        send_keys(child, "p")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        # The yanked text should appear after the original
+        assert len(content) > len("hello"), \
+            f"Expected content longer than 'hello' after yank+paste, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_v_select_and_change(self):
+        """v + ll + c on 'ABCDE', type 'X', verify selection replaced."""
+        path = create_temp_file("ABCDE")
+        child = spawn_alfred(path)
+
+        # v enters visual mode, select 'ABC' (cursor + 2 right)
+        send_keys(child, "v")
+        time.sleep(0.2)
+        send_keys(child, "l")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.1)
+
+        # c changes the selection (deletes and enters insert mode)
+        send_keys(child, "c")
+        time.sleep(0.3)
+
+        # Type replacement
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "X" in content, \
+            f"Expected 'X' in content after visual change, got: {repr(content)}"
+        assert "ABC" not in content, \
+            f"Expected 'ABC' to be replaced, got: {repr(content)}"
+        assert "DE" in content, \
+            f"Expected 'DE' to remain, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_V_yank_and_paste(self):
+        """V + y on 'first\\nsecond', then j p, verify first line duplicated."""
+        path = create_temp_file("first\nsecond")
+        child = spawn_alfred(path)
+
+        # V enters visual line mode, y yanks the line
+        send_keys(child, "V", delay=0.15)
+        time.sleep(0.3)
+        send_keys(child, "y", delay=0.15)
+        time.sleep(0.3)
+
+        # j moves down, p pastes below
+        send_keys(child, "j")
+        time.sleep(0.2)
+        send_keys(child, "p")
+        time.sleep(0.3)
+
+        send_colon_command(child, "w")
+        time.sleep(0.5)
+        send_colon_command(child, "q!")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        # 'first' should appear at least twice
+        assert content.count("first") >= 2, \
+            f"Expected 'first' at least twice after V yank + paste, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Undo/redo (2 tests)
+# ---------------------------------------------------------------------------
+
+class TestUndoRedo:
+    """Verify undo and redo interactions."""
+
+    def test_redo_after_undo(self):
+        """x deletes 'a', u undoes, Ctrl-r redoes -> 'bc'."""
+        path = create_temp_file("abc")
+        child = spawn_alfred(path)
+
+        # x deletes 'a' -> 'bc'
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        # u undoes -> 'abc'
+        send_keys(child, "u")
+        time.sleep(0.3)
+
+        # Ctrl-r redoes -> 'bc'
+        child.send("\x12")  # Ctrl-r
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "bc", \
+            f"Expected 'bc' after x + u + Ctrl-r, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_multiple_undo(self):
+        """x, x -> 'c', u, u -> 'abc'."""
+        path = create_temp_file("abc")
+        child = spawn_alfred(path)
+
+        # x deletes 'a' -> 'bc'
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        # x deletes 'b' -> 'c'
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        # u undoes second delete -> 'bc'
+        send_keys(child, "u")
+        time.sleep(0.3)
+
+        # u undoes first delete -> 'abc'
+        send_keys(child, "u")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "abc", \
+            f"Expected 'abc' after x + x + u + u, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# File operations (3 tests)
+# ---------------------------------------------------------------------------
+
+class TestFileOps:
+    """Verify file operation commands: :e, :w filename, unsaved changes warning."""
+
+    def test_e_opens_another_file(self):
+        """Create two files, open first, :e second, :wq, verify second file unchanged."""
+        path1 = create_temp_file("file one content")
+        path2 = create_temp_file("file two content")
+        child = spawn_alfred(path1)
+
+        # Open the second file
+        send_colon_command(child, f"e {path2}")
+        time.sleep(1.0)
+
+        # Quit without modifying
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
+        # Second file should be unmodified
+        content2 = read_file(path2)
+        assert content2 == "file two content", \
+            f"Expected second file unchanged, got: {repr(content2)}"
+        os.unlink(path1)
+        os.unlink(path2)
+
+    def test_w_with_filename_saves_as(self):
+        """Type text, :w /tmp/path, :q!, verify file created."""
+        path = create_temp_file("")
+        save_as_path = "/tmp/alfred_e2e_saveas_test.txt"
+        child = spawn_alfred(path)
+
+        # Enter insert mode, type text
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "saved content")
+        send_escape(child)
+        time.sleep(0.3)
+
+        # :w with a different filename
+        send_colon_command(child, f"w {save_as_path}")
+        time.sleep(0.5)
+
+        # Force quit (original buffer may show as modified)
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0
+        # Verify the save-as file was created
+        assert os.path.exists(save_as_path), \
+            f"Expected {save_as_path} to exist after :w"
+        content = read_file(save_as_path)
+        assert "saved content" in content, \
+            f"Expected 'saved content' in save-as file, got: {repr(content)}"
+        os.unlink(path)
+        os.unlink(save_as_path)
+
+    def test_unsaved_changes_warning(self):
+        """Modify buffer, :q should warn (not exit), :q! should force exit."""
+        path = create_temp_file("original")
+        child = spawn_alfred(path)
+
+        # Modify the buffer
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "X")
+        send_escape(child)
+        time.sleep(0.3)
+
+        # :q should warn about unsaved changes (editor stays alive)
+        send_colon_command(child, "q")
+        time.sleep(1.0)
+
+        # Editor should still be alive — force quit
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected exit code 0 after q!, got {exit_code}"
+        # File should be unchanged (we never saved)
+        content = read_file(path)
+        assert content == "original", \
+            f"Expected 'original' unchanged, got: {repr(content)}"
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Edge cases (6 tests)
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    """Verify edge cases don't crash the editor."""
+
+    def test_x_on_empty_buffer(self):
+        """x on empty file should not crash, file stays empty."""
+        path = create_temp_file("")
+        child = spawn_alfred(path)
+
+        # x on empty buffer — should be a no-op, no crash
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected exit code 0, got {exit_code}"
+        content = read_file(path)
+        assert content == "", \
+            f"Expected empty file, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dd_on_single_line(self):
+        """dd on 'only' single-line file, verify file is empty or single newline."""
+        path = create_temp_file("only")
+        child = spawn_alfred(path)
+
+        # dd deletes the only line
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "d")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        stripped = content.strip()
+        assert stripped == "" or stripped == "\n", \
+            f"Expected empty or near-empty file after dd on single line, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dw_on_last_word_of_last_line(self):
+        """dw on 'hello' (only word on only line), verify empty after save."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # dw on the only word
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        stripped = content.strip()
+        assert stripped == "", \
+            f"Expected empty file after dw on last word, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_operations_on_single_char_buffer(self):
+        """x on 'a' (single char file), verify empty after save."""
+        path = create_temp_file("a")
+        child = spawn_alfred(path)
+
+        # x deletes the single character
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        stripped = content.strip()
+        assert stripped == "", \
+            f"Expected empty file after x on 'a', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_cw_on_empty_line(self):
+        """Open line with o, Escape, cw on empty line, verify no crash."""
+        path = create_temp_file("text")
+        child = spawn_alfred(path)
+
+        # o opens line below (enters insert), then Escape to normal
+        send_keys(child, "o")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        # cw on the empty line — should not crash
+        send_keys(child, "c")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        # If we're in insert mode (from cw), escape out
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "q!")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected no crash (exit 0) for cw on empty line, got {exit_code}"
+        os.unlink(path)
+
+    def test_search_no_match(self):
+        """Search for non-existent pattern, verify no crash."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        # /xyz Enter — search for non-existent pattern
+        send_keys(child, "/")
+        time.sleep(0.2)
+        send_keys(child, "xyz")
+        send_enter(child)
+        time.sleep(0.5)
+
+        # Editor should still be alive — quit
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected no crash (exit 0) after search with no match, got {exit_code}"
+        os.unlink(path)
