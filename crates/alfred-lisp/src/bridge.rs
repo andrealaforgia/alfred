@@ -1325,6 +1325,305 @@ fn require_int_arg(args: &[Value], index: usize, fn_name: &str) -> Result<i32, R
     }
 }
 
+// ---------------------------------------------------------------------------
+// List primitive implementations (pure functions, no captured state)
+// ---------------------------------------------------------------------------
+
+/// Registers all list manipulation and type-checking primitives into the Lisp runtime.
+///
+/// These are pure functions (no EditorState access) registered as `NativeFunc`
+/// function pointers. After calling this, the following Lisp functions become available:
+///
+/// - `(length list)` -- return the number of elements in a list
+/// - `(nth n list)` -- return element at index n (0-based), NIL if out of bounds
+/// - `(first list)` -- return first element, NIL if empty
+/// - `(rest list)` -- return list without first element
+/// - `(cons element list)` -- prepend element to list
+/// - `(append list1 list2)` -- concatenate two lists
+/// - `(reverse list)` -- reverse a list
+/// - `(range start end)` -- generate list of integers from start to end-1
+/// - `(map fn list)` -- apply fn to each element, return new list
+/// - `(filter fn list)` -- keep elements where fn returns truthy
+/// - `(reduce fn init list)` -- fold left with accumulator
+/// - `(for-each fn list)` -- call fn on each element for side effects, returns NIL
+/// - `(list? value)` -- T if value is a list, NIL otherwise
+/// - `(string? value)` -- T if value is a string, NIL otherwise
+/// - `(number? value)` -- T if value is an integer, NIL otherwise
+/// - `(nil? value)` -- T if value is NIL, NIL otherwise
+pub fn register_list_primitives(runtime: &LispRuntime) {
+    let env = runtime.env();
+
+    env.borrow_mut().define(
+        Symbol("length".to_string()),
+        Value::NativeFunc(native_length),
+    );
+    env.borrow_mut()
+        .define(Symbol("nth".to_string()), Value::NativeFunc(native_nth));
+    env.borrow_mut()
+        .define(Symbol("first".to_string()), Value::NativeFunc(native_first));
+    env.borrow_mut()
+        .define(Symbol("rest".to_string()), Value::NativeFunc(native_rest));
+    env.borrow_mut()
+        .define(Symbol("cons".to_string()), Value::NativeFunc(native_cons));
+    env.borrow_mut().define(
+        Symbol("append".to_string()),
+        Value::NativeFunc(native_append),
+    );
+    env.borrow_mut().define(
+        Symbol("reverse".to_string()),
+        Value::NativeFunc(native_reverse),
+    );
+    env.borrow_mut()
+        .define(Symbol("range".to_string()), Value::NativeFunc(native_range));
+    env.borrow_mut()
+        .define(Symbol("map".to_string()), Value::NativeFunc(native_map));
+    env.borrow_mut().define(
+        Symbol("filter".to_string()),
+        Value::NativeFunc(native_filter),
+    );
+    env.borrow_mut().define(
+        Symbol("reduce".to_string()),
+        Value::NativeFunc(native_reduce),
+    );
+    env.borrow_mut().define(
+        Symbol("for-each".to_string()),
+        Value::NativeFunc(native_for_each),
+    );
+    env.borrow_mut().define(
+        Symbol("list?".to_string()),
+        Value::NativeFunc(native_is_list),
+    );
+    env.borrow_mut().define(
+        Symbol("string?".to_string()),
+        Value::NativeFunc(native_is_string),
+    );
+    env.borrow_mut().define(
+        Symbol("number?".to_string()),
+        Value::NativeFunc(native_is_number),
+    );
+    env.borrow_mut()
+        .define(Symbol("nil?".to_string()), Value::NativeFunc(native_is_nil));
+}
+
+/// Extracts a required list argument at the given index.
+fn require_list_arg(args: &[Value], index: usize, fn_name: &str) -> Result<List, RuntimeError> {
+    match args.get(index) {
+        Some(Value::List(l)) => Ok(l.clone()),
+        Some(other) => Err(RuntimeError {
+            msg: format!(
+                "{}: expected list as argument {}, got {}",
+                fn_name,
+                index + 1,
+                other
+            ),
+        }),
+        None => Err(RuntimeError {
+            msg: format!(
+                "{}: expected argument {}, got only {}",
+                fn_name,
+                index + 1,
+                args.len()
+            ),
+        }),
+    }
+}
+
+/// Evaluates a function call expression `(func arg)` in the given environment.
+fn call_lisp_function(
+    env: Rc<RefCell<Env>>,
+    func: &Value,
+    arg: &Value,
+) -> Result<Value, RuntimeError> {
+    let call_list: List = vec![func.clone(), arg.clone()].into_iter().collect();
+    let call_expr = Value::List(call_list);
+    rust_lisp::interpreter::eval(env, &call_expr)
+}
+
+/// `(length list)` -- returns the number of elements in a list.
+fn native_length(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = require_list_arg(&args, 0, "length")?;
+    let count = list.into_iter().count() as i32;
+    Ok(Value::Int(count))
+}
+
+/// `(nth n list)` -- returns element at index n (0-based), NIL if out of bounds.
+fn native_nth(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let index = require_int_arg(&args, 0, "nth")?;
+    let list = require_list_arg(&args, 1, "nth")?;
+
+    if index < 0 {
+        return Ok(Value::NIL);
+    }
+
+    match list.into_iter().nth(index as usize) {
+        Some(value) => Ok(value),
+        None => Ok(Value::NIL),
+    }
+}
+
+/// `(first list)` -- returns first element, NIL if empty.
+fn native_first(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = require_list_arg(&args, 0, "first")?;
+    match list.car() {
+        Ok(value) => Ok(value),
+        Err(_) => Ok(Value::NIL),
+    }
+}
+
+/// `(rest list)` -- returns list without first element.
+fn native_rest(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = require_list_arg(&args, 0, "rest")?;
+    Ok(Value::List(list.cdr()))
+}
+
+/// `(cons element list)` -- prepends element to list.
+fn native_cons(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let element = args.first().ok_or_else(|| RuntimeError {
+        msg: "cons: expected 2 arguments, got 0".to_string(),
+    })?;
+    let list = require_list_arg(&args, 1, "cons")?;
+    Ok(Value::List(list.cons(element.clone())))
+}
+
+/// `(append list1 list2)` -- concatenates two lists.
+fn native_append(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list1 = require_list_arg(&args, 0, "append")?;
+    let list2 = require_list_arg(&args, 1, "append")?;
+    let combined: List = list1.into_iter().chain(&list2).collect();
+    Ok(Value::List(combined))
+}
+
+/// `(reverse list)` -- reverses a list.
+fn native_reverse(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let list = require_list_arg(&args, 0, "reverse")?;
+    let items: Vec<Value> = list.into_iter().collect();
+    let reversed: List = items.into_iter().rev().collect();
+    Ok(Value::List(reversed))
+}
+
+/// `(range start end)` -- generates a list of integers from start to end-1.
+fn native_range(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let start = require_int_arg(&args, 0, "range")?;
+    let end = require_int_arg(&args, 1, "range")?;
+    let list: List = (start..end).map(Value::Int).collect();
+    Ok(Value::List(list))
+}
+
+/// `(map fn list)` -- applies fn to each element, returns new list.
+fn native_map(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let func = args.first().ok_or_else(|| RuntimeError {
+        msg: "map: expected 2 arguments (fn, list), got 0".to_string(),
+    })?;
+    let list = require_list_arg(&args, 1, "map")?;
+
+    let results: Result<Vec<Value>, RuntimeError> = list
+        .into_iter()
+        .map(|item| call_lisp_function(env.clone(), func, &item))
+        .collect();
+
+    let result_list: List = results?.into_iter().collect();
+    Ok(Value::List(result_list))
+}
+
+/// `(filter fn list)` -- keeps elements where fn returns truthy.
+fn native_filter(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let func = args.first().ok_or_else(|| RuntimeError {
+        msg: "filter: expected 2 arguments (fn, list), got 0".to_string(),
+    })?;
+    let list = require_list_arg(&args, 1, "filter")?;
+
+    let mut kept = Vec::new();
+    for item in &list {
+        let result = call_lisp_function(env.clone(), func, &item)?;
+        let is_truthy: bool = (&result).into();
+        if is_truthy {
+            kept.push(item);
+        }
+    }
+
+    let result_list: List = kept.into_iter().collect();
+    Ok(Value::List(result_list))
+}
+
+/// `(reduce fn init list)` -- folds left with accumulator.
+fn native_reduce(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let func = args.first().ok_or_else(|| RuntimeError {
+        msg: "reduce: expected 3 arguments (fn, init, list), got 0".to_string(),
+    })?;
+    let init = args.get(1).ok_or_else(|| RuntimeError {
+        msg: "reduce: expected 3 arguments (fn, init, list), got 1".to_string(),
+    })?;
+    let list = require_list_arg(&args, 2, "reduce")?;
+
+    let mut accumulator = init.clone();
+    for item in &list {
+        // Build a call expression: (func accumulator item)
+        let call_list: List = vec![func.clone(), accumulator, item].into_iter().collect();
+        let call_expr = Value::List(call_list);
+        accumulator = rust_lisp::interpreter::eval(env.clone(), &call_expr)?;
+    }
+
+    Ok(accumulator)
+}
+
+/// `(for-each fn list)` -- calls fn on each element for side effects, returns NIL.
+fn native_for_each(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    let func = args.first().ok_or_else(|| RuntimeError {
+        msg: "for-each: expected 2 arguments (fn, list), got 0".to_string(),
+    })?;
+    let list = require_list_arg(&args, 1, "for-each")?;
+
+    for item in &list {
+        call_lisp_function(env.clone(), func, &item)?;
+    }
+
+    Ok(Value::NIL)
+}
+
+/// `(list? value)` -- returns T if value is a list (including NIL), NIL otherwise.
+fn native_is_list(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match args.first() {
+        Some(Value::List(_)) => Ok(Value::True),
+        Some(_) => Ok(Value::NIL),
+        None => Err(RuntimeError {
+            msg: "list?: expected 1 argument, got 0".to_string(),
+        }),
+    }
+}
+
+/// `(string? value)` -- returns T if value is a string, NIL otherwise.
+fn native_is_string(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match args.first() {
+        Some(Value::String(_)) => Ok(Value::True),
+        Some(_) => Ok(Value::NIL),
+        None => Err(RuntimeError {
+            msg: "string?: expected 1 argument, got 0".to_string(),
+        }),
+    }
+}
+
+/// `(number? value)` -- returns T if value is an integer, NIL otherwise.
+fn native_is_number(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match args.first() {
+        Some(Value::Int(_)) => Ok(Value::True),
+        Some(_) => Ok(Value::NIL),
+        None => Err(RuntimeError {
+            msg: "number?: expected 1 argument, got 0".to_string(),
+        }),
+    }
+}
+
+/// `(nil? value)` -- returns T if value is NIL, NIL otherwise.
+fn native_is_nil(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    match args.first() {
+        Some(Value::List(List::NIL)) => Ok(Value::True),
+        Some(_) => Ok(Value::NIL),
+        None => Err(RuntimeError {
+            msg: "nil?: expected 1 argument, got 0".to_string(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3374,5 +3673,351 @@ mod tests {
         let runtime = runtime_with_string_primitives();
         let result = runtime.eval("(parse-int \"abc\")");
         assert!(result.is_err(), "parse-int with non-numeric should error");
+    }
+
+    // -----------------------------------------------------------------------
+    // List primitives tests
+    // -----------------------------------------------------------------------
+
+    /// Creates a runtime with list primitives registered.
+    fn runtime_with_list_primitives() -> LispRuntime {
+        let runtime = LispRuntime::new();
+        register_list_primitives(&runtime);
+        runtime
+    }
+
+    // -- length --
+
+    #[test]
+    fn given_non_empty_list_when_length_then_returns_count() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(length '(1 2 3))").unwrap();
+        assert_eq!(result.as_integer(), Some(3));
+    }
+
+    #[test]
+    fn given_empty_list_when_length_then_returns_zero() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(length '())").unwrap();
+        assert_eq!(result.as_integer(), Some(0));
+    }
+
+    // -- nth --
+
+    #[test]
+    fn given_valid_index_when_nth_then_returns_element() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(nth 1 '(\"a\" \"b\" \"c\"))").unwrap();
+        assert_eq!(result.as_string(), Some("b".to_string()));
+    }
+
+    #[test]
+    fn given_out_of_bounds_index_when_nth_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(nth 5 '(1 2))").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- first --
+
+    #[test]
+    fn given_non_empty_list_when_first_then_returns_first_element() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(first '(10 20))").unwrap();
+        assert_eq!(result.as_integer(), Some(10));
+    }
+
+    #[test]
+    fn given_empty_list_when_first_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(first '())").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- rest --
+
+    #[test]
+    fn given_non_empty_list_when_rest_then_returns_tail() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(rest '(1 2 3))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(2), Value::Int(3)]);
+            }
+            _ => panic!("rest should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_single_element_list_when_rest_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(rest '(1))").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- cons --
+
+    #[test]
+    fn given_element_and_list_when_cons_then_returns_prepended_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(cons 0 '(1 2))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(0), Value::Int(1), Value::Int(2)]);
+            }
+            _ => panic!("cons should return a list, got {:?}", inner),
+        }
+    }
+
+    // -- append --
+
+    #[test]
+    fn given_two_lists_when_append_then_returns_concatenated_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(append '(1 2) '(3 4))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(
+                    items,
+                    vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]
+                );
+            }
+            _ => panic!("append should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_empty_and_non_empty_list_when_append_then_returns_second_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(append '() '(1 2))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(1), Value::Int(2)]);
+            }
+            _ => panic!("append should return a list, got {:?}", inner),
+        }
+    }
+
+    // -- reverse --
+
+    #[test]
+    fn given_non_empty_list_when_reverse_then_returns_reversed_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(reverse '(1 2 3))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(3), Value::Int(2), Value::Int(1)]);
+            }
+            _ => panic!("reverse should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_empty_list_when_reverse_then_returns_empty_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(reverse '())").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- range --
+
+    #[test]
+    fn given_start_and_end_when_range_then_returns_integer_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(range 0 3)").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(0), Value::Int(1), Value::Int(2)]);
+            }
+            _ => panic!("range should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_equal_start_and_end_when_range_then_returns_empty_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(range 5 5)").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- map --
+
+    #[test]
+    fn given_lambda_and_list_when_map_then_returns_transformed_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(map (lambda (x) (+ x 1)) '(1 2 3))").unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(2), Value::Int(3), Value::Int(4)]);
+            }
+            _ => panic!("map should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_lambda_and_empty_list_when_map_then_returns_empty_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(map (lambda (x) (+ x 1)) '())").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- filter --
+
+    #[test]
+    fn given_predicate_and_list_when_filter_then_returns_matching_elements() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime
+            .eval("(filter (lambda (x) (> x 2)) '(1 2 3 4))")
+            .unwrap();
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items, vec![Value::Int(3), Value::Int(4)]);
+            }
+            _ => panic!("filter should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_predicate_matching_nothing_when_filter_then_returns_empty_list() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime
+            .eval("(filter (lambda (x) (> x 100)) '(1 2 3))")
+            .unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- reduce --
+
+    #[test]
+    fn given_plus_and_list_when_reduce_then_returns_sum() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(reduce + 0 '(1 2 3))").unwrap();
+        assert_eq!(result.as_integer(), Some(6));
+    }
+
+    #[test]
+    fn given_empty_list_when_reduce_then_returns_initial_value() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(reduce + 0 '())").unwrap();
+        assert_eq!(result.as_integer(), Some(0));
+    }
+
+    // -- for-each --
+
+    #[test]
+    fn given_lambda_and_list_when_for_each_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        // for-each should execute without error and return NIL
+        let result = runtime
+            .eval("(for-each (lambda (x) (+ x 1)) '(1 2 3))")
+            .unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- type predicates --
+
+    #[test]
+    fn given_string_when_string_predicate_then_returns_true() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(string? \"hello\")").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_integer_when_string_predicate_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(string? 42)").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    #[test]
+    fn given_integer_when_number_predicate_then_returns_true() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(number? 42)").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_string_when_number_predicate_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(number? \"hello\")").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    #[test]
+    fn given_list_when_list_predicate_then_returns_true() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(list? '(1 2))").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_integer_when_list_predicate_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(list? 42)").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    #[test]
+    fn given_nil_when_nil_predicate_then_returns_true() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(nil? '())").unwrap();
+        assert_eq!(*result.inner(), Value::True);
+    }
+
+    #[test]
+    fn given_non_nil_when_nil_predicate_then_returns_nil() {
+        let runtime = runtime_with_list_primitives();
+        let result = runtime.eval("(nil? 42)").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -- buffer-line-count (already registered via rainbow_csv_primitives) --
+
+    #[test]
+    fn given_multiline_buffer_when_buffer_line_count_then_returns_correct_count() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("Line 1\nLine 2\nLine 3");
+        }
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(buffer-line-count)").unwrap();
+        assert_eq!(result.as_integer(), Some(3));
+    }
+
+    // -- composition: map + filter + reduce pipeline --
+
+    #[test]
+    fn given_list_when_map_filter_reduce_composed_then_returns_correct_result() {
+        let runtime = runtime_with_list_primitives();
+        // (reduce + 0 (filter (lambda (x) (> x 2)) (map (lambda (x) (+ x 1)) '(1 2 3 4))))
+        // map +1: (2 3 4 5), filter >2: (3 4 5), reduce +: 12
+        let result = runtime
+            .eval(
+                "(reduce + 0 (filter (lambda (x) (> x 2)) (map (lambda (x) (+ x 1)) '(1 2 3 4))))",
+            )
+            .unwrap();
+        assert_eq!(result.as_integer(), Some(12));
     }
 }
