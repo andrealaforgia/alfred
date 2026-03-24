@@ -952,6 +952,7 @@ pub fn register_rainbow_csv_primitives(runtime: &LispRuntime, state: Rc<RefCell<
 
     register_rainbow_csv_colorize(env.clone(), state.clone());
     register_clear_line_styles(env.clone(), state.clone());
+    register_set_line_style(env.clone(), state.clone());
     register_buffer_line_count(env.clone(), state.clone());
     register_buffer_get_line(env, state);
 }
@@ -970,6 +971,82 @@ fn register_clear_line_styles(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorSta
     define_native_closure(&env, "clear-line-styles", move |_env, _args| {
         let mut editor = state.borrow_mut();
         alfred_core::editor_state::clear_line_styles(&mut editor);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-line-style`: adds a style segment for a specific line.
+///
+/// Usage: `(set-line-style line start end color-string)`
+///
+/// Adds a color segment covering columns `start..end` on the given line.
+/// The color string is parsed as a hex color (e.g., "#ff6b6b") or named color.
+fn register_set_line_style(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-line-style", move |_env, args| {
+        let line = match args.first() {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-line-style: expected integer for line, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-line-style: expected 4 arguments (line, start, end, color), got 0"
+                        .to_string(),
+                });
+            }
+        };
+        let start_col = match args.get(1) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-line-style: expected integer for start, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-line-style: expected 4 arguments (line, start, end, color), got 1"
+                        .to_string(),
+                });
+            }
+        };
+        let end_col = match args.get(2) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-line-style: expected integer for end, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-line-style: expected 4 arguments (line, start, end, color), got 2"
+                        .to_string(),
+                });
+            }
+        };
+        let color_str = match args.get(3) {
+            Some(Value::String(s)) => s.clone(),
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-line-style: expected string for color, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-line-style: expected 4 arguments (line, start, end, color), got 3"
+                        .to_string(),
+                });
+            }
+        };
+
+        let color = theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
+            msg: format!("set-line-style: invalid color \"{}\"", color_str),
+        })?;
+
+        let mut editor = state.borrow_mut();
+        alfred_core::editor_state::add_line_style(&mut editor, line, start_col, end_col, color);
+
         Ok(Value::NIL)
     });
 }
@@ -1431,14 +1508,33 @@ fn require_list_arg(args: &[Value], index: usize, fn_name: &str) -> Result<List,
 }
 
 /// Evaluates a function call expression `(func arg)` in the given environment.
+///
+/// List arguments are wrapped in `(quote ...)` to prevent the evaluator from
+/// treating them as function calls. Without quoting, a list like `(0 1 "color")`
+/// would be evaluated as a call to `0`, producing "0 is not callable".
 fn call_lisp_function(
     env: Rc<RefCell<Env>>,
     func: &Value,
     arg: &Value,
 ) -> Result<Value, RuntimeError> {
-    let call_list: List = vec![func.clone(), arg.clone()].into_iter().collect();
+    let safe_arg = quote_if_list(arg);
+    let call_list: List = vec![func.clone(), safe_arg].into_iter().collect();
     let call_expr = Value::List(call_list);
     rust_lisp::interpreter::eval(env, &call_expr)
+}
+
+/// Wraps a Value in `(quote <value>)` if it is a non-empty list, preventing
+/// the evaluator from interpreting it as a function call.
+fn quote_if_list(value: &Value) -> Value {
+    match value {
+        Value::List(list) if *list != List::NIL => {
+            let quote_list: List = vec![Value::Symbol(Symbol("quote".to_string())), value.clone()]
+                .into_iter()
+                .collect();
+            Value::List(quote_list)
+        }
+        _ => value.clone(),
+    }
 }
 
 /// `(length list)` -- returns the number of elements in a list.
@@ -2017,6 +2113,105 @@ mod tests {
             result.is_err(),
             "define-command with non-string name should fail"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug reproduction: define-command callback execution
+    // -----------------------------------------------------------------------
+
+    /// Helper: execute a Dynamic command through the ClonedHandler path,
+    /// avoiding RefCell double-borrow (mirrors the TUI dispatch logic).
+    fn execute_dynamic_command(
+        state: &Rc<RefCell<EditorState>>,
+        name: &str,
+    ) -> alfred_core::error::Result<()> {
+        let handler = state.borrow().commands.extract_handler(name);
+        match handler {
+            Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
+                // Dynamic handlers capture their own Rc<RefCell<EditorState>>.
+                // We must NOT hold a borrow here. Pass a dummy state.
+                let mut dummy = editor_state::new(1, 1);
+                f(&mut dummy)
+            }
+            Some(alfred_core::command::ClonedHandler::Native(f)) => f(&mut state.borrow_mut()),
+            None => Err(alfred_core::error::AlfredError::CommandNotFound {
+                name: name.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn given_define_command_with_simple_lambda_when_executed_then_callback_runs() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+
+        runtime
+            .eval(r#"(define-command "simple-msg" (lambda () (message "direct")))"#)
+            .unwrap();
+
+        // Execute through the Dynamic-safe path (no RefCell double-borrow)
+        execute_dynamic_command(&state, "simple-msg").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.message, Some("direct".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug reproduction: define-command env scoping (define then define-command)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_define_then_define_command_when_executed_then_can_access_defined_variable() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+
+        // Define a variable, then a command that reads it
+        runtime
+            .eval(
+                r#"
+            (define greeting "hi there")
+            (define-command "test-greet" (lambda () (message greeting)))
+        "#,
+            )
+            .unwrap();
+
+        // Execute through the Dynamic-safe path (no RefCell double-borrow)
+        execute_dynamic_command(&state, "test-greet").unwrap();
+
+        // Verify the message was set using the defined variable
+        let editor = state.borrow();
+        assert_eq!(editor.message, Some("hi there".to_string()));
+    }
+
+    #[test]
+    fn given_define_then_define_command_when_executed_then_can_access_defined_function() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+        register_string_primitives(&runtime);
+        register_list_primitives(&runtime);
+
+        // Define a helper function, then a command that calls it
+        runtime
+            .eval(
+                r#"
+            (define greet (lambda (name) (str-join (list "Hello" name) " ")))
+            (define-command "test-greet" (lambda () (message (greet "World"))))
+        "#,
+            )
+            .unwrap();
+
+        // Execute through the Dynamic-safe path (no RefCell double-borrow)
+        execute_dynamic_command(&state, "test-greet").unwrap();
+
+        // Verify the message was set by the helper function
+        let editor = state.borrow();
+        assert_eq!(editor.message, Some("Hello World".to_string()));
     }
 
     // -----------------------------------------------------------------------
@@ -4021,5 +4216,69 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.as_integer(), Some(12));
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration test: load actual rainbow-csv plugin file and execute command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_csv_buffer_when_rainbow_csv_plugin_loaded_and_command_executed_then_line_styles_populated(
+    ) {
+        // Given: an editor state with a CSV buffer
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("a,b,c\n1,2,3");
+        }
+
+        // And: a runtime with ALL primitives registered
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_define_command(&runtime, state.clone());
+        register_string_primitives(&runtime);
+        register_list_primitives(&runtime);
+        register_hook_primitives(&runtime, state.clone());
+        register_keymap_primitives(&runtime, state.clone());
+        register_theme_primitives(&runtime, state.clone());
+        register_rainbow_csv_primitives(&runtime, state.clone());
+
+        // And: the actual rainbow-csv plugin is loaded from disk
+        let plugin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../plugins/rainbow-csv/init.lisp");
+        runtime
+            .eval_file(&plugin_path)
+            .expect("rainbow-csv plugin should load without errors");
+
+        // When: the "rainbow-csv" command is executed
+        execute_dynamic_command(&state, "rainbow-csv")
+            .expect("rainbow-csv command should execute without errors");
+
+        // Then: line_styles has entries for the CSV lines
+        let editor = state.borrow();
+        assert!(
+            !editor.line_styles.is_empty(),
+            "line_styles should have entries after rainbow-csv command, but was empty"
+        );
+        // Specifically, both lines should have style entries
+        assert!(
+            editor.line_styles.contains_key(&0),
+            "line 0 should have style entries"
+        );
+        assert!(
+            editor.line_styles.contains_key(&1),
+            "line 1 should have style entries"
+        );
+        // Each line has 3 CSV fields, so 3 style segments per line
+        assert_eq!(
+            editor.line_styles.get(&0).unwrap().len(),
+            3,
+            "line 0 should have 3 style segments (one per CSV field)"
+        );
+        assert_eq!(
+            editor.line_styles.get(&1).unwrap().len(),
+            3,
+            "line 1 should have 3 style segments (one per CSV field)"
+        );
     }
 }
