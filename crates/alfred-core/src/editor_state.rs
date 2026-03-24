@@ -120,6 +120,12 @@ pub struct EditorState {
     /// Current index into the jump list. Points one past the last entry when at the end
     /// (i.e., no more forward jumps). Decremented by jump-back, incremented by jump-forward.
     pub jump_index: usize,
+    /// Change list: history of cursor positions where buffer modifications were made.
+    /// `g;` navigates backward (to older changes), `g,` navigates forward (to newer changes).
+    pub change_list: Vec<Cursor>,
+    /// Current index into the change list. Points one past the last entry when at the end.
+    /// Decremented by change-list-back, incremented by change-list-forward.
+    pub change_list_index: usize,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1095,6 +1101,23 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Change list navigation: g; (back) and g, (forward) ---
+    crate::command::register(
+        &mut state.commands,
+        "change-list-back".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            change_list_back(s);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "change-list-forward".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            change_list_forward(s);
+            Ok(())
+        }),
+    );
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -1221,9 +1244,15 @@ pub fn jump_to_mark(state: &mut EditorState, mark_char: char) -> Result<(), Stri
     }
 }
 
+/// Maximum number of entries in the change list.
+/// When exceeded, the oldest entries are removed.
+const CHANGE_LIST_MAX_SIZE: usize = 100;
+
 /// Saves a snapshot of the current buffer and cursor onto the undo stack.
 ///
 /// Clears the redo stack (any redo history is lost when a new edit is made).
+/// Also records the current cursor position in the change list so that
+/// `g;` / `g,` can navigate to positions where edits occurred.
 /// Call this before any buffer mutation to enable undo.
 pub fn push_undo(state: &mut EditorState) {
     state.undo_stack.push(UndoSnapshot {
@@ -1231,6 +1260,18 @@ pub fn push_undo(state: &mut EditorState) {
         cursor: state.cursor,
     });
     state.redo_stack.clear();
+
+    // Record cursor position in the change list
+    state.change_list.push(state.cursor);
+
+    // Enforce max size by removing oldest entries
+    if state.change_list.len() > CHANGE_LIST_MAX_SIZE {
+        let excess = state.change_list.len() - CHANGE_LIST_MAX_SIZE;
+        state.change_list.drain(0..excess);
+    }
+
+    // Always reset index to end of list after a new edit
+    state.change_list_index = state.change_list.len();
 }
 
 /// Undoes the last change by popping the undo stack.
@@ -1346,6 +1387,35 @@ pub fn jump_forward(state: &mut EditorState) {
     state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
 }
 
+/// Navigates backward through the change list (`g;` in Vim).
+///
+/// Decrements change_list_index and moves the cursor to the position at that index.
+/// If the change list is empty or already at the beginning (change_list_index == 0),
+/// this is a no-op.
+pub fn change_list_back(state: &mut EditorState) {
+    if state.change_list.is_empty() || state.change_list_index == 0 {
+        return;
+    }
+
+    state.change_list_index -= 1;
+    state.cursor = state.change_list[state.change_list_index];
+    state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Navigates forward through the change list (`g,` in Vim).
+///
+/// Increments change_list_index and moves the cursor to the position at that index.
+/// If already at the end (change_list_index >= change_list.len()), this is a no-op.
+pub fn change_list_forward(state: &mut EditorState) {
+    if state.change_list_index + 1 >= state.change_list.len() {
+        return;
+    }
+
+    state.change_list_index += 1;
+    state.cursor = state.change_list[state.change_list_index];
+    state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+}
+
 /// Returns the set of command names that are considered "jump" commands.
 ///
 /// Before any of these commands execute, the current cursor position should
@@ -1405,6 +1475,8 @@ pub fn new(width: u16, height: u16) -> EditorState {
         last_macro_register: None,
         jump_list: Vec::new(),
         jump_index: 0,
+        change_list: Vec::new(),
+        change_list_index: 0,
     }
 }
 
@@ -3066,6 +3138,173 @@ mod tests {
         // Execute jump-forward command
         command::execute(&mut state, "jump-forward").unwrap();
         assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Change list: push_undo records cursor, change_list_back, change_list_forward
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_three_edits_at_different_positions_when_change_list_back_then_walks_through_them() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Edit 1 at (0, 3)
+        state.cursor = crate::cursor::new(0, 3);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 0, 3, "X");
+
+        // Edit 2 at (1, 5)
+        state.cursor = crate::cursor::new(1, 5);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 1, 5, "Y");
+
+        // Edit 3 at (2, 0)
+        state.cursor = crate::cursor::new(2, 0);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 2, 0, "Z");
+
+        // Now cursor is somewhere else
+        state.cursor = crate::cursor::new(2, 5);
+
+        // Walk backward through change list
+        editor_state::change_list_back(&mut state);
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 0);
+
+        editor_state::change_list_back(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 5);
+
+        editor_state::change_list_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 3);
+    }
+
+    #[test]
+    fn given_change_list_back_when_change_list_forward_then_goes_forward() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Edit 1 at (0, 0)
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 0, 0, "A");
+
+        // Edit 2 at (1, 0)
+        state.cursor = crate::cursor::new(1, 0);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 1, 0, "B");
+
+        // Move elsewhere
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Go back twice
+        editor_state::change_list_back(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        editor_state::change_list_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+
+        // Go forward once
+        editor_state::change_list_forward(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_empty_change_list_when_change_list_back_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two");
+        state.cursor = crate::cursor::new(1, 3);
+
+        editor_state::change_list_back(&mut state);
+
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 3);
+    }
+
+    #[test]
+    fn given_at_end_of_change_list_when_change_list_forward_then_no_op() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("line one\nline two");
+
+        // Make one edit
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_undo(&mut state);
+        state.buffer = buffer::insert_at(&state.buffer, 0, 0, "X");
+
+        // Cursor at end of change list -- forward should be no-op
+        state.cursor = crate::cursor::new(1, 0);
+        editor_state::change_list_forward(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_change_list_at_max_size_when_push_undo_then_oldest_removed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string(
+            &(0..110)
+                .map(|i| format!("line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        // Push 100 positions (the max)
+        for i in 0..100 {
+            state.cursor = crate::cursor::new(i, 0);
+            editor_state::push_undo(&mut state);
+        }
+        assert_eq!(state.change_list.len(), 100);
+        assert_eq!(state.change_list[0].line, 0);
+
+        // Push one more -- should evict the oldest
+        state.cursor = crate::cursor::new(100, 0);
+        editor_state::push_undo(&mut state);
+        assert_eq!(state.change_list.len(), 100);
+        assert_eq!(state.change_list[0].line, 1);
+    }
+
+    #[test]
+    fn given_change_list_commands_registered_when_executed_then_navigate_change_list() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("line one\nline two\nline three");
+        editor_state::register_builtin_commands(&mut state);
+
+        // Edit at (0, 0) via delete-char-at-cursor (which calls push_undo)
+        state.cursor = crate::cursor::new(0, 0);
+        command::execute(&mut state, "delete-char-at-cursor").unwrap();
+
+        // Edit at (1, 0) via delete-char-at-cursor
+        state.cursor = crate::cursor::new(1, 0);
+        command::execute(&mut state, "delete-char-at-cursor").unwrap();
+
+        // Move somewhere else
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Execute change-list-back
+        command::execute(&mut state, "change-list-back").unwrap();
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+
+        // Execute change-list-back again
+        command::execute(&mut state, "change-list-back").unwrap();
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+
+        // Execute change-list-forward
+        command::execute(&mut state, "change-list-forward").unwrap();
+        assert_eq!(state.cursor.line, 1);
         assert_eq!(state.cursor.column, 0);
     }
 }
