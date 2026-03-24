@@ -1,9 +1,31 @@
 ;;; name: line-numbers
-;;; version: 0.1.0
-;;; description: Displays line numbers in the gutter
+;;; version: 3.0.0
+;;; description: Line numbers in the gutter — pure Lisp via panel system
 
-;; Register a callback for the render-gutter hook.
-;; The callback receives start_line, end_line, and total_lines as string args.
-;; The actual line number formatting is done in Rust (compute_gutter_content)
-;; -- this hook's presence signals that line numbers should be displayed.
-(add-hook "render-gutter" (lambda (start end total) start))
+;; Compute gutter width based on total line count
+(define compute-gutter-width
+  (lambda ()
+    (+ (str-length (to-string (buffer-line-count))) 1)))
+
+;; Create a left panel for line numbers
+(define-panel "gutter" "left" 4)
+(set-panel-style "gutter" "#6c7086" "default")
+
+;; Update gutter content for visible lines
+(define update-gutter
+  (lambda ()
+    (set-panel-size "gutter" (compute-gutter-width))
+    (for-each
+      (lambda (i)
+        (let* ((line-num (+ (viewport-top-line) i))
+               (total (buffer-line-count)))
+          (if (< line-num total)
+            (set-panel-line "gutter" i (to-string (+ line-num 1)))
+            (set-panel-line "gutter" i "~"))))
+      (range 0 (viewport-height)))))
+
+(add-hook "cursor-moved" update-gutter)
+(add-hook "buffer-changed" update-gutter)
+
+;; Initial render
+(update-gutter)

@@ -11,6 +11,8 @@ use std::io;
 
 use alfred_core::buffer;
 use alfred_core::editor_state::{self, EditorState};
+use alfred_core::panel::{self, PanelPosition};
+use alfred_core::theme;
 use crossterm::cursor::SetCursorStyle;
 use ratatui::backend::Backend;
 use ratatui::layout::{Position, Rect};
@@ -21,33 +23,92 @@ use ratatui::Terminal;
 
 /// Renders a single frame of the editor state to the given terminal.
 ///
-/// This is the main rendering entry point. It draws:
-/// 1. Buffer content (visible lines based on viewport scroll position)
-/// 2. Cursor at the correct position relative to the viewport
-/// 3. Message line on the bottom row (if `state.message` is `Some`)
-pub fn render_frame<B: Backend>(
-    terminal: &mut Terminal<B>,
-    state: &EditorState,
-    gutter_lines: &[String],
-    status_line: Option<&str>,
-) -> io::Result<()> {
-    let gutter_width = state.viewport.gutter_width;
+/// This is the main rendering entry point. It reads panel layout from
+/// `state.panels` and draws:
+/// 1. Left panels (e.g., gutter/line numbers)
+/// 2. Bottom panels (e.g., status bar)
+/// 3. Top panels
+/// 4. Buffer content in the remaining text area
+/// 5. Cursor at the correct position relative to the viewport
+/// 6. Message line on the bottom row (if `state.message` is `Some`)
+pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState) -> io::Result<()> {
+    // Collect panel layout information
+    let left_panels = panel::panels_at(&state.panels, &PanelPosition::Left);
+    let bottom_panels = panel::panels_at(&state.panels, &PanelPosition::Bottom);
+    let top_panels = panel::panels_at(&state.panels, &PanelPosition::Top);
+
+    let total_left_width: u16 = left_panels
+        .iter()
+        .filter(|p| p.visible)
+        .map(|p| p.size)
+        .sum();
+    let total_bottom_height: u16 = bottom_panels
+        .iter()
+        .filter(|p| p.visible)
+        .map(|p| p.size)
+        .sum();
+    let total_top_height: u16 = top_panels
+        .iter()
+        .filter(|p| p.visible)
+        .map(|p| p.size)
+        .sum();
+
+    let has_bottom_panels = total_bottom_height > 0;
 
     terminal.draw(|frame| {
         let area = frame.area();
-        let has_status = status_line.is_some();
 
-        let content_area = compute_text_area(area, state.message.is_some(), has_status);
+        // Compute text area: subtract top panels, bottom panels, and message row
+        let content_area = compute_text_area(area, state.message.is_some(), has_bottom_panels);
+        let content_area = Rect {
+            x: content_area.x,
+            y: content_area.y + total_top_height,
+            width: content_area.width,
+            height: content_area.height.saturating_sub(total_top_height),
+        };
 
-        if gutter_width > 0 {
-            let (gutter_area, buffer_area) = split_gutter_and_text(content_area, gutter_width);
+        // Render top panels
+        {
+            let mut top_y = area.y;
+            for panel in &top_panels {
+                if !panel.visible {
+                    continue;
+                }
+                let panel_area = Rect {
+                    x: area.x,
+                    y: top_y,
+                    width: area.width,
+                    height: panel.size,
+                };
+                let style = resolve_panel_style(state, panel);
+                let widget = Paragraph::new(panel.content.as_str()).style(style);
+                frame.render_widget(widget, panel_area);
+                top_y += panel.size;
+            }
+        }
 
-            let gutter_content = collect_gutter_lines(gutter_lines, content_area.height as usize);
-            let gutter_fg = resolve_theme_color(state, "gutter-fg", Color::Reset);
-            let gutter_bg = resolve_theme_color(state, "gutter-bg", Color::Reset);
-            let gutter_style = Style::default().fg(gutter_fg).bg(gutter_bg);
-            let gutter_widget = Paragraph::new(gutter_content).style(gutter_style);
-            frame.render_widget(gutter_widget, gutter_area);
+        // Render left panels and buffer content
+        if total_left_width > 0 {
+            let (gutter_area, buffer_area) = split_gutter_and_text(content_area, total_left_width);
+
+            // Render each left panel
+            let mut left_x = gutter_area.x;
+            for panel in &left_panels {
+                if !panel.visible {
+                    continue;
+                }
+                let panel_area = Rect {
+                    x: left_x,
+                    y: gutter_area.y,
+                    width: panel.size,
+                    height: gutter_area.height,
+                };
+                let gutter_content = collect_panel_lines(panel, panel_area.height as usize);
+                let style = resolve_panel_style(state, panel);
+                let gutter_widget = Paragraph::new(gutter_content).style(style);
+                frame.render_widget(gutter_widget, panel_area);
+                left_x += panel.size;
+            }
 
             let visible_lines = collect_visible_lines(state, buffer_area.height as usize);
             let text_widget = Paragraph::new(visible_lines);
@@ -58,13 +119,27 @@ pub fn render_frame<B: Backend>(
             frame.render_widget(text_widget, content_area);
         }
 
-        if let Some(status) = status_line {
-            let status_area = compute_status_area(area, state.message.is_some());
-            let status_bg = resolve_theme_color(state, "status-bar-bg", Color::DarkGray);
-            let status_fg = resolve_theme_color(state, "status-bar-fg", Color::White);
-            let status_style = Style::default().bg(status_bg).fg(status_fg);
-            let status_widget = Paragraph::new(status).style(status_style);
-            frame.render_widget(status_widget, status_area);
+        // Render bottom panels (e.g., status bar)
+        {
+            let message_rows = if state.message.is_some() { 1u16 } else { 0 };
+            let mut bottom_y = area
+                .height
+                .saturating_sub(message_rows + total_bottom_height);
+            for panel in &bottom_panels {
+                if !panel.visible {
+                    continue;
+                }
+                let panel_area = Rect {
+                    x: area.x,
+                    y: area.y + bottom_y,
+                    width: area.width,
+                    height: panel.size,
+                };
+                let style = resolve_panel_style(state, panel);
+                let widget = Paragraph::new(panel.content.as_str()).style(style);
+                frame.render_widget(widget, panel_area);
+                bottom_y += panel.size;
+            }
         }
 
         if let Some(ref message) = state.message {
@@ -82,37 +157,75 @@ pub fn render_frame<B: Backend>(
     Ok(())
 }
 
+/// Resolves the ratatui Style for a panel, using panel-specific colors if set,
+/// falling back to theme defaults based on panel name.
+fn resolve_panel_style(state: &EditorState, panel: &alfred_core::panel::Panel) -> Style {
+    // Priority: theme color > panel's own color > Color::Reset
+    // Theme overrides panel defaults so that user themes always win.
+    let panel_fg_fallback = panel
+        .fg_color
+        .as_deref()
+        .and_then(theme::parse_color)
+        .map(theme_color_to_ratatui)
+        .unwrap_or(Color::Reset);
+    let fg = {
+        let theme_key = format!("{}-fg", panel.name);
+        let resolved = resolve_theme_color(state, &theme_key, Color::Reset);
+        if resolved == Color::Reset {
+            panel_fg_fallback
+        } else {
+            resolved
+        }
+    };
+    let panel_bg_fallback = panel
+        .bg_color
+        .as_deref()
+        .and_then(theme::parse_color)
+        .map(theme_color_to_ratatui)
+        .unwrap_or(Color::Reset);
+    let bg = {
+        let theme_key = format!("{}-bg", panel.name);
+        let resolved = resolve_theme_color(state, &theme_key, Color::Reset);
+        if resolved == Color::Reset {
+            panel_bg_fallback
+        } else {
+            resolved
+        }
+    };
+    Style::default().fg(fg).bg(bg)
+}
+
+/// Collects per-line content from a left/right panel for rendering.
+///
+/// Reads from the panel's `lines` HashMap. If a line index has no content,
+/// an empty string is used.
+fn collect_panel_lines(
+    panel: &alfred_core::panel::Panel,
+    visible_height: usize,
+) -> Vec<Line<'static>> {
+    (0..visible_height)
+        .map(|row| {
+            let content = panel.lines.get(&row).map(|s| s.as_str()).unwrap_or("");
+            Line::raw(content.to_string())
+        })
+        .collect()
+}
+
 /// Computes the area available for buffer text content.
 ///
 /// When a message is present, the last row is reserved for the message line.
-/// When a status bar is present, one additional row is reserved above the message.
+/// Bottom panel rows are reserved above the message line.
 /// The text area height is reduced accordingly.
-fn compute_text_area(total_area: Rect, has_message: bool, has_status: bool) -> Rect {
+fn compute_text_area(total_area: Rect, has_message: bool, has_bottom_panels: bool) -> Rect {
     let message_rows = if has_message { 1 } else { 0 };
-    let status_rows = if has_status { 1 } else { 0 };
-    let reserved = message_rows + status_rows;
+    let bottom_rows = if has_bottom_panels { 1 } else { 0 };
+    let reserved = message_rows + bottom_rows;
     let text_height = total_area.height.saturating_sub(reserved);
     Rect {
         x: total_area.x,
         y: total_area.y,
         width: total_area.width,
         height: text_height,
-    }
-}
-
-/// Computes the area for the status bar.
-///
-/// The status bar occupies one row between the text area and the message line.
-/// When a message is present, the status bar is on the second-to-last row.
-/// When no message, the status bar is on the last row.
-fn compute_status_area(total_area: Rect, has_message: bool) -> Rect {
-    let message_rows = if has_message { 1 } else { 0 };
-    let status_row = total_area.height.saturating_sub(1 + message_rows);
-    Rect {
-        x: total_area.x,
-        y: total_area.y + status_row,
-        width: total_area.width,
-        height: 1,
     }
 }
 
@@ -220,19 +333,6 @@ fn split_gutter_and_text(content_area: Rect, gutter_width: u16) -> (Rect, Rect) 
     };
 
     (gutter_area, text_area)
-}
-
-/// Collects gutter lines for the visible rows.
-///
-/// If `gutter_lines` has fewer entries than `visible_height`, the remaining
-/// rows get empty strings. Each line is converted to a ratatui Line.
-fn collect_gutter_lines(gutter_lines: &[String], visible_height: usize) -> Vec<Line<'static>> {
-    (0..visible_height)
-        .map(|row| {
-            let content = gutter_lines.get(row).map(|s| s.as_str()).unwrap_or("");
-            Line::raw(content.to_string())
-        })
-        .collect()
 }
 
 /// Resolves a theme color from EditorState by slot name, with a fallback.
@@ -382,6 +482,7 @@ impl Drop for TerminalGuard {
 mod tests {
     use alfred_core::buffer::Buffer;
     use alfred_core::editor_state;
+    use alfred_core::panel::{self, PanelPosition};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -402,7 +503,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the buffer content appears on the correct rows
         let rendered = terminal.backend();
@@ -441,7 +542,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        let result = super::render_frame(&mut terminal, &state, &[], None);
+        let result = super::render_frame(&mut terminal, &state);
 
         // Then: rendering succeeds without panic
         assert!(result.is_ok());
@@ -463,7 +564,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the cursor position in the backend reflects (column=3, row=1)
         let mut backend = terminal.backend_mut().clone();
@@ -486,7 +587,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render the editor state
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: row 0 shows Line2 (the first visible line after scroll)
         let rendered = terminal.backend();
@@ -510,7 +611,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: last row (2) shows the message
         let rendered = terminal.backend();
@@ -538,7 +639,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: last row (2) is blank
         let rendered = terminal.backend();
@@ -551,26 +652,29 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Acceptance test: gutter rendering with gutter_width > 0 and gutter content
+    // Acceptance test: gutter rendering via left panel
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_gutter_width_and_content_when_rendered_then_gutter_appears_left_and_text_shifts_right()
+    fn given_left_panel_with_content_when_rendered_then_gutter_appears_left_and_text_shifts_right()
     {
-        // Given: an EditorState with gutter_width=4 and buffer content
+        use alfred_core::panel::{self, PanelPosition};
+
+        // Given: an EditorState with a left panel (gutter) of size 4
         let mut state = editor_state::new(30, 5);
         state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
+        panel::define_panel(&mut state.panels, "gutter", PanelPosition::Left, 4).unwrap();
+        panel::set_line(&mut state.panels, "gutter", 0, " 1 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 1, " 2 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 2, " 3 ").unwrap();
         state.viewport.gutter_width = 4;
-
-        // And: gutter content for each visible line
-        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string(), " 3 ".to_string()];
 
         // And: a TestBackend terminal (30 cols wide)
         let backend = TestBackend::new(30, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // When: we render with gutter content
-        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the gutter content appears on the left side of each row
         let rendered = terminal.backend();
@@ -582,7 +686,7 @@ mod tests {
         );
 
         // And: buffer text appears shifted right (after gutter columns)
-        let row0_after_gutter = &row0[4..]; // gutter_width=4
+        let row0_after_gutter = &row0[4..]; // panel size=4
         assert!(
             row0_after_gutter.starts_with("Hello"),
             "Row 0 after gutter should start with 'Hello' but was: '{}'",
@@ -610,20 +714,24 @@ mod tests {
 
     #[test]
     fn given_gutter_width_when_cursor_at_col_3_then_cursor_position_offset_by_gutter() {
-        // Given: an EditorState with gutter_width=4 and cursor at line 1, column 3
+        use alfred_core::panel::{self, PanelPosition};
+
+        // Given: an EditorState with a left panel (gutter) of size 4 and cursor at line 1, column 3
         let mut state = editor_state::new(30, 5);
         state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
         state.cursor = alfred_core::cursor::new(1, 3);
         state.viewport.gutter_width = 4;
-
-        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string(), " 3 ".to_string()];
+        panel::define_panel(&mut state.panels, "gutter", PanelPosition::Left, 4).unwrap();
+        panel::set_line(&mut state.panels, "gutter", 0, " 1 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 1, " 2 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 2, " 3 ").unwrap();
 
         // And: a TestBackend terminal
         let backend = TestBackend::new(30, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // When: we render with gutter
-        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: cursor column is offset by gutter_width (3 + 4 = 7)
         let mut backend = terminal.backend_mut().clone();
@@ -645,7 +753,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with empty gutter lines (backwards compatible)
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: text starts at column 0
         let rendered = terminal.backend();
@@ -666,20 +774,22 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_fewer_gutter_lines_than_visible_when_rendered_then_remaining_gutter_rows_empty() {
-        // Given: an EditorState with 3 buffer lines but only 1 gutter line
+    fn given_fewer_panel_lines_than_visible_when_rendered_then_remaining_gutter_rows_empty() {
+        use alfred_core::panel::{self, PanelPosition};
+
+        // Given: an EditorState with 3 buffer lines but only 1 gutter panel line set
         let mut state = editor_state::new(30, 5);
         state.buffer = Buffer::from_string("Hello\nWorld\nLine3");
         state.viewport.gutter_width = 4;
-
-        let gutter_lines = vec![" 1 ".to_string()];
+        panel::define_panel(&mut state.panels, "gutter", PanelPosition::Left, 4).unwrap();
+        panel::set_line(&mut state.panels, "gutter", 0, " 1 ").unwrap();
 
         // And: a TestBackend terminal
         let backend = TestBackend::new(30, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: row 0 has gutter content
         let rendered = terminal.backend();
@@ -744,7 +854,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: render with no status line
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: all 5 rows show buffer content (full height)
         let rendered = terminal.backend();
@@ -757,18 +867,22 @@ mod tests {
     }
 
     #[test]
-    fn given_status_line_without_message_when_rendered_then_status_on_last_row_and_text_reduced() {
-        // Given: 5-row terminal, no message, status present
+    fn given_bottom_panel_without_message_when_rendered_then_status_on_last_row_and_text_reduced() {
+        use alfred_core::panel::{self, PanelPosition};
+
+        // Given: 5-row terminal, no message, bottom panel (status) present
         // Layout: rows 0-3 text, row 4 status
         let mut state = editor_state::new(20, 5);
         state.buffer = Buffer::from_string("A\nB\nC\nD\nE");
         state.message = None;
+        panel::define_panel(&mut state.panels, "status", PanelPosition::Bottom, 1).unwrap();
+        panel::set_content(&mut state.panels, "status", "status text").unwrap();
 
         let backend = TestBackend::new(20, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // When: render with status line, no message
-        super::render_frame(&mut terminal, &state, &[], Some("status text")).unwrap();
+        // When: render with bottom panel, no message
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: status appears on last row (4)
         let rendered = terminal.backend();
@@ -789,18 +903,22 @@ mod tests {
     }
 
     #[test]
-    fn given_status_line_with_message_when_rendered_then_text_height_reduced_by_two() {
-        // Given: 5-row terminal, message + status present
-        // Layout: rows 0-2 text (3 rows), row 3 status, row 4 message
+    fn given_bottom_panel_with_message_when_rendered_then_text_height_reduced_by_two() {
+        use alfred_core::panel::{self, PanelPosition};
+
+        // Given: 5-row terminal, message + bottom panel present
+        // Layout: rows 0-2 text (3 rows), row 3 status panel, row 4 message
         let mut state = editor_state::new(20, 5);
         state.buffer = Buffer::from_string("A\nB\nC\nD\nE");
         state.message = Some("msg".to_string());
+        panel::define_panel(&mut state.panels, "status", PanelPosition::Bottom, 1).unwrap();
+        panel::set_content(&mut state.panels, "status", "bar").unwrap();
 
         let backend = TestBackend::new(20, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
-        // When: render with status + message
-        super::render_frame(&mut terminal, &state, &[], Some("bar")).unwrap();
+        // When: render with bottom panel + message
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: text rows 0-2 contain "A", "B", "C"
         let rendered = terminal.backend();
@@ -811,7 +929,7 @@ mod tests {
             row2
         );
 
-        // And: row 3 is status bar
+        // And: row 3 is status bar panel
         let row3 = extract_row_text(rendered.buffer(), 3);
         assert!(
             row3.starts_with("bar"),
@@ -847,12 +965,14 @@ mod tests {
         let mut state = editor_state::new(20, 6);
         state.buffer = Buffer::from_string("Hello\nWorld");
         state.message = Some("Saved".to_string());
+        panel::define_panel(&mut state.panels, "status", PanelPosition::Bottom, 1).unwrap();
+        panel::set_content(&mut state.panels, "status", "-- INSERT --").unwrap();
 
         let backend = TestBackend::new(20, 6);
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with a status line
-        super::render_frame(&mut terminal, &state, &[], Some("-- INSERT --")).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: status bar appears on row 4 (second-to-last)
         let rendered = terminal.backend();
@@ -893,12 +1013,14 @@ mod tests {
         state
             .theme
             .insert("status-bar-bg".to_string(), ThemeColor::Rgb(255, 0, 0));
+        panel::define_panel(&mut state.panels, "status-bar", PanelPosition::Bottom, 1).unwrap();
+        panel::set_content(&mut state.panels, "status-bar", "status").unwrap();
 
         let backend = TestBackend::new(20, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with a status line
-        super::render_frame(&mut terminal, &state, &[], Some("status")).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the status bar row uses the themed background color (red RGB)
         let rendered = terminal.backend();
@@ -917,14 +1039,24 @@ mod tests {
         use ratatui::style::Color;
 
         // Given: an EditorState with no theme colors set (empty theme)
+        // The status-bar panel has a default DarkGray background (panel-level default).
         let mut state = editor_state::new(20, 5);
         state.buffer = Buffer::from_string("Hello");
+        panel::define_panel(&mut state.panels, "status-bar", PanelPosition::Bottom, 1).unwrap();
+        panel::set_content(&mut state.panels, "status-bar", "status").unwrap();
+        panel::set_style(
+            &mut state.panels,
+            "status-bar",
+            Some("white"),
+            Some("dark-gray"),
+        )
+        .unwrap();
 
         let backend = TestBackend::new(20, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with a status line
-        super::render_frame(&mut terminal, &state, &[], Some("status")).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the status bar row uses the default DarkGray background
         let rendered = terminal.backend();
@@ -997,13 +1129,15 @@ mod tests {
             .theme
             .insert("gutter-fg".to_string(), ThemeColor::Rgb(108, 112, 134));
 
-        let gutter_lines = vec![" 1 ".to_string(), " 2 ".to_string()];
+        panel::define_panel(&mut state.panels, "gutter", PanelPosition::Left, 4).unwrap();
+        panel::set_line(&mut state.panels, "gutter", 0, " 1 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 1, " 2 ").unwrap();
 
         let backend = TestBackend::new(30, 5);
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with gutter
-        super::render_frame(&mut terminal, &state, &gutter_lines, None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the gutter cells use the themed foreground color
         let rendered = terminal.backend();
@@ -1037,7 +1171,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render with message
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the message row uses the themed foreground color
         let rendered = terminal.backend();
@@ -1078,7 +1212,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: column 0 ("aa") has red foreground
         let rendered = terminal.backend();
@@ -1121,7 +1255,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: text uses the default/reset color (no custom fg)
         let rendered = terminal.backend();
@@ -1154,7 +1288,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
 
         // When: we render
-        super::render_frame(&mut terminal, &state, &[], None).unwrap();
+        super::render_frame(&mut terminal, &state).unwrap();
 
         // Then: the comma at position 1 has default color (gap between segments)
         let rendered = terminal.backend();

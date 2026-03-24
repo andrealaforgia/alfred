@@ -1222,6 +1222,7 @@ pub(crate) fn eval_and_display(
 // Pure function: compute gutter content from hook dispatch
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// Computes gutter content by dispatching the "render-gutter" hook.
 ///
 /// If no hook is registered (no line-numbers plugin), returns (0, empty vec).
@@ -1279,6 +1280,7 @@ pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) 
 // Pure function: compute status bar content from hook dispatch
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 /// Computes status bar content by checking if the "render-status" hook has callbacks.
 ///
 /// If no hook is registered, returns None (no status bar rendered).
@@ -1347,43 +1349,39 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             break;
         }
 
-        // Compute gutter content by dispatching "render-gutter" hook
-        let (gutter_width, gutter_lines) = {
-            let state = state_rc.borrow();
-            compute_gutter_content(&state)
-        };
-
-        // Compute status bar content by dispatching "render-status" hook
-        let status_content = {
-            let state = state_rc.borrow();
-            compute_status_content(&state)
-        };
-
-        // Update viewport dimensions to match actual available area.
-        // Terminal height minus reserved rows (status bar + message line).
+        // Update viewport dimensions from panels and terminal size.
         {
             let mut state = state_rc.borrow_mut();
-            state.viewport.gutter_width = gutter_width;
             let (term_width, term_height) = crossterm::terminal::size().unwrap_or((80, 24));
-            let reserved_rows = {
-                let mut r: u16 = 0;
-                if status_content.is_some() {
-                    r += 1; // status bar
-                }
-                if state.message.is_some() {
-                    r += 1; // message line
-                }
-                r
-            };
+
+            // Compute gutter width from left panels
+            let left_width: u16 = alfred_core::panel::panels_at(
+                &state.panels,
+                &alfred_core::panel::PanelPosition::Left,
+            )
+            .iter()
+            .filter(|p| p.visible)
+            .map(|p| p.size)
+            .sum();
+            state.viewport.gutter_width = left_width;
+
+            // Compute reserved rows from bottom panels + message line
+            let bottom_height: u16 = alfred_core::panel::panels_at(
+                &state.panels,
+                &alfred_core::panel::PanelPosition::Bottom,
+            )
+            .iter()
+            .filter(|p| p.visible)
+            .map(|p| p.size)
+            .sum();
+            let mut reserved_rows = bottom_height;
+            if state.message.is_some() {
+                reserved_rows += 1; // message line
+            }
             state.viewport.height = term_height.saturating_sub(reserved_rows);
             state.viewport.width = term_width;
         }
-        renderer::render_frame(
-            &mut terminal,
-            &state_rc.borrow(),
-            &gutter_lines,
-            status_content.as_deref(),
-        )?;
+        renderer::render_frame(&mut terminal, &state_rc.borrow())?;
 
         // Set terminal cursor shape based on current mode
         renderer::apply_cursor_shape(&state_rc.borrow())?;
