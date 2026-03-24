@@ -1097,6 +1097,59 @@ class TestOperatorPending:
         assert "world" in content, f"Expected 'world' preserved, got: {repr(content)}"
         os.unlink(path)
 
+    def test_cw_on_last_word_deletes_entire_word(self):
+        """cw on the last word of a line should delete the whole word."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        # Move to 'world' with w
+        send_keys(child, "w")
+        time.sleep(0.2)
+
+        # cw on last word
+        send_keys(child, "c")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        # Type replacement
+        send_keys(child, "earth")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "world" not in content, \
+            f"'world' should be fully deleted, got: {repr(content)}"
+        assert "earth" in content, \
+            f"Expected 'earth' as replacement, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_dw_on_last_word_deletes_entire_word(self):
+        """dw on the last word of a line should delete the whole word."""
+        path = create_temp_file("foo bar")
+        child = spawn_alfred(path)
+
+        # Move to 'bar' with w
+        send_keys(child, "w")
+        time.sleep(0.2)
+
+        # dw on last word
+        send_keys(child, "d")
+        time.sleep(0.1)
+        send_keys(child, "w")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "bar" not in content, \
+            f"'bar' should be fully deleted, got: {repr(content)}"
+        os.unlink(path)
+
     def test_yy_p_duplicates_line(self):
         """yy then p duplicates the current line."""
         path = create_temp_file("only line")

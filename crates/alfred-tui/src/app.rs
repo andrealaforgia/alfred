@@ -146,10 +146,38 @@ fn execute_motion(
     motion_cmd: &str,
 ) -> Option<(alfred_core::cursor::Cursor, MotionKind)> {
     match motion_cmd {
-        "cursor-word-forward" => Some((
-            alfred_core::cursor::move_word_forward(state.cursor, &state.buffer),
-            MotionKind::CharWise,
-        )),
+        "cursor-word-forward" => {
+            let target = alfred_core::cursor::move_word_forward(state.cursor, &state.buffer);
+            let line_len = alfred_core::buffer::get_line(&state.buffer, state.cursor.line)
+                .map(|l| l.trim_end_matches('\n').len())
+                .unwrap_or(0);
+
+            if target.line > state.cursor.line {
+                // Word-forward crossed to a new line — clamp to end of current line.
+                // Makes `cw` on the last word behave like `c$` (vim semantics).
+                Some((
+                    alfred_core::cursor::Cursor {
+                        line: state.cursor.line,
+                        column: line_len,
+                    },
+                    MotionKind::CharWise,
+                ))
+            } else if target.line == state.cursor.line
+                && target.column >= line_len.saturating_sub(1)
+            {
+                // Word-forward stayed on same line but hit end — use line_len (exclusive)
+                // so the delete range includes the last character of the word.
+                Some((
+                    alfred_core::cursor::Cursor {
+                        line: state.cursor.line,
+                        column: line_len,
+                    },
+                    MotionKind::CharWise,
+                ))
+            } else {
+                Some((target, MotionKind::CharWise))
+            }
+        }
         "cursor-word-end" => {
             let end_cursor = alfred_core::cursor::move_word_end(state.cursor, &state.buffer);
             // word-end motion is inclusive: advance one past the endpoint so the last char is included
@@ -4946,6 +4974,39 @@ mod tests {
             vec!["insert-mode".to_string()],
             "cw should activate insert-mode keymap"
         );
+    }
+
+    #[test]
+    fn given_cursor_on_last_word_when_cw_then_entire_last_word_deleted() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: "hello world" with cursor on 'w' (col 6 = start of "world")
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("hello world");
+            state.cursor = cursor::new(0, 6); // on 'w' of "world"
+        }
+        let _runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // When: cw (change last word)
+        let is = dispatch_key_rc(
+            &state_rc,
+            KeyEvent::plain(KeyCode::Char('c')),
+            super::InputState::Normal,
+        );
+        dispatch_key_rc(&state_rc, KeyEvent::plain(KeyCode::Char('w')), is);
+
+        // Then: "world" deleted, buffer is "hello ", mode is insert
+        let state = state_rc.borrow();
+        let content = alfred_core::buffer::content(&state.buffer);
+        assert_eq!(
+            content, "hello ",
+            "cw on last word should delete entire word, got: '{}'",
+            content
+        );
+        assert_eq!(state.mode, alfred_core::editor_state::MODE_INSERT);
     }
 
     #[test]
