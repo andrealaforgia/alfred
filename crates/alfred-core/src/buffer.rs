@@ -754,6 +754,60 @@ pub fn replace_number_in_line(
     replace_line(buffer, line, &new_text)
 }
 
+/// Substitutes occurrences of `pattern` with `replacement` in a single line.
+///
+/// When `global` is `true`, all occurrences on the line are replaced.
+/// When `global` is `false`, only the first occurrence is replaced.
+/// If the line index is out of bounds or the pattern is not found, the buffer
+/// is returned unchanged.
+///
+/// This is a pure function: it returns a new Buffer without modifying the original.
+pub fn substitute_in_line(
+    buffer: &Buffer,
+    line: usize,
+    pattern: &str,
+    replacement: &str,
+    global: bool,
+) -> Buffer {
+    let line_text = get_line_content(buffer, line);
+    if line_text.is_empty() && line >= buffer.rope.len_lines() {
+        return buffer.clone();
+    }
+
+    let new_text = if global {
+        line_text.replace(pattern, replacement)
+    } else {
+        line_text.replacen(pattern, replacement, 1)
+    };
+
+    if new_text == line_text {
+        return buffer.clone();
+    }
+
+    replace_line(buffer, line, &new_text)
+}
+
+/// Substitutes all occurrences of `pattern` with `replacement` across every line
+/// in the buffer, returning the new buffer and the total number of replacements made.
+///
+/// This is a pure function: it returns a new Buffer without modifying the original.
+pub fn substitute_all(buffer: &Buffer, pattern: &str, replacement: &str) -> (Buffer, usize) {
+    let total_lines = buffer.rope.len_lines();
+    let mut current = buffer.clone();
+    let mut total_count = 0;
+
+    for line_index in 0..total_lines {
+        let line_text = get_line_content(&current, line_index);
+        let occurrences = line_text.matches(pattern).count();
+        if occurrences > 0 {
+            total_count += occurrences;
+            current = substitute_in_line(&current, line_index, pattern, replacement, true);
+        }
+    }
+
+    (current, total_count)
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -1411,5 +1465,79 @@ mod tests {
         let buffer = super::Buffer::from_string("hello\nworld");
         let result = super::replace_char_at(&buffer, 1, 0, 'W');
         assert_eq!(super::content(&result), "hello\nWorld");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: substitute_in_line
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_with_pattern_when_substitute_first_then_only_first_replaced() {
+        let buffer = super::Buffer::from_string("foo baz foo");
+        let result = super::substitute_in_line(&buffer, 0, "foo", "bar", false);
+        assert_eq!(super::content(&result), "bar baz foo");
+    }
+
+    #[test]
+    fn given_line_with_pattern_when_substitute_global_then_all_replaced() {
+        let buffer = super::Buffer::from_string("foo baz foo");
+        let result = super::substitute_in_line(&buffer, 0, "foo", "bar", true);
+        assert_eq!(super::content(&result), "bar baz bar");
+    }
+
+    #[test]
+    fn given_line_without_pattern_when_substitute_then_unchanged() {
+        let buffer = super::Buffer::from_string("hello world");
+        let result = super::substitute_in_line(&buffer, 0, "missing", "new", false);
+        assert_eq!(super::content(&result), "hello world");
+    }
+
+    #[test]
+    fn given_line_when_substitute_with_empty_replacement_then_pattern_deleted() {
+        let buffer = super::Buffer::from_string("foo baz foo");
+        let result = super::substitute_in_line(&buffer, 0, "foo", "", true);
+        assert_eq!(super::content(&result), " baz ");
+    }
+
+    #[test]
+    fn given_multiline_buffer_when_substitute_in_specific_line_then_only_that_line_changed() {
+        let buffer = super::Buffer::from_string("foo bar\nfoo baz\nfoo qux");
+        let result = super::substitute_in_line(&buffer, 1, "foo", "replaced", false);
+        assert_eq!(super::content(&result), "foo bar\nreplaced baz\nfoo qux");
+    }
+
+    #[test]
+    fn given_out_of_bounds_line_when_substitute_then_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::substitute_in_line(&buffer, 99, "hello", "bye", false);
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: substitute_all
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_multiline_buffer_when_substitute_all_then_all_lines_replaced() {
+        let buffer = super::Buffer::from_string("old stuff\nmore old\nold again");
+        let (result, count) = super::substitute_all(&buffer, "old", "new");
+        assert_eq!(super::content(&result), "new stuff\nmore new\nnew again");
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn given_buffer_without_pattern_when_substitute_all_then_zero_count() {
+        let buffer = super::Buffer::from_string("hello world");
+        let (result, count) = super::substitute_all(&buffer, "missing", "new");
+        assert_eq!(super::content(&result), "hello world");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn given_buffer_with_multiple_per_line_when_substitute_all_then_all_counted() {
+        let buffer = super::Buffer::from_string("aa bb aa\naa cc");
+        let (result, count) = super::substitute_all(&buffer, "aa", "xx");
+        assert_eq!(super::content(&result), "xx bb xx\nxx cc");
+        assert_eq!(count, 3);
     }
 }

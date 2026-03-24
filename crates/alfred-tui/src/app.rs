@@ -998,6 +998,10 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
             let expression = cmd.strip_prefix("eval ").unwrap().to_string();
             (InputState::Normal, DeferredAction::Eval(expression))
         }
+        cmd if cmd.starts_with("s/") || cmd.starts_with("%s/") => {
+            let (input_state, action) = execute_substitute(state, cmd);
+            (input_state, action)
+        }
         cmd => {
             // Check if it's a registered command — defer execution to avoid borrow conflict
             if alfred_core::command::lookup(&state.commands, cmd).is_some() {
@@ -1011,6 +1015,98 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
             }
         }
     }
+}
+
+/// Parses a substitute command pattern like `/old/new/` or `/old/new/g`.
+///
+/// Returns `Some((pattern, replacement, global))` on success, or `None` if
+/// the command does not match the expected format.
+fn parse_substitute_pattern(args: &str) -> Option<(&str, &str, bool)> {
+    // args should start with '/' — e.g., "/old/new/" or "/old/new/g"
+    if !args.starts_with('/') {
+        return None;
+    }
+    let rest = &args[1..]; // skip leading '/'
+
+    // Find the second '/' (separator between pattern and replacement)
+    let second_slash = rest.find('/')?;
+    let pattern = &rest[..second_slash];
+    let after_pattern = &rest[second_slash + 1..];
+
+    // Find the third '/' (trailing delimiter) — may or may not be present
+    let (replacement, flags) = match after_pattern.find('/') {
+        Some(pos) => (&after_pattern[..pos], &after_pattern[pos + 1..]),
+        None => (after_pattern, ""),
+    };
+
+    let global = flags.contains('g');
+    Some((pattern, replacement, global))
+}
+
+/// Executes a substitute command (`:s/old/new/` or `:%s/old/new/g`).
+///
+/// Parses the command, performs the substitution on the buffer, pushes undo,
+/// and sets an appropriate status message.
+fn execute_substitute(
+    state: &mut alfred_core::editor_state::EditorState,
+    command: &str,
+) -> (InputState, DeferredAction) {
+    let whole_buffer = command.starts_with('%');
+    let args = if whole_buffer {
+        &command[2..] // skip "%s"
+    } else {
+        &command[1..] // skip "s"
+    };
+
+    let (pattern, replacement, global) = match parse_substitute_pattern(args) {
+        Some(parsed) => parsed,
+        None => {
+            state.message = Some(
+                "Invalid substitute command. Usage: :s/old/new/[g] or :%s/old/new/[g]".to_string(),
+            );
+            return (InputState::Normal, DeferredAction::None);
+        }
+    };
+
+    if pattern.is_empty() {
+        state.message = Some(
+            "Invalid substitute command. Usage: :s/old/new/[g] or :%s/old/new/[g]".to_string(),
+        );
+        return (InputState::Normal, DeferredAction::None);
+    }
+
+    alfred_core::editor_state::push_undo(state);
+
+    if whole_buffer {
+        let (new_buffer, count) =
+            alfred_core::buffer::substitute_all(&state.buffer, pattern, replacement);
+        if count == 0 {
+            state.message = Some("Pattern not found".to_string());
+        } else {
+            state.buffer = new_buffer;
+            state.message = Some(format!("{} substitution(s) made", count));
+        }
+    } else {
+        let cursor_line = state.cursor.line;
+        let old_content = alfred_core::buffer::content(&state.buffer);
+        let new_buffer = alfred_core::buffer::substitute_in_line(
+            &state.buffer,
+            cursor_line,
+            pattern,
+            replacement,
+            global,
+        );
+        let new_content = alfred_core::buffer::content(&new_buffer);
+        if old_content == new_content {
+            state.message = Some("Pattern not found".to_string());
+        } else {
+            state.buffer = new_buffer;
+            let scope = if global { "line (all)" } else { "line (first)" };
+            state.message = Some(format!("Substituted on {}", scope));
+        }
+    }
+
+    (InputState::Normal, DeferredAction::None)
 }
 
 /// Evaluates a Lisp expression and sets the result (or error) as the editor message.
@@ -7062,5 +7158,107 @@ mod tests {
         dispatch_key(&mut state, KeyEvent::ctrl('i'), super::InputState::Normal);
         assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: :s substitute command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_with_pattern_when_colon_s_first_only_then_first_occurrence_replaced() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("foo baz foo");
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "s/foo/bar/");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bar baz foo");
+    }
+
+    #[test]
+    fn given_line_with_pattern_when_colon_s_global_then_all_occurrences_replaced() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("foo baz foo");
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "s/foo/bar/g");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "bar baz bar");
+    }
+
+    #[test]
+    fn given_multiline_buffer_when_percent_s_global_then_all_lines_replaced() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("old stuff\nmore old\nold again");
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "%s/old/new/g");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "new stuff\nmore new\nnew again"
+        );
+        // Message should report replacement count
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("3"),
+            "Message should contain replacement count, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_line_without_pattern_when_colon_s_then_pattern_not_found_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello world");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "s/missing/new/");
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("Pattern not found"),
+            "Should show 'Pattern not found', got: '{}'",
+            msg
+        );
+        // Buffer unchanged
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello world");
+    }
+
+    #[test]
+    fn given_line_when_colon_s_with_empty_replacement_then_pattern_deleted() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("foo baz foo");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "s/foo//g");
+        assert_eq!(alfred_core::buffer::content(&state.buffer), " baz ");
+    }
+
+    #[test]
+    fn given_bare_s_command_when_colon_s_then_error_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "s");
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("Usage") || msg.contains("Invalid") || msg.contains("Unknown"),
+            "Should show usage/error message, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_multiline_buffer_when_colon_s_on_current_line_then_only_cursor_line_changed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("foo bar\nfoo baz\nfoo qux");
+        state.cursor = cursor::new(1, 0); // cursor on line 1
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "s/foo/replaced/");
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "foo bar\nreplaced baz\nfoo qux"
+        );
     }
 }
