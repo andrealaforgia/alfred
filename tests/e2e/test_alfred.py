@@ -3194,6 +3194,68 @@ class TestEdgeCases:
 # Large file / rope chunk boundary tests
 # ---------------------------------------------------------------------------
 
+class TestFolderBrowser:
+    """Verify the folder browser feature works when opening a directory."""
+
+    def test_open_directory_no_plugin_errors(self):
+        """Opening a directory should not produce plugin errors."""
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        # Create some files in the directory
+        with open(os.path.join(tmpdir, "hello.txt"), "w") as f:
+            f.write("hello world\n")
+        os.mkdir(os.path.join(tmpdir, "subdir"))
+
+        child = spawn_alfred(tmpdir)
+
+        # Read screen to check for errors
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # Quit
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        assert "Plugin errors" not in screen, \
+            f"Plugin errors when opening directory: {repr(screen[:500])}"
+        assert "parse_key_spec" not in screen, \
+            f"Key spec parse error in browse-mode plugin: {repr(screen[:500])}"
+
+        import shutil
+        shutil.rmtree(tmpdir)
+
+    def test_browse_and_open_file(self):
+        """Browse a directory, navigate to a file, open it, edit, and save."""
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        target_file = os.path.join(tmpdir, "target.txt")
+        with open(target_file, "w") as f:
+            f.write("original content\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Navigate down to find the file (entries are sorted: dirs first, then files)
+        # Press j a few times then Enter to open
+        for _ in range(5):
+            send_keys(child, "j")
+            time.sleep(0.1)
+
+        # Press Enter to open whatever is selected
+        child.send("\r")
+        time.sleep(0.5)
+
+        # Now we should be in editor mode — quit without saving
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit after browse+open, got {exit_code}"
+
+        import shutil
+        shutil.rmtree(tmpdir)
+
+
 class TestLargeFileRopeChunkBoundary:
     """
     Verifies that all lines in a large file are correctly accessible,
