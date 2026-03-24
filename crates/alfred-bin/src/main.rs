@@ -47,22 +47,23 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
 
     let state = Rc::new(RefCell::new(editor_state::new(width, height)));
 
-    if let Some(path_str) = file_path {
+    let is_directory_arg = if let Some(path_str) = file_path {
         let path = Path::new(path_str);
         if path.is_dir() {
-            // Directory argument: enter browse mode
+            // Directory argument: initialize browser state (mode set after plugins load)
             let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             let entries = read_directory_entries(&canonical);
             let browser_state = browser::new_browser_state(canonical.clone(), canonical, entries);
-            let mut s = state.borrow_mut();
-            s.browser = Some(browser_state);
-            s.mode = browser::MODE_BROWSE.to_string();
-            s.active_keymaps = vec!["browse-mode".to_string()];
+            state.borrow_mut().browser = Some(browser_state);
+            true
         } else {
             let buffer = Buffer::from_file(path)?;
             state.borrow_mut().buffer = buffer;
+            false
         }
-    }
+    } else {
+        false
+    };
 
     // Register built-in native commands (cursor movement, delete-backward)
     editor_state::register_builtin_commands(&mut state.borrow_mut());
@@ -105,6 +106,13 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
                 }
             }
         }
+    }
+
+    // Activate browse mode AFTER plugins load (vim-keybindings sets mode to "normal")
+    if is_directory_arg {
+        let mut s = state.borrow_mut();
+        s.mode = browser::MODE_BROWSE.to_string();
+        s.active_keymaps = vec!["browse-mode".to_string()];
     }
 
     let mut highlighter = SyntaxHighlighter::new();
