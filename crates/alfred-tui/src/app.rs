@@ -998,6 +998,9 @@ fn execute_colon_command(state: &mut EditorState, command: &str) -> (InputState,
             let expression = cmd.strip_prefix("eval ").unwrap().to_string();
             (InputState::Normal, DeferredAction::Eval(expression))
         }
+        cmd if cmd.starts_with("g/") || cmd.starts_with("g!/") || cmd.starts_with("v/") => {
+            execute_global_delete(state, cmd)
+        }
         cmd if cmd.starts_with("s/") || cmd.starts_with("%s/") => {
             let (input_state, action) = execute_substitute(state, cmd);
             (input_state, action)
@@ -1104,6 +1107,69 @@ fn execute_substitute(
             let scope = if global { "line (all)" } else { "line (first)" };
             state.message = Some(format!("Substituted on {}", scope));
         }
+    }
+
+    (InputState::Normal, DeferredAction::None)
+}
+
+/// Parses a global command pattern like `g/pattern/d`, `g!/pattern/d`, or `v/pattern/d`.
+///
+/// Returns `Some((pattern, invert))` on success, or `None` if the command format is invalid.
+/// `invert` is true for `:v/` and `:g!/` forms (delete non-matching lines).
+fn parse_global_command(command: &str) -> Option<(&str, bool)> {
+    let (rest, invert) = if let Some(r) = command.strip_prefix("g!/") {
+        (r, true)
+    } else if let Some(r) = command.strip_prefix("v/") {
+        (r, true)
+    } else if let Some(r) = command.strip_prefix("g/") {
+        (r, false)
+    } else {
+        return None;
+    };
+
+    // rest should be "pattern/d"
+    let slash_pos = rest.find('/')?;
+    let pattern = &rest[..slash_pos];
+    let action = &rest[slash_pos + 1..];
+
+    if pattern.is_empty() {
+        return None;
+    }
+
+    if action != "d" {
+        return None;
+    }
+
+    Some((pattern, invert))
+}
+
+/// Executes a global delete command (`:g/pattern/d` or `:v/pattern/d`).
+///
+/// Parses the command, performs the line deletion on the buffer, pushes undo,
+/// and sets an appropriate status message.
+fn execute_global_delete(
+    state: &mut alfred_core::editor_state::EditorState,
+    command: &str,
+) -> (InputState, DeferredAction) {
+    let (pattern, invert) = match parse_global_command(command) {
+        Some(parsed) => parsed,
+        None => {
+            state.message =
+                Some("Invalid global command. Usage: :g/pattern/d or :v/pattern/d".to_string());
+            return (InputState::Normal, DeferredAction::None);
+        }
+    };
+
+    alfred_core::editor_state::push_undo(state);
+
+    let (new_buffer, count) =
+        alfred_core::buffer::delete_lines_matching(&state.buffer, pattern, invert);
+
+    if count == 0 {
+        state.message = Some("Pattern not found".to_string());
+    } else {
+        state.buffer = new_buffer;
+        state.message = Some(format!("{} line(s) deleted", count));
     }
 
     (InputState::Normal, DeferredAction::None)
@@ -7259,6 +7325,125 @@ mod tests {
         assert_eq!(
             alfred_core::buffer::content(&state.buffer),
             "foo bar\nreplaced baz\nfoo qux"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: :g/pattern/d and :v/pattern/d (global delete command)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_matching_lines_when_colon_g_delete_then_matching_lines_removed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string(
+            "keep this\nTODO: fix bug\nanother line\nTODO: refactor\nfinal line",
+        );
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "g/TODO/d");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "keep this\nanother line\nfinal line"
+        );
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("2"),
+            "Message should contain deleted count, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_colon_v_delete_then_non_matching_lines_removed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("keep this\nremove me\nkeep that\ndelete me");
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "v/keep/d");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "keep this\nkeep that"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_colon_g_bang_delete_then_non_matching_lines_removed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("keep this\nremove me\nkeep that\ndelete me");
+        state.cursor = cursor::new(0, 0);
+
+        let (input_state, _action) = super::execute_colon_command(&mut state, "g!/keep/d");
+        assert_eq!(input_state, super::InputState::Normal);
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "keep this\nkeep that"
+        );
+    }
+
+    #[test]
+    fn given_buffer_with_no_matches_when_colon_g_delete_then_no_change_with_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello\nworld\nfoo");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "g/NOMATCH/d");
+        assert_eq!(
+            alfred_core::buffer::content(&state.buffer),
+            "hello\nworld\nfoo"
+        );
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("Pattern not found"),
+            "Should show 'Pattern not found', got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_bare_g_command_when_colon_g_then_error_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "g");
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("Usage") || msg.contains("Invalid") || msg.contains("Unknown"),
+            "Should show usage/error message, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_g_with_missing_action_when_colon_g_then_error_message() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "g/pattern/");
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("Usage") || msg.contains("Invalid") || msg.contains("only 'd'"),
+            "Should show usage/error message for missing action, got: '{}'",
+            msg
+        );
+    }
+
+    #[test]
+    fn given_all_lines_match_when_colon_g_delete_then_buffer_becomes_empty() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("aaa\naaa\naaa");
+        state.cursor = cursor::new(0, 0);
+
+        let (_input_state, _action) = super::execute_colon_command(&mut state, "g/aaa/d");
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "");
+        let msg = state.message.as_ref().unwrap();
+        assert!(
+            msg.contains("3"),
+            "Message should contain deleted count, got: '{}'",
+            msg
         );
     }
 }

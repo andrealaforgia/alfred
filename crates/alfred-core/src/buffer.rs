@@ -808,6 +808,61 @@ pub fn substitute_all(buffer: &Buffer, pattern: &str, replacement: &str) -> (Buf
     (current, total_count)
 }
 
+/// Deletes all lines matching (or not matching) a pattern, returning the new buffer
+/// and the count of deleted lines.
+///
+/// When `invert` is `false`, lines containing `pattern` are deleted.
+/// When `invert` is `true`, lines NOT containing `pattern` are deleted.
+///
+/// If all lines would be deleted, the buffer becomes a single empty line.
+/// If no lines match, the buffer is returned unchanged with count 0.
+///
+/// This is a pure function: it returns a new Buffer without modifying the original.
+pub fn delete_lines_matching(buffer: &Buffer, pattern: &str, invert: bool) -> (Buffer, usize) {
+    let total_lines = buffer.rope.len_lines();
+    // Collect content of each line (without trailing newline) and whether it matches
+    let mut lines_to_keep: Vec<String> = Vec::new();
+    let mut delete_count = 0;
+
+    for line_idx in 0..total_lines {
+        let line_text = get_line_content(buffer, line_idx);
+        let contains_pattern = line_text.contains(pattern);
+        let should_delete = if invert {
+            !contains_pattern
+        } else {
+            contains_pattern
+        };
+
+        if should_delete {
+            delete_count += 1;
+        } else {
+            lines_to_keep.push(line_text);
+        }
+    }
+
+    if delete_count == 0 {
+        return (buffer.clone(), 0);
+    }
+
+    // Build new content from kept lines
+    let new_content = if lines_to_keep.is_empty() {
+        String::new()
+    } else {
+        lines_to_keep.join("\n")
+    };
+
+    let new_buffer = Buffer {
+        id: buffer.id,
+        rope: Rope::from_str(&new_content),
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    };
+
+    (new_buffer, delete_count)
+}
+
 /// Converts a (line, column) position to a character index in the rope.
 ///
 /// Clamps the line to the last line and the column to the line length.
@@ -1539,5 +1594,58 @@ mod tests {
         let (result, count) = super::substitute_all(&buffer, "aa", "xx");
         assert_eq!(super::content(&result), "xx bb xx\nxx cc");
         assert_eq!(count, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests: delete_lines_matching (for :g/pattern/d and :v/pattern/d)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_matching_lines_when_delete_lines_matching_then_matching_removed() {
+        // :g/TODO/d on 5-line buffer with 2 TODOs -> 3 lines remain
+        let buffer = super::Buffer::from_string(
+            "keep this\nTODO: fix bug\nanother line\nTODO: refactor\nfinal line",
+        );
+        let (result, count) = super::delete_lines_matching(&buffer, "TODO", false);
+        assert_eq!(count, 2);
+        assert_eq!(
+            super::content(&result),
+            "keep this\nanother line\nfinal line"
+        );
+    }
+
+    #[test]
+    fn given_buffer_when_delete_lines_matching_inverted_then_non_matching_removed() {
+        // :v/keep/d keeps only lines with "keep"
+        let buffer = super::Buffer::from_string("keep this\nremove me\nkeep that\ndelete me");
+        let (result, count) = super::delete_lines_matching(&buffer, "keep", true);
+        assert_eq!(count, 2);
+        assert_eq!(super::content(&result), "keep this\nkeep that");
+    }
+
+    #[test]
+    fn given_buffer_with_no_matching_lines_when_delete_lines_matching_then_unchanged() {
+        // :g/pattern/d with no matches -> no change
+        let buffer = super::Buffer::from_string("hello\nworld\nfoo");
+        let (result, count) = super::delete_lines_matching(&buffer, "NOMATCH", false);
+        assert_eq!(count, 0);
+        assert_eq!(super::content(&result), "hello\nworld\nfoo");
+    }
+
+    #[test]
+    fn given_buffer_when_all_lines_match_then_buffer_becomes_empty() {
+        // Pattern matches all lines -> buffer becomes empty
+        let buffer = super::Buffer::from_string("aaa\naaa\naaa");
+        let (result, count) = super::delete_lines_matching(&buffer, "aaa", false);
+        assert_eq!(count, 3);
+        assert_eq!(super::content(&result), "");
+    }
+
+    #[test]
+    fn given_single_line_buffer_when_matching_delete_then_buffer_becomes_empty() {
+        let buffer = super::Buffer::from_string("only line");
+        let (result, count) = super::delete_lines_matching(&buffer, "only", false);
+        assert_eq!(count, 1);
+        assert_eq!(super::content(&result), "");
     }
 }
