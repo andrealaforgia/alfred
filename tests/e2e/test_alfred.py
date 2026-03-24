@@ -3227,32 +3227,150 @@ class TestFolderBrowser:
         import shutil
         shutil.rmtree(tmpdir)
 
-    def test_browse_and_open_file(self):
-        """Browse a directory, navigate to a file, open it, edit, and save."""
+    def test_browse_and_open_file_then_save(self):
+        """Browse a directory, open a file, edit it, save, and verify content."""
+        import shutil
+
         tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        target_file = os.path.join(tmpdir, "target.txt")
-        with open(target_file, "w") as f:
-            f.write("original content\n")
+        # Create a known structure: one subdir, two files
+        # Sorted order will be: ../, subdir/, aaa.txt, zzz.txt
+        os.mkdir(os.path.join(tmpdir, "subdir"))
+        target = os.path.join(tmpdir, "aaa.txt")
+        with open(target, "w") as f:
+            f.write("original\n")
+        with open(os.path.join(tmpdir, "zzz.txt"), "w") as f:
+            f.write("other\n")
 
         child = spawn_alfred(tmpdir)
 
-        # Navigate down to find the file (entries are sorted: dirs first, then files)
-        # Press j a few times then Enter to open
-        for _ in range(5):
-            send_keys(child, "j")
-            time.sleep(0.1)
+        # Sorted entries: ../ (0), subdir/ (1), aaa.txt (2), zzz.txt (3)
+        # Navigate to aaa.txt: j j (cursor starts at 0 = ../)
+        send_keys(child, "j")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.1)
 
-        # Press Enter to open whatever is selected
+        # Open the file with Enter
         child.send("\r")
-        time.sleep(0.5)
+        time.sleep(1.0)
 
-        # Now we should be in editor mode — quit without saving
-        send_colon_command(child, "q")
+        # Now in editor mode — go to insert mode and add text
+        send_keys(child, "A")  # append at end of line
+        time.sleep(0.2)
+        send_keys(child, " EDITED")
+        time.sleep(0.2)
+
+        # Escape to normal mode, then save and quit
+        child.send("\x1b")
+        time.sleep(0.3)
+        send_colon_command(child, "wq")
         exit_code = wait_for_exit(child)
 
-        assert exit_code == 0, f"Expected clean exit after browse+open, got {exit_code}"
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
 
+        saved = read_file(target)
+        assert "EDITED" in saved, \
+            f"Expected 'EDITED' in saved file after browse+edit, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_browse_enter_subdirectory_and_go_back(self):
+        """Enter a subdirectory, then navigate back to parent."""
         import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        subdir = os.path.join(tmpdir, "src")
+        os.mkdir(subdir)
+        with open(os.path.join(subdir, "main.rs"), "w") as f:
+            f.write("fn main() {}\n")
+        with open(os.path.join(tmpdir, "README.md"), "w") as f:
+            f.write("# Hello\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Sorted: ../ (0), src/ (1), README.md (2)
+        # Navigate to src/ and enter it
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\r")  # Enter src/
+        time.sleep(0.5)
+
+        # Now inside src/ — entries: ../ (0), main.rs (1)
+        # Go back to parent with h
+        send_keys(child, "h")
+        time.sleep(0.5)
+
+        # Should be back in tmpdir — navigate to README.md and open it
+        # Sorted: ../ (0), src/ (1), README.md (2)
+        send_keys(child, "j")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\r")  # Open README.md
+        time.sleep(1.0)
+
+        # Now in editor — save to verify we opened the right file
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+        # Verify README.md content is intact
+        readme_content = read_file(os.path.join(tmpdir, "README.md"))
+        assert "# Hello" in readme_content, \
+            f"Expected README.md content after browse+subdir+back+open, got: {readme_content!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_browse_quit_with_q(self):
+        """Pressing q in browser mode exits Alfred cleanly."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        with open(os.path.join(tmpdir, "file.txt"), "w") as f:
+            f.write("content\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Press q to quit from browser
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit with q, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_browse_jump_first_and_last(self):
+        """g jumps to first entry, G jumps to last, then open last file."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
+        # Create several files so there's something to jump across
+        for name in ["aaa.txt", "bbb.txt", "ccc.txt", "ddd.txt"]:
+            with open(os.path.join(tmpdir, name), "w") as f:
+                f.write(f"{name} content\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Jump to last with G
+        send_keys(child, "G")
+        time.sleep(0.2)
+
+        # Open last entry (should be ddd.txt)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Save to verify correct file
+        target = os.path.join(tmpdir, "ddd.txt")
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(target)
+        assert "ddd.txt content" in saved, \
+            f"Expected ddd.txt content (last file), got: {saved!r}"
+
         shutil.rmtree(tmpdir)
 
 
