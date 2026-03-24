@@ -86,99 +86,13 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
 /// Registers rendering-control primitives into the runtime.
 ///
 /// After calling this, the following Lisp functions become available:
-/// - `(set-status-bar text)` -- sets the status bar content string
-/// - `(set-gutter-line row text)` -- sets the gutter content for a viewport row
-/// - `(set-gutter-width width)` -- sets the gutter width in columns
 /// - `(viewport-top-line)` -- returns the first visible line number (0-indexed)
 /// - `(viewport-height)` -- returns the number of visible lines
 pub fn register_rendering_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
-    register_set_status_bar(env.clone(), state.clone());
-    register_set_gutter_line(env.clone(), state.clone());
-    register_set_gutter_width(env.clone(), state.clone());
     register_viewport_top_line(env.clone(), state.clone());
     register_viewport_height(env, state);
-}
-
-/// Registers `set-status-bar`: sets the status bar content string.
-///
-/// Usage: `(set-status-bar "text")`
-///
-/// The renderer reads `state.status_bar_content` and displays it directly.
-fn register_set_status_bar(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    define_native_closure(&env, "set-status-bar", move |_env, args| {
-        let text = extract_string_arg(&args, "set-status-bar")?;
-        let mut editor = state.borrow_mut();
-        editor.status_bar_content = Some(text);
-        Ok(Value::NIL)
-    });
-}
-
-/// Registers `set-gutter-line`: sets the gutter content for a viewport row.
-///
-/// Usage: `(set-gutter-line row "text")`
-///
-/// Row is a 0-based index into the viewport (not a buffer line number).
-fn register_set_gutter_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    define_native_closure(&env, "set-gutter-line", move |_env, args| {
-        let row = match args.first() {
-            Some(Value::Int(n)) => *n as usize,
-            Some(other) => {
-                return Err(RuntimeError {
-                    msg: format!("set-gutter-line: expected integer for row, got {}", other),
-                });
-            }
-            None => {
-                return Err(RuntimeError {
-                    msg: "set-gutter-line: expected 2 arguments (row, text), got 0".to_string(),
-                });
-            }
-        };
-        let text = match args.get(1) {
-            Some(Value::String(s)) => s.clone(),
-            Some(other) => {
-                return Err(RuntimeError {
-                    msg: format!("set-gutter-line: expected string for text, got {}", other),
-                });
-            }
-            None => {
-                return Err(RuntimeError {
-                    msg: "set-gutter-line: expected 2 arguments (row, text), got 1".to_string(),
-                });
-            }
-        };
-        let mut editor = state.borrow_mut();
-        editor.gutter_lines.insert(row, text);
-        Ok(Value::NIL)
-    });
-}
-
-/// Registers `set-gutter-width`: sets the gutter width in columns.
-///
-/// Usage: `(set-gutter-width width)`
-fn register_set_gutter_width(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    define_native_closure(&env, "set-gutter-width", move |_env, args| {
-        let width = match args.first() {
-            Some(Value::Int(n)) => *n as u16,
-            Some(other) => {
-                return Err(RuntimeError {
-                    msg: format!(
-                        "set-gutter-width: expected integer for width, got {}",
-                        other
-                    ),
-                });
-            }
-            None => {
-                return Err(RuntimeError {
-                    msg: "set-gutter-width: expected 1 argument (width), got 0".to_string(),
-                });
-            }
-        };
-        let mut editor = state.borrow_mut();
-        editor.viewport.gutter_width = width;
-        Ok(Value::NIL)
-    });
 }
 
 /// Registers `viewport-top-line`: returns the first visible line number (0-indexed).
@@ -1063,30 +977,20 @@ fn register_load_theme(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     });
 }
 
-/// Registers Rainbow CSV primitives into the runtime.
+/// Registers buffer and line-style primitives into the runtime.
 ///
 /// After calling this, the following Lisp functions become available:
-/// - `(rainbow-csv-colorize)` -- parses the current buffer as CSV and sets line_styles
 /// - `(clear-line-styles)` -- clears all per-line style segments
+/// - `(set-line-style line start end color)` -- adds a color segment for a line
 /// - `(buffer-line-count)` -- returns the number of lines in the buffer
 /// - `(buffer-get-line n)` -- returns the text content of line n (0-indexed)
-pub fn register_rainbow_csv_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+pub fn register_buffer_style_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
-    register_rainbow_csv_colorize(env.clone(), state.clone());
     register_clear_line_styles(env.clone(), state.clone());
     register_set_line_style(env.clone(), state.clone());
     register_buffer_line_count(env.clone(), state.clone());
     register_buffer_get_line(env, state);
-}
-
-/// Registers `rainbow-csv-colorize`: parses the buffer as CSV and sets line_styles.
-fn register_rainbow_csv_colorize(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
-    define_native_closure(&env, "rainbow-csv-colorize", move |_env, _args| {
-        let mut editor = state.borrow_mut();
-        alfred_core::rainbow_csv::colorize_buffer(&mut editor);
-        Ok(Value::String("CSV colorized".to_string()))
-    });
 }
 
 /// Registers `clear-line-styles`: clears all per-line style segments.
@@ -3862,46 +3766,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Acceptance test: rainbow-csv-colorize sets line_styles via Lisp bridge
+    // Buffer style primitives: clear-line-styles, set-line-style,
+    // buffer-line-count, buffer-get-line
     // Test Budget: 4 behaviors x 2 = 8 max
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_csv_buffer_when_rainbow_csv_colorize_evaluated_then_line_styles_populated() {
-        // Given: an editor state with CSV content
-        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
-        {
-            let mut editor = state.borrow_mut();
-            editor.buffer = alfred_core::buffer::Buffer::from_string("name,age\nalice,30");
-        }
-
-        // And: a runtime with rainbow-csv primitives registered
-        let runtime = LispRuntime::new();
-        register_rainbow_csv_primitives(&runtime, state.clone());
-
-        // When: rainbow-csv-colorize is evaluated
-        let result = runtime.eval("(rainbow-csv-colorize)").unwrap();
-        assert_eq!(*result.inner(), Value::String("CSV colorized".to_string()));
-
-        // Then: line_styles has entries for both lines
-        let editor = state.borrow();
-        assert!(
-            editor.line_styles.contains_key(&0),
-            "line 0 should have styles"
-        );
-        assert!(
-            editor.line_styles.contains_key(&1),
-            "line 1 should have styles"
-        );
-        // Line 0: "name,age" => 2 segments
-        assert_eq!(editor.line_styles[&0].len(), 2);
-        // Line 1: "alice,30" => 2 segments
-        assert_eq!(editor.line_styles[&1].len(), 2);
-    }
-
-    #[test]
-    fn given_colorized_buffer_when_clear_line_styles_evaluated_then_line_styles_empty() {
-        // Given: an editor state with CSV content already colorized
+    fn given_styled_buffer_when_clear_line_styles_evaluated_then_line_styles_empty() {
+        // Given: an editor state with line styles applied
         let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
         {
             let mut editor = state.borrow_mut();
@@ -3909,9 +3781,10 @@ mod tests {
         }
 
         let runtime = LispRuntime::new();
-        register_rainbow_csv_primitives(&runtime, state.clone());
+        register_buffer_style_primitives(&runtime, state.clone());
 
-        runtime.eval("(rainbow-csv-colorize)").unwrap();
+        // Add a style segment via the primitive
+        runtime.eval("(set-line-style 0 0 1 \"#ff6b6b\")").unwrap();
         assert!(!state.borrow().line_styles.is_empty());
 
         // When: clear-line-styles is evaluated
@@ -3930,7 +3803,7 @@ mod tests {
         }
 
         let runtime = LispRuntime::new();
-        register_rainbow_csv_primitives(&runtime, state.clone());
+        register_buffer_style_primitives(&runtime, state.clone());
 
         let result = runtime.eval("(buffer-line-count)").unwrap();
         assert_eq!(*result.inner(), Value::Int(3));
@@ -3945,7 +3818,7 @@ mod tests {
         }
 
         let runtime = LispRuntime::new();
-        register_rainbow_csv_primitives(&runtime, state.clone());
+        register_buffer_style_primitives(&runtime, state.clone());
 
         let result = runtime.eval("(buffer-get-line 0)").unwrap();
         assert_eq!(*result.inner(), Value::String("hello".to_string()));
@@ -4563,7 +4436,7 @@ mod tests {
 
         let runtime = LispRuntime::new();
         register_core_primitives(&runtime, state.clone());
-        register_rainbow_csv_primitives(&runtime, state.clone());
+        register_buffer_style_primitives(&runtime, state.clone());
 
         let result = runtime.eval("(buffer-line-count)").unwrap();
         assert_eq!(result.as_integer(), Some(3));
@@ -4607,7 +4480,7 @@ mod tests {
         register_hook_primitives(&runtime, state.clone());
         register_keymap_primitives(&runtime, state.clone());
         register_theme_primitives(&runtime, state.clone());
-        register_rainbow_csv_primitives(&runtime, state.clone());
+        register_buffer_style_primitives(&runtime, state.clone());
 
         // And: the actual rainbow-csv plugin is loaded from disk
         let plugin_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -4667,43 +4540,6 @@ mod tests {
         register_core_primitives(&runtime, state.clone());
         register_rendering_primitives(&runtime, state.clone());
         (runtime, state)
-    }
-
-    #[test]
-    fn given_runtime_when_set_status_bar_evaluated_then_status_bar_content_is_set() {
-        let (runtime, state) = create_rendering_test_runtime();
-
-        runtime
-            .eval("(set-status-bar \" file.txt  Ln 1, Col 1  NORMAL \")")
-            .unwrap();
-
-        let editor = state.borrow();
-        assert_eq!(
-            editor.status_bar_content,
-            Some(" file.txt  Ln 1, Col 1  NORMAL ".to_string())
-        );
-    }
-
-    #[test]
-    fn given_runtime_when_set_gutter_line_evaluated_then_gutter_lines_map_is_updated() {
-        let (runtime, state) = create_rendering_test_runtime();
-
-        runtime.eval("(set-gutter-line 0 \"  1 \")").unwrap();
-        runtime.eval("(set-gutter-line 1 \"  2 \")").unwrap();
-
-        let editor = state.borrow();
-        assert_eq!(editor.gutter_lines.get(&0), Some(&"  1 ".to_string()));
-        assert_eq!(editor.gutter_lines.get(&1), Some(&"  2 ".to_string()));
-    }
-
-    #[test]
-    fn given_runtime_when_set_gutter_width_evaluated_then_viewport_gutter_width_is_updated() {
-        let (runtime, state) = create_rendering_test_runtime();
-
-        runtime.eval("(set-gutter-width 4)").unwrap();
-
-        let editor = state.borrow();
-        assert_eq!(editor.viewport.gutter_width, 4);
     }
 
     #[test]
