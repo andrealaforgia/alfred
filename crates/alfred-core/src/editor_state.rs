@@ -114,6 +114,12 @@ pub struct EditorState {
     pub macro_replaying: bool,
     /// The register of the last played macro, for `@@` (repeat last macro).
     pub last_macro_register: Option<char>,
+    /// Jump list: history of cursor positions before "jump" commands (search, marks, gg, G, etc.).
+    /// Ctrl-o navigates backward, Ctrl-i navigates forward.
+    pub jump_list: Vec<Cursor>,
+    /// Current index into the jump list. Points one past the last entry when at the end
+    /// (i.e., no more forward jumps). Decremented by jump-back, incremented by jump-forward.
+    pub jump_index: usize,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1072,6 +1078,23 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Jump list navigation: Ctrl-o (back) and Ctrl-i (forward) ---
+    crate::command::register(
+        &mut state.commands,
+        "jump-back".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            jump_back(s);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "jump-forward".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            jump_forward(s);
+            Ok(())
+        }),
+    );
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -1242,6 +1265,108 @@ pub fn redo(state: &mut EditorState) {
     }
 }
 
+/// Maximum number of entries in the jump list.
+/// When exceeded, the oldest entries are removed.
+const JUMP_LIST_MAX_SIZE: usize = 100;
+
+/// Pushes the current cursor position onto the jump list before a jump command.
+///
+/// If the jump index is not at the end of the list (i.e., the user has navigated
+/// backward with jump-back), all entries after jump_index are truncated before
+/// pushing. This matches Vim behavior: making a new jump after going back
+/// discards the forward history.
+///
+/// Duplicate consecutive positions are suppressed: if the current cursor
+/// matches the last entry in the (possibly truncated) jump list, no push occurs.
+///
+/// The jump list is capped at `JUMP_LIST_MAX_SIZE`. When the cap is reached,
+/// the oldest entry is removed.
+pub fn push_jump(state: &mut EditorState) {
+    let current = state.cursor;
+
+    // Truncate any forward history beyond jump_index
+    state.jump_list.truncate(state.jump_index);
+
+    // Suppress duplicate consecutive entries
+    if state.jump_list.last() == Some(&current) {
+        return;
+    }
+
+    state.jump_list.push(current);
+
+    // Enforce max size by removing oldest entries
+    if state.jump_list.len() > JUMP_LIST_MAX_SIZE {
+        let excess = state.jump_list.len() - JUMP_LIST_MAX_SIZE;
+        state.jump_list.drain(0..excess);
+    }
+
+    state.jump_index = state.jump_list.len();
+}
+
+/// Navigates backward through the jump list (Ctrl-o).
+///
+/// Decrements jump_index and moves the cursor to the position at that index.
+/// If already at the beginning (jump_index == 0), this is a no-op.
+///
+/// On the first backward jump from the end, the current cursor position is
+/// saved so Ctrl-i can return to it.
+pub fn jump_back(state: &mut EditorState) {
+    if state.jump_list.is_empty() || state.jump_index == 0 {
+        return;
+    }
+
+    // If at the end, save current position so forward can return here
+    if state.jump_index == state.jump_list.len() {
+        let current = state.cursor;
+        // Only push if different from last entry
+        if state.jump_list.last() != Some(&current) {
+            state.jump_list.push(current);
+            // Do NOT advance jump_index here -- we want the decrement below
+            // to skip past the just-saved current position and land on the
+            // actual "back" entry.
+        }
+    }
+
+    state.jump_index -= 1;
+    state.cursor = state.jump_list[state.jump_index];
+    state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Navigates forward through the jump list (Ctrl-i).
+///
+/// Increments jump_index and moves the cursor to the position at that index.
+/// If already at the end (jump_index >= jump_list.len() - 1), this is a no-op.
+pub fn jump_forward(state: &mut EditorState) {
+    if state.jump_index + 1 >= state.jump_list.len() {
+        return;
+    }
+
+    state.jump_index += 1;
+    state.cursor = state.jump_list[state.jump_index];
+    state.viewport = crate::viewport::adjust(state.viewport, &state.cursor);
+}
+
+/// Returns the set of command names that are considered "jump" commands.
+///
+/// Before any of these commands execute, the current cursor position should
+/// be pushed onto the jump list. This is a pure function returning a static
+/// set of known jump command names.
+pub fn is_jump_command(command_name: &str) -> bool {
+    matches!(
+        command_name,
+        "search-next"
+            | "search-prev"
+            | "cursor-document-start"
+            | "cursor-document-end"
+            | "cursor-screen-top"
+            | "cursor-screen-middle"
+            | "cursor-screen-bottom"
+            | "scroll-half-page-down"
+            | "scroll-half-page-up"
+            | "match-bracket"
+    )
+}
+
 pub fn new(width: u16, height: u16) -> EditorState {
     let mut cursor_shapes = HashMap::new();
     cursor_shapes.insert(MODE_NORMAL.to_string(), "block".to_string());
@@ -1278,6 +1403,8 @@ pub fn new(width: u16, height: u16) -> EditorState {
         macro_buffer: Vec::new(),
         macro_replaying: false,
         last_macro_register: None,
+        jump_list: Vec::new(),
+        jump_index: 0,
     }
 }
 
@@ -2698,6 +2825,247 @@ mod tests {
         assert_eq!(buffer::content(&state.buffer), "first\nnew line\nsecond");
         // Cursor on the pasted line
         assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Jump list: push_jump, jump_back, jump_forward
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_empty_jump_list_when_jump_back_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+        state.cursor = crate::cursor::new(1, 0);
+
+        editor_state::jump_back(&mut state);
+
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_empty_jump_list_when_jump_forward_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+        state.cursor = crate::cursor::new(1, 0);
+
+        editor_state::jump_forward(&mut state);
+
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_one_push_when_jump_back_then_cursor_returns_to_pushed_position() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Start at (0, 0), push jump, then move cursor
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(2, 5);
+
+        // Jump back should return to (0, 0)
+        editor_state::jump_back(&mut state);
+
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_multiple_pushes_when_jump_back_twice_then_walks_backward() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Push position (0,0)
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+
+        // Push position (1,3)
+        state.cursor = crate::cursor::new(1, 3);
+        editor_state::push_jump(&mut state);
+
+        // Now at some other position
+        state.cursor = crate::cursor::new(2, 5);
+
+        // Jump back once -> (1,3)
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 3);
+
+        // Jump back again -> (0,0)
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_jump_back_when_jump_forward_then_returns_to_previous_position() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Push position (0,0), move to (2,0)
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Jump back -> (0,0)
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+
+        // Jump forward -> (2,0) (the saved current position)
+        editor_state::jump_forward(&mut state);
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_at_end_of_jump_list_when_jump_forward_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two");
+
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(1, 0);
+
+        // Already at the end; jump_forward should be no-op
+        editor_state::jump_forward(&mut state);
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_at_beginning_of_jump_list_when_jump_back_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Jump back to (0,0)
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+
+        // Jump back again: already at beginning, no-op
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_jump_back_then_new_push_truncates_forward_history() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+
+        // Push (0,0) and (1,0)
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(1, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Jump back to (1,0)
+        editor_state::jump_back(&mut state);
+        assert_eq!(state.cursor.line, 1);
+
+        // Now push a new position -- forward history (2,0) should be discarded
+        state.cursor = crate::cursor::new(1, 5);
+        editor_state::push_jump(&mut state);
+
+        // Jump forward should be no-op (forward history truncated)
+        state.cursor = crate::cursor::new(2, 0);
+        editor_state::jump_forward(&mut state);
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_duplicate_consecutive_positions_when_push_jump_then_suppressed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two");
+
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        editor_state::push_jump(&mut state); // duplicate, should be suppressed
+        editor_state::push_jump(&mut state); // still duplicate
+
+        assert_eq!(state.jump_list.len(), 1);
+    }
+
+    #[test]
+    fn given_jump_list_at_max_size_when_push_then_oldest_removed() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string(
+            &(0..110)
+                .map(|i| format!("line {}", i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+
+        // Push 100 positions (the max)
+        for i in 0..100 {
+            state.cursor = crate::cursor::new(i, 0);
+            editor_state::push_jump(&mut state);
+        }
+        assert_eq!(state.jump_list.len(), 100);
+        // First entry should be (0, 0)
+        assert_eq!(state.jump_list[0].line, 0);
+
+        // Push one more -- should evict the oldest
+        state.cursor = crate::cursor::new(100, 0);
+        editor_state::push_jump(&mut state);
+        assert_eq!(state.jump_list.len(), 100);
+        // First entry should now be (1, 0) -- (0, 0) was evicted
+        assert_eq!(state.jump_list[0].line, 1);
+    }
+
+    #[test]
+    fn given_known_jump_commands_when_is_jump_command_then_returns_true() {
+        assert!(editor_state::is_jump_command("search-next"));
+        assert!(editor_state::is_jump_command("search-prev"));
+        assert!(editor_state::is_jump_command("cursor-document-start"));
+        assert!(editor_state::is_jump_command("cursor-document-end"));
+        assert!(editor_state::is_jump_command("cursor-screen-top"));
+        assert!(editor_state::is_jump_command("cursor-screen-middle"));
+        assert!(editor_state::is_jump_command("cursor-screen-bottom"));
+        assert!(editor_state::is_jump_command("scroll-half-page-down"));
+        assert!(editor_state::is_jump_command("scroll-half-page-up"));
+        assert!(editor_state::is_jump_command("match-bracket"));
+    }
+
+    #[test]
+    fn given_non_jump_commands_when_is_jump_command_then_returns_false() {
+        assert!(!editor_state::is_jump_command("cursor-up"));
+        assert!(!editor_state::is_jump_command("cursor-down"));
+        assert!(!editor_state::is_jump_command("cursor-left"));
+        assert!(!editor_state::is_jump_command("cursor-right"));
+        assert!(!editor_state::is_jump_command("enter-insert-mode"));
+        assert!(!editor_state::is_jump_command("jump-back"));
+        assert!(!editor_state::is_jump_command("jump-forward"));
+    }
+
+    #[test]
+    fn given_jump_back_and_forward_registered_when_executed_then_navigate_jump_list() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = crate::buffer::Buffer::from_string("line one\nline two\nline three");
+        editor_state::register_builtin_commands(&mut state);
+
+        // Push position (0, 0), then simulate a jump to (2, 0)
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::push_jump(&mut state);
+        state.cursor = crate::cursor::new(2, 0);
+
+        // Execute jump-back command
+        command::execute(&mut state, "jump-back").unwrap();
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+
+        // Execute jump-forward command
+        command::execute(&mut state, "jump-forward").unwrap();
+        assert_eq!(state.cursor.line, 2);
         assert_eq!(state.cursor.column, 0);
     }
 }

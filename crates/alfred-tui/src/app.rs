@@ -435,6 +435,8 @@ pub(crate) fn handle_key_event(
         match key.code {
             KeyCode::Enter => {
                 if !pattern.is_empty() {
+                    // Push current position to jump list before search jump
+                    alfred_core::editor_state::push_jump(state);
                     state.search_pattern = Some(pattern.clone());
                     state.search_forward = true;
                     // Execute the forward search
@@ -533,6 +535,8 @@ pub(crate) fn handle_key_event(
     // Jump cursor to the stored mark position, or show error if not set.
     if let InputState::PendingJumpMark = input_state {
         if let KeyCode::Char(ch) = key.code {
+            // Push current position to jump list before jumping to mark
+            alfred_core::editor_state::push_jump(state);
             if let Err(msg) = alfred_core::editor_state::jump_to_mark(state, ch) {
                 state.message = Some(msg);
             }
@@ -607,6 +611,9 @@ pub(crate) fn handle_key_event(
                     replay_input_state = new_is;
                     // Execute deferred commands inline during replay
                     if let DeferredAction::ExecCommand(ref cmd_name) = action {
+                        if alfred_core::editor_state::is_jump_command(cmd_name) {
+                            alfred_core::editor_state::push_jump(state);
+                        }
                         let _ = alfred_core::command::execute(state, cmd_name);
                     }
                 }
@@ -1247,6 +1254,11 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                             state.commands.extract_handler(&cmd_name)
                         }; // borrow dropped
 
+                        // Push current cursor onto jump list before jump commands.
+                        if alfred_core::editor_state::is_jump_command(&cmd_name) {
+                            alfred_core::editor_state::push_jump(&mut state_rc.borrow_mut());
+                        }
+
                         // Capture buffer version before execution to detect mutations.
                         let version_before = state_rc.borrow().buffer.version();
 
@@ -1375,7 +1387,7 @@ mod tests {
     use alfred_core::buffer::Buffer;
     use alfred_core::cursor;
     use alfred_core::editor_state;
-    use alfred_core::key_event::{KeyCode, KeyEvent};
+    use alfred_core::key_event::{KeyCode, KeyEvent, Modifiers};
     use crossterm::event::{
         KeyCode as CtKeyCode, KeyEvent as CtKeyEvent, KeyEventKind, KeyEventState,
         KeyModifiers as CtKeyModifiers,
@@ -6802,6 +6814,253 @@ mod tests {
             super::InputState::Normal,
         );
         assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Jump list integration tests: Ctrl-o (jump-back) and Ctrl-i (jump-forward)
+    // -----------------------------------------------------------------------
+
+    fn setup_jump_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            "jump-back".to_string(),
+        );
+        keymap.insert(KeyEvent::ctrl('i'), "jump-forward".to_string());
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('m')),
+            "enter-set-mark".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('\'')),
+            "enter-jump-mark".to_string(),
+        );
+    }
+
+    #[test]
+    fn given_jump_to_mark_when_ctrl_o_then_cursor_returns_to_pre_jump_position() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two\nline three");
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // Set mark 'a' at (2, 3)
+        state.cursor = cursor::new(2, 3);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        // Move cursor to (0, 0)
+        state.cursor = cursor::new(0, 0);
+
+        // Jump to mark 'a' -- this should push (0,0) to jump list
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(state.cursor.line, 2);
+        assert_eq!(state.cursor.column, 3);
+
+        // Ctrl-o: jump back to (0, 0)
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_search_jump_when_ctrl_o_then_cursor_returns_to_pre_search_position() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("hello world\nfoo bar\nhello again");
+        state.cursor = cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // Enter search mode with '/'
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('/')),
+            "enter-search-mode".to_string(),
+        );
+
+        // Start search
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('/')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::Search(String::new()));
+
+        // Type search pattern "again"
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('g')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('i')), is);
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('n')), is);
+
+        // Press Enter to execute search
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Enter), is);
+        assert_eq!(is, super::InputState::Normal);
+
+        // Cursor should have moved to the "again" match (line 2)
+        assert_eq!(state.cursor.line, 2);
+
+        // Ctrl-o: jump back to pre-search position (0, 0)
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_multiple_jumps_when_ctrl_o_repeated_then_walks_backward_through_all() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two\nline three\nline four");
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // Set marks at different positions
+        state.cursor = cursor::new(1, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        state.cursor = cursor::new(3, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+
+        // Position at (0, 0), jump to mark 'a' -> pushes (0,0)
+        state.cursor = cursor::new(0, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(state.cursor.line, 1);
+
+        // From (1, 0), jump to mark 'b' -> pushes (1,0)
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('b')), is);
+        assert_eq!(state.cursor.line, 3);
+
+        // Ctrl-o: back to (1, 0)
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 1);
+
+        // Ctrl-o: back to (0, 0)
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 0);
+    }
+
+    #[test]
+    fn given_ctrl_o_then_ctrl_i_goes_forward() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two\nline three");
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // Set mark at (2, 0)
+        state.cursor = cursor::new(2, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('m')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+
+        // Move to (0, 0) and jump to mark -> pushes (0, 0)
+        state.cursor = cursor::new(0, 0);
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('\'')),
+            super::InputState::Normal,
+        );
+        dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(state.cursor.line, 2);
+
+        // Ctrl-o: back to (0, 0)
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 0);
+
+        // Ctrl-i: forward to (2, 0)
+        dispatch_key(&mut state, KeyEvent::ctrl('i'), super::InputState::Normal);
+        assert_eq!(state.cursor.line, 2);
+    }
+
+    #[test]
+    fn given_at_beginning_of_jump_list_when_ctrl_o_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two");
+        state.cursor = cursor::new(0, 5);
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // No jumps have been made, Ctrl-o should be a no-op
+        dispatch_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char('o'), Modifiers::ctrl()),
+            super::InputState::Normal,
+        );
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 5);
+    }
+
+    #[test]
+    fn given_at_end_of_jump_list_when_ctrl_i_then_no_op() {
+        let mut state = editor_state::new(80, 24);
+        state.buffer = Buffer::from_string("line one\nline two");
+        state.cursor = cursor::new(1, 0);
+        setup_standard_keymaps(&mut state);
+        setup_jump_keymaps(&mut state);
+
+        // Push one position, then jump-forward should be no-op (already at end)
+        alfred_core::editor_state::push_jump(&mut state);
+        state.cursor = cursor::new(0, 0);
+
+        dispatch_key(&mut state, KeyEvent::ctrl('i'), super::InputState::Normal);
+        assert_eq!(state.cursor.line, 0);
         assert_eq!(state.cursor.column, 0);
     }
 }

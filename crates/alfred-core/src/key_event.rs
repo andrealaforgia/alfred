@@ -74,6 +74,14 @@ impl KeyEvent {
             modifiers: Modifiers::none(),
         }
     }
+
+    /// Creates a KeyEvent for Ctrl + a character key.
+    pub fn ctrl(ch: char) -> Self {
+        KeyEvent {
+            code: KeyCode::Char(ch),
+            modifiers: Modifiers::ctrl(),
+        }
+    }
 }
 
 #[cfg(test)]
