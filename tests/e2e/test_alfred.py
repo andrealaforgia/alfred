@@ -1672,3 +1672,122 @@ class TestGlobalDelete:
         assert "delete" not in content, f"'delete' should be deleted, got: {repr(content)}"
         assert "keep this" in content, f"Expected 'keep this', got: {repr(content)}"
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Tab key support
+# -------------------------------------------------------------------------
+
+class TestTab:
+    """Verify Tab key inserts spaces in insert mode."""
+
+    def test_tab_inserts_4_spaces_by_default(self):
+        """Tab in insert mode inserts 4 spaces."""
+        path = create_temp_file("")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+        child.send("\t")  # Tab key
+        time.sleep(0.3)
+        send_keys(child, "hello")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "    hello", \
+            f"Expected '    hello' (4 spaces + hello), got: {repr(content)}"
+        os.unlink(path)
+
+    def test_tab_at_start_of_existing_line(self):
+        """Tab at beginning of existing text indents it."""
+        path = create_temp_file("code")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+        child.send("\t")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "    code", \
+            f"Expected '    code' (4 spaces before code), got: {repr(content)}"
+        os.unlink(path)
+
+    def test_multiple_tabs(self):
+        """Two tabs insert 8 spaces."""
+        path = create_temp_file("")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+        child.send("\t")
+        time.sleep(0.2)
+        child.send("\t")
+        time.sleep(0.2)
+        send_keys(child, "x")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "        x", \
+            f"Expected '        x' (8 spaces + x), got: {repr(content)}"
+        os.unlink(path)
+
+    def test_tab_then_undo(self):
+        """Tab + Escape + u undoes the tab insertion."""
+        path = create_temp_file("text")
+        child = spawn_alfred(path)
+
+        send_keys(child, "i")
+        time.sleep(0.3)
+        child.send("\t")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        # Undo
+        send_keys(child, "u")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "text", \
+            f"Expected 'text' after undo, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_tab_in_middle_of_line(self):
+        """Tab between words inserts 4 spaces at cursor position."""
+        path = create_temp_file("ab")
+        child = spawn_alfred(path)
+
+        # Move right once, enter insert
+        send_keys(child, "l")
+        time.sleep(0.2)
+        send_keys(child, "i")
+        time.sleep(0.3)
+        child.send("\t")
+        time.sleep(0.3)
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "a    b", \
+            f"Expected 'a    b' (a + 4 spaces + b), got: {repr(content)}"
+        os.unlink(path)
