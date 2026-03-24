@@ -63,12 +63,15 @@ fn extract_string_arg(args: &[Value], fn_name: &str) -> Result<String, RuntimeEr
 /// - `(get-cursor-shape "mode")` -- get cursor shape name for a mode
 /// - `(set-tab-width n)` -- set the number of spaces per Tab (must be >= 1)
 /// - `(get-tab-width)` -- return the current tab width as an integer
+/// - `(buffer-set-content text)` -- replace entire buffer with text (virtual display, not user content)
+/// - `(quit)` -- quit the editor (sets running to false)
 pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
     register_buffer_insert(env.clone(), state.clone());
     register_buffer_delete(env.clone(), state.clone());
     register_buffer_content(env.clone(), state.clone());
+    register_buffer_set_content(env.clone(), state.clone());
     register_cursor_position(env.clone(), state.clone());
     register_cursor_move(env.clone(), state.clone());
     register_message(env.clone(), state.clone());
@@ -80,6 +83,7 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
     register_get_cursor_shape(env.clone(), state.clone());
     register_set_tab_width(env.clone(), state.clone());
     register_get_tab_width(env.clone(), state.clone());
+    register_quit(env.clone(), state.clone());
     register_set_mode(env, state);
 }
 
@@ -520,6 +524,35 @@ fn register_buffer_content(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>
         let editor = state.borrow();
         let text = buffer::content(&editor.buffer);
         Ok(Value::String(text))
+    });
+}
+
+/// Registers `buffer-set-content`: replaces the entire buffer with the given text.
+///
+/// Usage: `(buffer-set-content "new content here")`
+///
+/// Intended for virtual displays (e.g., the folder browser), not user edits.
+/// The buffer's modified flag is set to false after replacement, since this
+/// is programmatic content (not user changes that need saving).
+/// Cursor is reset to (0,0) and viewport top_line to 0.
+fn register_buffer_set_content(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "buffer-set-content", move |_env, args| {
+        let text = extract_string_arg(&args, "buffer-set-content")?;
+        let mut editor = state.borrow_mut();
+        editor.buffer = buffer::Buffer::from_string(&text);
+        editor.cursor = cursor::new(0, 0);
+        editor.viewport.top_line = 0;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `quit`: sets `running` to false, causing the event loop to exit.
+///
+/// Usage: `(quit)`
+fn register_quit(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "quit", move |_env, _args| {
+        state.borrow_mut().running = false;
+        Ok(Value::NIL)
     });
 }
 

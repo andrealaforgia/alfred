@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::rc::Rc;
 
-use alfred_core::browser;
 use alfred_core::buffer::Buffer;
 use alfred_core::editor_state;
 use alfred_lisp::bridge;
@@ -50,23 +49,14 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     // Store the CLI argument for Lisp plugins to access
     state.borrow_mut().cli_argument = file_path.map(|s| s.to_string());
 
-    let is_directory_arg = if let Some(path_str) = file_path {
+    if let Some(path_str) = file_path {
         let path = Path::new(path_str);
-        if path.is_dir() {
-            // Directory argument: initialize browser state (mode set after plugins load)
-            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-            let entries = read_directory_entries(&canonical);
-            let browser_state = browser::new_browser_state(canonical.clone(), canonical, entries);
-            state.borrow_mut().browser = Some(browser_state);
-            true
-        } else {
+        if !path.is_dir() {
+            // File argument: load into buffer (directory handled by browse-mode plugin)
             let buffer = Buffer::from_file(path)?;
             state.borrow_mut().buffer = buffer;
-            false
         }
-    } else {
-        false
-    };
+    }
 
     // Register built-in native commands (cursor movement, delete-backward)
     editor_state::register_builtin_commands(&mut state.borrow_mut());
@@ -113,12 +103,6 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Activate browse mode AFTER plugins load (vim-keybindings sets mode to "normal")
-    if is_directory_arg {
-        let mut s = state.borrow_mut();
-        s.mode = browser::MODE_BROWSE.to_string();
-        s.active_keymaps = vec!["browse-mode".to_string()];
-    }
-
     let mut highlighter = SyntaxHighlighter::new();
     alfred_tui::app::run(&state, &runtime, &mut highlighter)?;
 
@@ -156,36 +140,6 @@ fn load_plugins(runtime: &LispRuntime) -> Vec<String> {
     let _ = reg;
 
     errors
-}
-
-/// Reads directory entries from the filesystem and converts them to DirEntry values.
-fn read_directory_entries(dir: &Path) -> Vec<browser::DirEntry> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
-    };
-
-    read_dir
-        .filter_map(|entry| entry.ok())
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let file_type = entry.file_type().ok();
-            let kind = match file_type {
-                Some(ft) if ft.is_dir() => browser::EntryKind::Directory,
-                Some(ft) if ft.is_symlink() => {
-                    let target_is_dir = entry.path().is_dir();
-                    browser::EntryKind::Symlink { target_is_dir }
-                }
-                _ => browser::EntryKind::File,
-            };
-            let is_hidden = name.starts_with('.');
-            browser::DirEntry {
-                name,
-                kind,
-                is_hidden,
-            }
-        })
-        .collect()
 }
 
 /// Computes the path to the user config file from the home directory.

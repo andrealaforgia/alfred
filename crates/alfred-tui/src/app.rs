@@ -1322,124 +1322,6 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 // I/O: event loop
 // ---------------------------------------------------------------------------
 
-/// Handles browser-enter: open file or enter directory.
-fn handle_browser_enter(state_rc: &Rc<RefCell<EditorState>>, highlighter: &mut SyntaxHighlighter) {
-    use alfred_core::browser;
-
-    let (entry_kind, entry_path) = {
-        let state = state_rc.borrow();
-        let bs = match &state.browser {
-            Some(bs) => bs,
-            None => return,
-        };
-        let entry = match browser::current_entry(bs) {
-            Some(e) => e,
-            None => return,
-        };
-        let path = browser::current_entry_path(bs).unwrap_or_default();
-        (entry.kind.clone(), path)
-    };
-
-    if browser::is_directory_entry(&alfred_core::browser::DirEntry {
-        name: String::new(),
-        kind: entry_kind.clone(),
-        is_hidden: false,
-    }) {
-        // Enter directory
-        if !entry_path.is_dir() {
-            state_rc.borrow_mut().message =
-                Some(format!("Not a directory: {}", entry_path.display()));
-            return;
-        }
-        let new_entries = read_directory_entries_tui(&entry_path);
-        let mut state = state_rc.borrow_mut();
-        if let Some(ref mut bs) = state.browser {
-            browser::enter_directory(bs, entry_path, new_entries);
-        }
-    } else {
-        // Open file
-        match alfred_core::buffer::Buffer::from_file(&entry_path) {
-            Ok(new_buffer) => {
-                let filename = new_buffer.filename().unwrap_or("unknown").to_string();
-                {
-                    let mut state = state_rc.borrow_mut();
-                    state.buffer = new_buffer;
-                    state.cursor = alfred_core::cursor::new(0, 0);
-                    state.viewport.top_line = 0;
-                    state.browser = None;
-                    state.mode = alfred_core::editor_state::MODE_NORMAL.to_string();
-                    state.active_keymaps = vec!["normal-mode".to_string()];
-                    state.message = Some(format!("\"{}\"", filename));
-                }
-                // Initialize syntax highlighting for the opened file
-                highlighter.set_language_for_file(&filename);
-                let source = alfred_core::buffer::content(&state_rc.borrow().buffer);
-                highlighter.parse(&source);
-            }
-            Err(e) => {
-                state_rc.borrow_mut().message = Some(format!("{}", e));
-            }
-        }
-    }
-}
-
-/// Handles browser-parent: navigate to parent directory.
-fn handle_browser_parent(state_rc: &Rc<RefCell<EditorState>>) {
-    use alfred_core::browser;
-
-    let parent_dir = {
-        let state = state_rc.borrow();
-        let bs = match &state.browser {
-            Some(bs) => bs,
-            None => return,
-        };
-        match bs.current_dir.parent() {
-            Some(p) => p.to_path_buf(),
-            None => return, // already at root
-        }
-    };
-
-    if !parent_dir.is_dir() {
-        return;
-    }
-
-    let parent_entries = read_directory_entries_tui(&parent_dir);
-    let mut state = state_rc.borrow_mut();
-    if let Some(ref mut bs) = state.browser {
-        browser::go_to_parent(bs, parent_dir, parent_entries);
-    }
-}
-
-/// Reads directory entries from the filesystem for the TUI event loop.
-fn read_directory_entries_tui(dir: &std::path::Path) -> Vec<alfred_core::browser::DirEntry> {
-    let read_dir = match std::fs::read_dir(dir) {
-        Ok(rd) => rd,
-        Err(_) => return Vec::new(),
-    };
-
-    read_dir
-        .filter_map(|entry| entry.ok())
-        .map(|entry| {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let file_type = entry.file_type().ok();
-            let kind = match file_type {
-                Some(ft) if ft.is_dir() => alfred_core::browser::EntryKind::Directory,
-                Some(ft) if ft.is_symlink() => {
-                    let target_is_dir = entry.path().is_dir();
-                    alfred_core::browser::EntryKind::Symlink { target_is_dir }
-                }
-                _ => alfred_core::browser::EntryKind::File,
-            };
-            let is_hidden = name.starts_with('.');
-            alfred_core::browser::DirEntry {
-                name,
-                kind,
-                is_hidden,
-            }
-        })
-        .collect()
-}
-
 /// Applies syntax highlighting to the visible lines by querying the highlighter
 /// and writing results into `EditorState.line_styles`.
 ///
@@ -1646,12 +1528,6 @@ pub fn run(
                 match deferred {
                     DeferredAction::Eval(expr) => {
                         eval_and_display(state_rc, runtime, &expr);
-                    }
-                    DeferredAction::ExecCommand(cmd_name) if cmd_name == "browser-enter" => {
-                        handle_browser_enter(state_rc, highlighter);
-                    }
-                    DeferredAction::ExecCommand(cmd_name) if cmd_name == "browser-parent" => {
-                        handle_browser_parent(state_rc);
                     }
                     DeferredAction::ExecCommand(cmd_name) => {
                         // Extract handler from registry, dropping the borrow BEFORE calling.

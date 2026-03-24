@@ -9,7 +9,6 @@
 
 use std::io;
 
-use alfred_core::browser;
 use alfred_core::buffer;
 use alfred_core::editor_state::{self, EditorState};
 use alfred_core::panel::{self, PanelPosition};
@@ -88,13 +87,8 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
             }
         }
 
-        // Render content: browser view or buffer content
-        if state.mode == browser::MODE_BROWSE {
-            // Browser mode: render directory listing in full content area (no gutter)
-            let browser_lines = collect_browser_lines(state, content_area.height as usize);
-            let browser_widget = Paragraph::new(browser_lines);
-            frame.render_widget(browser_widget, content_area);
-        } else if total_left_width > 0 {
+        // Render content: left panels + buffer
+        if total_left_width > 0 {
             let (gutter_area, buffer_area) = split_gutter_and_text(content_area, total_left_width);
 
             // Render each left panel
@@ -270,68 +264,6 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
         .collect()
 }
 
-/// Collects lines for the folder browser view.
-///
-/// Shows the current directory path as a header, then directory entries
-/// with the cursor-highlighted entry styled with reversed colors.
-fn collect_browser_lines(state: &EditorState, visible_height: usize) -> Vec<Line<'static>> {
-    let browser_state = match &state.browser {
-        Some(bs) => bs,
-        None => return vec![Line::raw("No browser state".to_string())],
-    };
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Header: current directory path
-    let header = format!(" {}", browser_state.current_dir.to_string_lossy());
-    let header_style = Style::default()
-        .fg(Color::Rgb(137, 180, 250))
-        .add_modifier(ratatui::style::Modifier::BOLD);
-    lines.push(Line::from(Span::styled(header, header_style)));
-
-    // Separator
-    lines.push(Line::raw("".to_string()));
-
-    // Entry lines
-    let entries_height = visible_height.saturating_sub(2); // header + separator
-    let entries = browser::visible_entries(browser_state, entries_height);
-    let offset = browser_state.scroll_offset;
-
-    for (i, entry) in entries.iter().enumerate() {
-        let display_idx = offset + i;
-        let name = browser::display_name(entry);
-        let is_cursor = display_idx == browser_state.cursor_index;
-
-        let style = if is_cursor {
-            Style::default()
-                .fg(Color::Rgb(30, 30, 46))
-                .bg(Color::Rgb(137, 180, 250))
-        } else if browser::is_directory_entry(entry) {
-            Style::default().fg(Color::Rgb(137, 180, 250))
-        } else {
-            Style::default().fg(Color::Rgb(205, 214, 244))
-        };
-
-        let prefix = if is_cursor { " > " } else { "   " };
-        let text = format!("{}{}", prefix, name);
-        lines.push(Line::styled(text, style));
-    }
-
-    // Fill remaining lines if entries are fewer than visible height
-    while lines.len() < visible_height {
-        lines.push(Line::raw("".to_string()));
-    }
-
-    if browser_state.entries.is_empty() {
-        lines[2] = Line::from(Span::styled(
-            "   (empty directory)".to_string(),
-            Style::default().fg(Color::Rgb(108, 112, 134)),
-        ));
-    }
-
-    lines
-}
-
 /// Builds a ratatui Line from text and optional style segments.
 ///
 /// If segments are provided, the text is split into styled Spans where each
@@ -462,14 +394,6 @@ fn theme_color_to_ratatui(color: alfred_core::theme::ThemeColor) -> Color {
 /// `cursor.line - viewport.top_line`, and the terminal column is
 /// `cursor.column + viewport.gutter_width` (to account for gutter offset).
 fn compute_cursor_position(state: &EditorState) -> Position {
-    if state.mode == browser::MODE_BROWSE {
-        // In browse mode, place cursor at the highlighted entry row
-        // Row 0 = header, Row 1 = separator, Row 2+ = entries
-        if let Some(bs) = &state.browser {
-            let entry_row = bs.cursor_index.saturating_sub(bs.scroll_offset) + 2;
-            return Position::new(1, entry_row as u16);
-        }
-    }
     let terminal_row = state.cursor.line.saturating_sub(state.viewport.top_line) as u16;
     let terminal_column = state.cursor.column as u16 + state.viewport.gutter_width;
     Position::new(terminal_column, terminal_row)

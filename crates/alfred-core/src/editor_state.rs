@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 
-use crate::browser::BrowserState;
 use crate::buffer::Buffer;
 use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
@@ -138,8 +137,6 @@ pub struct EditorState {
     /// Generic panel registry for named screen regions managed by plugins.
     /// Panels are positioned at screen edges (top, bottom, left, right).
     pub panels: PanelRegistry,
-    /// Folder browser state. `Some` when in browse mode, `None` otherwise.
-    pub browser: Option<BrowserState>,
     /// The CLI argument (file/directory path) Alfred was started with.
     /// `None` if no argument was provided.
     pub cli_argument: Option<String>,
@@ -1135,56 +1132,6 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
-
-    // Browser commands (pure state transformations)
-    crate::command::register(
-        &mut state.commands,
-        "browser-cursor-down".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref mut bs) = s.browser {
-                crate::browser::cursor_down(bs);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "browser-cursor-up".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref mut bs) = s.browser {
-                crate::browser::cursor_up(bs);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "browser-jump-first".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref mut bs) = s.browser {
-                crate::browser::jump_first(bs);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "browser-jump-last".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref mut bs) = s.browser {
-                crate::browser::jump_last(bs);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "browser-quit".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.running = false;
-            Ok(())
-        }),
-    );
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -1547,7 +1494,6 @@ pub fn new(width: u16, height: u16) -> EditorState {
         tab_width: 4,
         line_styles: HashMap::new(),
         panels: crate::panel::new(),
-        browser: None,
         cli_argument: None,
     }
 }
