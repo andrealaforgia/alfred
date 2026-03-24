@@ -1565,3 +1565,110 @@ class TestSimpleEditing:
         content = read_file(path).rstrip("\n")
         assert content == "hello", f"Expected 'hello' unchanged, got: {repr(content)}"
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Tier 3: substitute, global delete, jump list
+# -------------------------------------------------------------------------
+
+class TestSubstitute:
+    """Verify :s search and replace."""
+
+    def test_substitute_first_on_line(self):
+        """:s/foo/bar/ replaces first occurrence only."""
+        path = create_temp_file("foo baz foo")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "s/foo/bar/")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "bar baz foo", f"Expected 'bar baz foo', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_substitute_global_on_line(self):
+        """:s/foo/bar/g replaces all occurrences on line."""
+        path = create_temp_file("foo baz foo")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "s/foo/bar/g")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "bar baz bar", f"Expected 'bar baz bar', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_substitute_whole_buffer(self):
+        """:%s/old/new/g replaces across all lines."""
+        path = create_temp_file("old line1\nold line2\nkeep")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "%s/old/new/g")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        assert "old" not in content, f"'old' should be replaced, got: {repr(content)}"
+        assert "new line1" in content, f"Expected 'new line1', got: {repr(content)}"
+        assert "keep" in content, f"'keep' should be preserved, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_substitute_delete_pattern(self):
+        """:s/remove//g deletes all occurrences."""
+        path = create_temp_file("aremovebremovec")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "s/remove//g")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "abc", f"Expected 'abc', got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestGlobalDelete:
+    """Verify :g/pattern/d (global delete)."""
+
+    def test_global_delete_matching_lines(self):
+        """:g/TODO/d removes lines containing TODO."""
+        path = create_temp_file("keep\nTODO fix\nkeep\nTODO remove\nkeep")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "g/TODO/d")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        assert "TODO" not in content, f"TODO lines should be deleted, got: {repr(content)}"
+        assert content.count("keep") == 3, f"Expected 3 'keep' lines, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_global_invert_delete(self):
+        """:v/keep/d deletes lines NOT containing 'keep'."""
+        path = create_temp_file("keep this\nremove this\nkeep that\ndelete me")
+        child = spawn_alfred(path)
+
+        send_colon_command(child, "v/keep/d")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        assert "remove" not in content, f"'remove' should be deleted, got: {repr(content)}"
+        assert "delete" not in content, f"'delete' should be deleted, got: {repr(content)}"
+        assert "keep this" in content, f"Expected 'keep this', got: {repr(content)}"
+        os.unlink(path)
