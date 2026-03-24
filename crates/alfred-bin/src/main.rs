@@ -47,6 +47,9 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
 
     let state = Rc::new(RefCell::new(editor_state::new(width, height)));
 
+    // Store the CLI argument for Lisp plugins to access
+    state.borrow_mut().cli_argument = file_path.map(|s| s.to_string());
+
     let is_directory_arg = if let Some(path_str) = file_path {
         let path = Path::new(path_str);
         if path.is_dir() {
@@ -80,6 +83,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     bridge::register_panel_primitives(&runtime, state.clone());
     bridge::register_string_primitives(&runtime);
     bridge::register_list_primitives(&runtime);
+    bridge::register_filesystem_primitives(&runtime, state.clone());
 
     // Discover and load plugins
     let plugin_errors = load_plugins(&runtime);

@@ -1961,6 +1961,174 @@ fn native_is_nil(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runt
     }
 }
 
+/// Registers filesystem primitives for the folder browser plugin.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(list-dir path)` -- list directory entries as `((name type) ...)`
+/// - `(is-dir? path)` -- returns `#t` if path is a directory
+/// - `(path-join base child)` -- joins two path components
+/// - `(path-parent path)` -- returns the parent directory of path
+/// - `(cli-argument)` -- returns the CLI argument Alfred was started with
+/// - `(open-file path)` -- opens a file into the editor buffer
+pub fn register_filesystem_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_list_dir(env.clone());
+    register_is_dir(env.clone());
+    register_path_join(env.clone());
+    register_path_parent(env.clone());
+    register_cli_argument(env.clone(), state.clone());
+    register_open_file(env, state);
+}
+
+/// Registers `list-dir`: lists directory entries sorted dirs-first then files.
+///
+/// Usage: `(list-dir "/some/path")`
+///
+/// Returns a list of `(name type)` pairs where type is `"file"`, `"dir"`, or `"symlink"`.
+/// Directories appear first (alphabetical), then files (alphabetical).
+/// Returns empty list on error (permission denied, not a directory, etc.).
+fn register_list_dir(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "list-dir", move |_env, args| {
+        let path_str = extract_string_arg(&args, "list-dir")?;
+        let path = std::path::Path::new(&path_str);
+
+        let read_dir = match std::fs::read_dir(path) {
+            Ok(rd) => rd,
+            Err(_) => return Ok(Value::List(List::NIL)),
+        };
+
+        let mut dirs: Vec<(String, String)> = Vec::new();
+        let mut files: Vec<(String, String)> = Vec::new();
+
+        for entry_result in read_dir {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            let file_type = entry.file_type().ok();
+            let type_label = match file_type {
+                Some(ft) if ft.is_dir() => "dir",
+                Some(ft) if ft.is_symlink() => "symlink",
+                _ => "file",
+            };
+
+            if type_label == "dir" {
+                dirs.push((name, type_label.to_string()));
+            } else {
+                files.push((name, type_label.to_string()));
+            }
+        }
+
+        dirs.sort_by(|a, b| a.0.cmp(&b.0));
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut all_entries: Vec<Value> = Vec::with_capacity(dirs.len() + files.len());
+        for (name, type_label) in dirs.into_iter().chain(files.into_iter()) {
+            let pair: List = vec![Value::String(name), Value::String(type_label)]
+                .into_iter()
+                .collect();
+            all_entries.push(Value::List(pair));
+        }
+
+        let result_list: List = all_entries.into_iter().collect();
+        Ok(Value::List(result_list))
+    });
+}
+
+/// Registers `is-dir?`: checks if a path is a directory.
+///
+/// Usage: `(is-dir? "/some/path")`
+///
+/// Returns `#t` if the path is a directory, `#f` (NIL) otherwise.
+fn register_is_dir(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "is-dir?", move |_env, args| {
+        let path_str = extract_string_arg(&args, "is-dir?")?;
+        let path = std::path::Path::new(&path_str);
+        if path.is_dir() {
+            Ok(Value::True)
+        } else {
+            Ok(Value::NIL)
+        }
+    });
+}
+
+/// Registers `path-join`: joins two path components.
+///
+/// Usage: `(path-join "/home" "user")` -> `"/home/user"`
+fn register_path_join(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "path-join", move |_env, args| {
+        let base = extract_string_arg_at(&args, 0, "path-join", "base")?;
+        let child = extract_string_arg_at(&args, 1, "path-join", "child")?;
+        let joined = std::path::Path::new(&base).join(&child);
+        Ok(Value::String(joined.to_string_lossy().to_string()))
+    });
+}
+
+/// Registers `path-parent`: returns the parent directory of a path.
+///
+/// Usage: `(path-parent "/home/user")` -> `"/home"`
+///
+/// Returns empty string if the path has no parent (e.g., root `/`).
+fn register_path_parent(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "path-parent", move |_env, args| {
+        let path_str = extract_string_arg(&args, "path-parent")?;
+        let path = std::path::Path::new(&path_str);
+        match path.parent() {
+            Some(parent) => Ok(Value::String(parent.to_string_lossy().to_string())),
+            None => Ok(Value::String(String::new())),
+        }
+    });
+}
+
+/// Registers `cli-argument`: returns the CLI argument Alfred was started with.
+///
+/// Usage: `(cli-argument)` -> `"/path/to/file"` or `""`
+fn register_cli_argument(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "cli-argument", move |_env, _args| {
+        let editor = state.borrow();
+        match &editor.cli_argument {
+            Some(arg) => Ok(Value::String(arg.clone())),
+            None => Ok(Value::String(String::new())),
+        }
+    });
+}
+
+/// Registers `open-file`: opens a file into the editor buffer.
+///
+/// Usage: `(open-file "/path/to/file.txt")`
+///
+/// Replaces the current buffer, resets cursor to (0,0), resets viewport,
+/// sets mode to "normal" with active keymaps `["normal-mode"]`,
+/// and sets message to the filename.
+/// On error, sets message to the error text and returns NIL.
+fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "open-file", move |_env, args| {
+        let path_str = extract_string_arg(&args, "open-file")?;
+        let path = std::path::Path::new(&path_str);
+
+        match alfred_core::buffer::Buffer::from_file(path) {
+            Ok(new_buffer) => {
+                let filename = new_buffer.filename().unwrap_or(&path_str).to_string();
+                let mut editor = state.borrow_mut();
+                editor.buffer = new_buffer;
+                editor.cursor = cursor::new(0, 0);
+                editor.viewport.top_line = 0;
+                editor.mode = "normal".to_string();
+                editor.active_keymaps = vec!["normal-mode".to_string()];
+                editor.message = Some(filename);
+                Ok(Value::NIL)
+            }
+            Err(e) => {
+                let mut editor = state.borrow_mut();
+                editor.message = Some(format!("{}", e));
+                Ok(Value::NIL)
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4719,5 +4887,250 @@ mod tests {
 
         let result = runtime.eval("(viewport-height)").unwrap();
         assert_eq!(result.as_integer(), Some(24));
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: list-dir
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_directory_with_files_and_dirs_when_list_dir_then_returns_sorted_entries_dirs_first() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create files and directories
+        std::fs::write(dir.path().join("banana.txt"), "content").unwrap();
+        std::fs::write(dir.path().join("apple.txt"), "content").unwrap();
+        std::fs::create_dir(dir.path().join("zulu_dir")).unwrap();
+        std::fs::create_dir(dir.path().join("alpha_dir")).unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(list-dir \"{}\")", dir_path))
+            .unwrap();
+
+        // Parse result: should be ((alpha_dir dir) (zulu_dir dir) (apple.txt file) (banana.txt file))
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(items.len(), 4, "Should have 4 entries");
+
+                // First two should be directories (alphabetical)
+                let first_pair: Vec<Value> = match &items[0] {
+                    Value::List(l) => l.clone().into_iter().collect(),
+                    other => panic!("Expected list, got {:?}", other),
+                };
+                assert_eq!(first_pair[0], Value::String("alpha_dir".to_string()));
+                assert_eq!(first_pair[1], Value::String("dir".to_string()));
+
+                let second_pair: Vec<Value> = match &items[1] {
+                    Value::List(l) => l.clone().into_iter().collect(),
+                    other => panic!("Expected list, got {:?}", other),
+                };
+                assert_eq!(second_pair[0], Value::String("zulu_dir".to_string()));
+                assert_eq!(second_pair[1], Value::String("dir".to_string()));
+
+                // Last two should be files (alphabetical)
+                let third_pair: Vec<Value> = match &items[2] {
+                    Value::List(l) => l.clone().into_iter().collect(),
+                    other => panic!("Expected list, got {:?}", other),
+                };
+                assert_eq!(third_pair[0], Value::String("apple.txt".to_string()));
+                assert_eq!(third_pair[1], Value::String("file".to_string()));
+
+                let fourth_pair: Vec<Value> = match &items[3] {
+                    Value::List(l) => l.clone().into_iter().collect(),
+                    other => panic!("Expected list, got {:?}", other),
+                };
+                assert_eq!(fourth_pair[0], Value::String("banana.txt".to_string()));
+                assert_eq!(fourth_pair[1], Value::String("file".to_string()));
+            }
+            _ => panic!("list-dir should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_nonexistent_path_when_list_dir_then_returns_empty_list() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(list-dir \"/nonexistent/path/that/does/not/exist\")")
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(List::NIL) => {} // expected empty list
+            _ => panic!(
+                "list-dir on nonexistent path should return empty list, got {:?}",
+                inner
+            ),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: is-dir?
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_directory_when_is_dir_then_returns_true() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(is-dir? \"{}\")", dir_path))
+            .unwrap();
+
+        assert_eq!(result.inner().clone(), Value::True);
+    }
+
+    #[test]
+    fn given_file_when_is_dir_then_returns_nil() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(is-dir? \"{}\")", path_str))
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(List::NIL) => {} // NIL = false
+            _ => panic!("is-dir? on a file should return NIL, got {:?}", inner),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: path-join
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_base_and_child_when_path_join_then_returns_joined_path() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(path-join \"/home\" \"user\")").unwrap();
+
+        assert_eq!(result.as_string(), Some("/home/user".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: path-parent
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_path_when_path_parent_then_returns_parent_directory() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(path-parent \"/home/user\")").unwrap();
+
+        assert_eq!(result.as_string(), Some("/home".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: cli-argument
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_cli_argument_set_when_cli_argument_evaluated_then_returns_argument() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        state.borrow_mut().cli_argument = Some("/tmp/myfile.txt".to_string());
+
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(cli-argument)").unwrap();
+
+        assert_eq!(result.as_string(), Some("/tmp/myfile.txt".to_string()));
+    }
+
+    #[test]
+    fn given_no_cli_argument_when_cli_argument_evaluated_then_returns_empty_string() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        // cli_argument is None by default
+
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(cli-argument)").unwrap();
+
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: open-file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_valid_file_when_open_file_then_buffer_contains_file_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "Hello from file").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        // Start with some content in the buffer to verify it gets replaced
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("original content");
+            editor.cursor = cursor::new(5, 10);
+        }
+
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let path_str = file_path.to_string_lossy().to_string();
+        runtime
+            .eval(&format!("(open-file \"{}\")", path_str))
+            .unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(buffer::content(&editor.buffer), "Hello from file");
+        assert_eq!(editor.cursor.line, 0);
+        assert_eq!(editor.cursor.column, 0);
+        assert_eq!(editor.viewport.top_line, 0);
+        assert_eq!(editor.mode, "normal");
+        assert_eq!(editor.active_keymaps, vec!["normal-mode".to_string()]);
+        assert_eq!(editor.message, Some("test.txt".to_string()));
+    }
+
+    #[test]
+    fn given_nonexistent_file_when_open_file_then_message_contains_error() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        runtime
+            .eval("(open-file \"/nonexistent/path/to/file.txt\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        assert!(
+            editor.message.is_some(),
+            "Message should be set with error text"
+        );
+        let msg = editor.message.as_ref().unwrap();
+        assert!(
+            msg.contains("nonexistent") || msg.contains("No such file") || msg.contains("error"),
+            "Error message should mention the problem, got: {}",
+            msg
+        );
     }
 }

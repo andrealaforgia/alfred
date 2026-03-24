@@ -140,6 +140,9 @@ pub struct EditorState {
     pub panels: PanelRegistry,
     /// Folder browser state. `Some` when in browse mode, `None` otherwise.
     pub browser: Option<BrowserState>,
+    /// The CLI argument (file/directory path) Alfred was started with.
+    /// `None` if no argument was provided.
+    pub cli_argument: Option<String>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1545,6 +1548,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         line_styles: HashMap::new(),
         panels: crate::panel::new(),
         browser: None,
+        cli_argument: None,
     }
 }
 
