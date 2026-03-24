@@ -20,6 +20,7 @@ Alfred proves that AI agents can build architecturally sound software. Every fea
 - **Registers** — `"a-z` named registers for yank/delete/paste
 - **Text objects** — `iw`, `aw`, `i"`, `a"`, `i(`, `a(`, `i{`, `a{`, `i[`, `a[`
 - **Visual mode** — Character-wise (`v`) and line-wise (`V`) selection
+- **Syntax highlighting** — Tree-sitter-based highlighting for Rust, Python, and JavaScript
 - **Rainbow CSV** — Colorize CSV columns (`:rainbow-csv`)
 - **Search & replace** — `:s/old/new/g`, `:%s/old/new/g`
 - **Global commands** — `:g/pattern/d`, `:v/pattern/d`
@@ -255,15 +256,35 @@ Create `~/.config/alfred/init.lisp` to customize Alfred at startup:
 ;; Custom theme colors
 (set-theme-color "status-bar-bg" "#1e1e2e")
 (set-theme-color "gutter-fg" "#6c7086")
+
+;; Customize syntax highlighting colors
+(set-theme-color "syntax-keyword" "#ff79c6")
+(set-theme-color "syntax-string" "#f1fa8c")
+(set-theme-color "syntax-comment" "#6272a4")
 ```
+
+### Syntax Highlighting
+
+Alfred uses tree-sitter for syntax highlighting. Supported languages:
+
+| Language | Extensions |
+|----------|-----------|
+| Rust | `.rs` |
+| Python | `.py`, `.pyi` |
+| JavaScript | `.js`, `.mjs`, `.cjs`, `.jsx` |
+
+Syntax colors are fully configurable via the theme system. Available slots:
+
+`syntax-keyword`, `syntax-function`, `syntax-string`, `syntax-comment`, `syntax-type`, `syntax-variable`, `syntax-operator`, `syntax-number`, `syntax-punctuation`, `syntax-property`, `syntax-attribute`, `syntax-constant`, `syntax-constructor`
 
 ## Architecture
 
-Alfred is built as a 5-crate Rust workspace:
+Alfred is built as a 6-crate Rust workspace:
 
 | Crate | Purpose |
 |-------|---------|
 | `alfred-core` | Pure domain logic: buffer, cursor, viewport, commands, hooks, theme |
+| `alfred-syntax` | Tree-sitter syntax highlighting: parsing, queries, language detection |
 | `alfred-lisp` | Lisp interpreter integration and bridge to core primitives |
 | `alfred-plugin` | Plugin discovery, loading, lifecycle, dependency ordering |
 | `alfred-tui` | Terminal UI: renderer, event loop, key handling |

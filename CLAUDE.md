@@ -17,8 +17,9 @@ per-feature
 
 ## Project Structure
 
-- 5-crate Cargo workspace: alfred-core, alfred-lisp, alfred-plugin, alfred-tui, alfred-bin
+- 6-crate Cargo workspace: alfred-core, alfred-syntax, alfred-lisp, alfred-plugin, alfred-tui, alfred-bin
 - Plugin-first architecture: everything beyond core primitives is an Alfred Lisp plugin
 - Lisp interpreter: rust_lisp (adopted, not custom-built)
+- Syntax highlighting: tree-sitter (Rust, Python, JavaScript grammars)
 - TUI: crossterm + ratatui
 - Text buffer: ropey (rope data structure)

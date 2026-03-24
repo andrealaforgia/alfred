@@ -21,6 +21,7 @@ RUN python3 -m venv /opt/venv && \
 # Copy manifests first to cache dependency resolution
 COPY Cargo.toml Cargo.lock ./
 COPY crates/alfred-core/Cargo.toml crates/alfred-core/Cargo.toml
+COPY crates/alfred-syntax/Cargo.toml crates/alfred-syntax/Cargo.toml
 COPY crates/alfred-lisp/Cargo.toml crates/alfred-lisp/Cargo.toml
 COPY crates/alfred-plugin/Cargo.toml crates/alfred-plugin/Cargo.toml
 COPY crates/alfred-tui/Cargo.toml crates/alfred-tui/Cargo.toml
@@ -28,6 +29,7 @@ COPY crates/alfred-bin/Cargo.toml crates/alfred-bin/Cargo.toml
 
 # Create stub lib/main files so cargo can resolve the workspace
 RUN mkdir -p crates/alfred-core/src && echo "" > crates/alfred-core/src/lib.rs && \
+    mkdir -p crates/alfred-syntax/src && echo "" > crates/alfred-syntax/src/lib.rs && \
     mkdir -p crates/alfred-lisp/src && echo "" > crates/alfred-lisp/src/lib.rs && \
     mkdir -p crates/alfred-plugin/src && echo "" > crates/alfred-plugin/src/lib.rs && \
     mkdir -p crates/alfred-tui/src && echo "" > crates/alfred-tui/src/lib.rs && \
