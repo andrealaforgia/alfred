@@ -312,6 +312,10 @@ make ci-local      # Run full CI locally via act (requires Docker)
 - Farley Test Quality Index: 8.4/10 (Excellent)
 - Zero mock tautology
 
+## Known Issues
+
+**Warp terminal**: Stray `A` and `B` characters may appear on blank lines. This is a [known Warp bug](https://github.com/warpdotdev/Warp/issues/3478) where `ESC(B` (ANSI charset select) escape sequences are rendered as literal text. Use iTerm2, Terminal.app, Alacritty, or Kitty instead.
+
 ## License
 
 This project is a personal learning and demonstration project.
