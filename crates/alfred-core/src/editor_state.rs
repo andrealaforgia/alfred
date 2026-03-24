@@ -978,6 +978,100 @@ pub fn register_builtin_commands(state: &mut EditorState) {
             Ok(())
         }),
     );
+    // --- Simple editing commands: D, S, s, P, X, r ---
+    crate::command::register(
+        &mut state.commands,
+        "delete-to-end".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::delete_to_line_end(&s.buffer, s.cursor.line, s.cursor.column);
+            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "substitute-line".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            s.buffer = crate::buffer::replace_line(&s.buffer, s.cursor.line, "");
+            s.cursor = crate::cursor::new(s.cursor.line, 0);
+            s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "substitute-char".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            push_undo(s);
+            let line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
+            if s.cursor.column < line_content.len() {
+                s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
+            }
+            s.mode = MODE_INSERT.to_string();
+            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "paste-before".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            let reg = s.pending_register.take();
+            if let Some((text, linewise)) = get_yank_content(s, reg) {
+                push_undo(s);
+                if linewise {
+                    // Line-wise paste: insert on a new line above
+                    let current_line = s.cursor.line;
+                    s.buffer = crate::buffer::insert_at(
+                        &s.buffer,
+                        current_line,
+                        0,
+                        &format!("{}\n", text),
+                    );
+                    s.cursor = crate::cursor::new(current_line, 0);
+                } else {
+                    // Character-wise paste: insert before cursor position
+                    let col = s.cursor.column;
+                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, &text);
+                    // Cursor moves to end of pasted text - 1 (on last pasted char)
+                    let end_col = col + text.len().saturating_sub(1);
+                    s.cursor = crate::cursor::new(s.cursor.line, end_col);
+                }
+                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            }
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "delete-char-before".to_string(),
+        crate::command::CommandHandler::Native(|s| {
+            if s.cursor.column == 0 {
+                return Ok(());
+            }
+            push_undo(s);
+            let new_col = s.cursor.column - 1;
+            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, new_col);
+            s.cursor = crate::cursor::new(s.cursor.line, new_col);
+            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
+            Ok(())
+        }),
+    );
+    crate::command::register(
+        &mut state.commands,
+        "replace-char-at-cursor".to_string(),
+        crate::command::CommandHandler::Native(|_s| {
+            // This is a no-op placeholder -- actual replace is handled by PendingReplace
+            // in the TUI event loop which calls buffer::replace_char_at directly.
+            Ok(())
+        }),
+    );
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -2451,5 +2545,159 @@ mod tests {
 
         command::execute(&mut state, "undo").unwrap();
         assert_eq!(buffer::content(&state.buffer), "count=42");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: simple editing commands (D, S, s, P, X)
+    // Test Budget: 6 commands x 2 = 12 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_line_when_delete_to_end_at_col5_then_text_after_cursor_removed() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello world");
+        state.cursor = crate::cursor::new(0, 5);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "delete-to-end").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hello");
+    }
+
+    #[test]
+    fn given_line_when_delete_to_end_at_col0_then_line_becomes_empty() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "delete-to-end").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "");
+    }
+
+    #[test]
+    fn given_line_when_substitute_line_then_line_cleared_and_insert_mode() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello\nworld");
+        state.cursor = crate::cursor::new(0, 3);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "substitute-line").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "\nworld");
+        assert_eq!(state.cursor.line, 0);
+        assert_eq!(state.cursor.column, 0);
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_line_when_substitute_char_at_col0_then_char_deleted_and_insert_mode() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "substitute-char").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "ello");
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_line_when_substitute_char_at_end_then_enters_insert_at_end() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 5); // past end
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "substitute-char").unwrap();
+        // At end of line, no char to delete, but still enters insert mode
+        assert_eq!(buffer::content(&state.buffer), "hello");
+        assert_eq!(state.mode, editor_state::MODE_INSERT);
+    }
+
+    #[test]
+    fn given_yanked_text_when_paste_before_then_text_inserted_before_cursor() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 2);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Set up unnamed register with character-wise content
+        editor_state::set_register(&mut state, None, "abc".to_string(), false);
+
+        command::execute(&mut state, "paste-before").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "heabcllo");
+        // Cursor on last pasted char
+        assert_eq!(state.cursor.column, 4);
+    }
+
+    #[test]
+    fn given_empty_register_when_paste_before_then_no_change() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 2);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "paste-before").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hello");
+    }
+
+    #[test]
+    fn given_line_when_delete_char_before_at_col2_then_char_before_deleted() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 2);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "delete-char-before").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hllo");
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_line_when_delete_char_before_at_col0_then_no_change() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("hello");
+        state.cursor = crate::cursor::new(0, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        command::execute(&mut state, "delete-char-before").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "hello");
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_yanked_line_when_paste_before_then_line_inserted_above() {
+        use crate::buffer;
+
+        let mut state = editor_state::new(80, 24);
+        state.buffer = buffer::Buffer::from_string("first\nsecond");
+        state.cursor = crate::cursor::new(1, 0);
+        editor_state::register_builtin_commands(&mut state);
+
+        // Set up unnamed register with line-wise content
+        editor_state::set_register(&mut state, None, "new line".to_string(), true);
+
+        command::execute(&mut state, "paste-before").unwrap();
+        assert_eq!(buffer::content(&state.buffer), "first\nnew line\nsecond");
+        // Cursor on the pasted line
+        assert_eq!(state.cursor.line, 1);
+        assert_eq!(state.cursor.column, 0);
     }
 }

@@ -627,6 +627,39 @@ pub fn toggle_case_at(buffer: &Buffer, line: usize, column: usize) -> Buffer {
     }
 }
 
+/// Replaces the character at the given line and column with a new character.
+///
+/// If the position is beyond the buffer or on a newline character,
+/// the buffer is returned unchanged.
+/// The new buffer has an incremented version and `modified` set to true.
+pub fn replace_char_at(buffer: &Buffer, line: usize, column: usize, replacement: char) -> Buffer {
+    let mut rope = buffer.rope.clone();
+    let char_index = line_column_to_char_index(&rope, line, column);
+
+    if char_index >= rope.len_chars() {
+        return buffer.clone();
+    }
+
+    let ch = rope.char(char_index);
+
+    // Skip newline characters -- they are not visible text
+    if ch == '\n' {
+        return buffer.clone();
+    }
+
+    rope.remove(char_index..char_index + 1);
+    rope.insert_char(char_index, replacement);
+
+    Buffer {
+        id: buffer.id,
+        rope,
+        filename: buffer.filename.clone(),
+        file_path: buffer.file_path.clone(),
+        modified: true,
+        version: buffer.version + 1,
+    }
+}
+
 /// Finds a number at or after the cursor position on the current line.
 ///
 /// Scans the line from the cursor column forward, looking for a sequence of
@@ -1353,5 +1386,30 @@ mod tests {
         let buffer = super::Buffer::from_string("-5");
         let result = super::replace_number_in_line(&buffer, 0, 0, 2, -4);
         assert_eq!(super::content(&result), "-4");
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: replace_char_at
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_when_replace_char_at_col0_then_first_char_replaced() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::replace_char_at(&buffer, 0, 0, 'a');
+        assert_eq!(super::content(&result), "aello");
+    }
+
+    #[test]
+    fn given_buffer_when_replace_char_at_beyond_end_then_unchanged() {
+        let buffer = super::Buffer::from_string("hello");
+        let result = super::replace_char_at(&buffer, 0, 10, 'a');
+        assert_eq!(super::content(&result), "hello");
+    }
+
+    #[test]
+    fn given_multiline_when_replace_char_on_second_line_then_correct() {
+        let buffer = super::Buffer::from_string("hello\nworld");
+        let result = super::replace_char_at(&buffer, 1, 0, 'W');
+        assert_eq!(super::content(&result), "hello\nWorld");
     }
 }

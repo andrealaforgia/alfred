@@ -122,6 +122,8 @@ pub(crate) enum InputState {
     /// Waiting for a register name character after `@` to replay a macro.
     /// The next 'a'-'z' replays the macro from that register; `@` replays the last macro.
     PendingMacroPlay,
+    /// Waiting for a character key to replace the char under cursor (`r` + `{char}`).
+    PendingReplace,
 }
 
 /// The kind of motion: character-wise (w, e, $, h, l, etc.) or line-wise (j, k).
@@ -467,6 +469,22 @@ pub(crate) fn handle_key_event(
             state.last_char_find = Some((kind, ch));
         }
         // Any non-Char key (e.g., Escape) just cancels the pending find.
+        return (InputState::Normal, DeferredAction::None, None);
+    }
+
+    // PendingReplace mode: waiting for a character key after `r`.
+    // Replace the character under cursor with the pressed character, return to Normal.
+    if let InputState::PendingReplace = input_state {
+        if let KeyCode::Char(ch) = key.code {
+            alfred_core::editor_state::push_undo(state);
+            state.buffer = alfred_core::buffer::replace_char_at(
+                &state.buffer,
+                state.cursor.line,
+                state.cursor.column,
+                ch,
+            );
+        }
+        // Any non-Char key (e.g., Escape) just cancels the pending replace.
         return (InputState::Normal, DeferredAction::None, None);
     }
 
@@ -826,6 +844,9 @@ pub(crate) fn handle_key_event(
         }
         Some(ref cmd) if cmd == "enter-macro-play" => {
             (InputState::PendingMacroPlay, DeferredAction::None, None)
+        }
+        Some(ref cmd) if cmd == "enter-replace-char" => {
+            (InputState::PendingReplace, DeferredAction::None, None)
         }
         Some(ref cmd) if cmd == "enter-operator-delete" => (
             InputState::OperatorPending(Operator::Delete),
@@ -6525,5 +6546,201 @@ mod tests {
         );
         // Message should be cleared on stop
         assert_eq!(state.message, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Replace char command: r{char} (two-key sequence via PendingReplace)
+    // -----------------------------------------------------------------------
+
+    /// Helper: add replace-char keybinding (r -> enter-replace-char) to a keymap
+    fn setup_replace_char_keymap(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('r')),
+            "enter-replace-char".to_string(),
+        );
+    }
+
+    #[test]
+    fn given_line_when_r_a_then_char_under_cursor_replaced() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_replace_char_keymap(&mut state);
+
+        // Press 'r' -> enters PendingReplace
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('r')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingReplace);
+
+        // Press 'a' -> replaces 'h' with 'a'
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Char('a')), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "aello");
+        // Cursor stays in place
+        assert_eq!(state.cursor.column, 0);
+    }
+
+    #[test]
+    fn given_line_when_r_then_escape_then_no_change() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_replace_char_keymap(&mut state);
+
+        // Press 'r' -> enters PendingReplace
+        let is = dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('r')),
+            super::InputState::Normal,
+        );
+        assert_eq!(is, super::InputState::PendingReplace);
+
+        // Press Escape -> cancels, no change
+        let is = dispatch_key(&mut state, KeyEvent::plain(KeyCode::Escape), is);
+        assert_eq!(is, super::InputState::Normal);
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+    }
+
+    // -----------------------------------------------------------------------
+    // Simple editing commands via keymap dispatch: D, S, s, P, X
+    // -----------------------------------------------------------------------
+
+    /// Helper: add simple editing keybindings to a keymap
+    fn setup_simple_edit_keymaps(state: &mut alfred_core::editor_state::EditorState) {
+        let keymap = state
+            .keymaps
+            .get_mut("global")
+            .expect("global keymap must exist");
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('D')),
+            "delete-to-end".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('S')),
+            "substitute-line".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('s')),
+            "substitute-char".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('P')),
+            "paste-before".to_string(),
+        );
+        keymap.insert(
+            KeyEvent::plain(KeyCode::Char('X')),
+            "delete-char-before".to_string(),
+        );
+    }
+
+    #[test]
+    fn given_line_when_big_d_at_col5_then_text_from_cursor_deleted() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello world");
+        state.cursor = alfred_core::cursor::new(0, 5);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('D')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+    }
+
+    #[test]
+    fn given_line_when_big_s_then_line_cleared_and_insert_mode() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 3);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('S')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "");
+        assert_eq!(state.mode, "insert");
+    }
+
+    #[test]
+    fn given_line_when_s_at_col0_then_char_deleted_and_insert_mode() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('s')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "ello");
+        assert_eq!(state.mode, "insert");
+    }
+
+    #[test]
+    fn given_yanked_text_when_big_p_then_text_pasted_before_cursor() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 3);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        alfred_core::editor_state::set_register(&mut state, None, "abc".to_string(), false);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('P')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "helabclo");
+    }
+
+    #[test]
+    fn given_line_when_big_x_at_col2_then_char_before_cursor_deleted() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 2);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('X')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hllo");
+        assert_eq!(state.cursor.column, 1);
+    }
+
+    #[test]
+    fn given_line_when_big_x_at_col0_then_no_change() {
+        let mut state = alfred_core::editor_state::new(80, 24);
+        state.buffer = alfred_core::buffer::Buffer::from_string("hello");
+        state.cursor = alfred_core::cursor::new(0, 0);
+        setup_standard_keymaps(&mut state);
+        setup_simple_edit_keymaps(&mut state);
+
+        dispatch_key(
+            &mut state,
+            KeyEvent::plain(KeyCode::Char('X')),
+            super::InputState::Normal,
+        );
+        assert_eq!(alfred_core::buffer::content(&state.buffer), "hello");
+        assert_eq!(state.cursor.column, 0);
     }
 }
