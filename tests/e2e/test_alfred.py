@@ -1244,3 +1244,271 @@ class TestVisualMode:
         content = read_file(path).rstrip("\n")
         assert content == "unchanged", f"Expected 'unchanged', got: {repr(content)}"
         os.unlink(path)
+
+
+# -------------------------------------------------------------------------
+# Tier 2: Marks, registers, case toggle, macros, number ops, editing
+# -------------------------------------------------------------------------
+
+class TestMarks:
+    """Verify marks (m{a-z}, '{a-z})."""
+
+    def test_set_mark_and_jump_back(self):
+        """Set mark 'a' at line 3, move away, jump back with 'a."""
+        lines = [f"line{i}" for i in range(10)]
+        path = create_temp_file("\n".join(lines))
+        child = spawn_alfred(path)
+
+        # Move to line 3
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.2)
+
+        # Set mark a
+        send_keys(child, "m")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.2)
+
+        # Move away to line 7
+        send_keys(child, "4")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.2)
+
+        # Jump back to mark a
+        send_keys(child, "'")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.3)
+
+        # Insert marker to verify position
+        send_keys(child, "i")
+        time.sleep(0.3)
+        send_keys(child, "MARK")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path)
+        result_lines = content.split("\n")
+        assert "MARK" in result_lines[3], \
+            f"Expected MARK on line 3, got: {repr(result_lines[3])}"
+        os.unlink(path)
+
+
+class TestCaseToggle:
+    """Verify ~ (toggle case)."""
+
+    def test_tilde_toggles_case(self):
+        """~ on 'hello' toggles h→H."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "~")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content.startswith("H"), f"Expected 'H...', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_3_tilde_toggles_three_chars(self):
+        """3~ on 'hello' toggles first 3 chars → 'HELlo'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "3")
+        time.sleep(0.1)
+        send_keys(child, "~")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content.startswith("HEL"), f"Expected 'HEL...', got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestMacros:
+    """Verify macro recording and playback."""
+
+    def test_record_delete_and_replay(self):
+        """qa + x + q records delete, @a replays it."""
+        path = create_temp_file("ABCD")
+        child = spawn_alfred(path)
+
+        # Start recording macro 'a'
+        send_keys(child, "q")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.2)
+
+        # Delete one char
+        send_keys(child, "x")
+        time.sleep(0.3)
+
+        # Stop recording
+        send_keys(child, "q")
+        time.sleep(0.2)
+
+        # Replay macro a
+        send_keys(child, "@")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "CD", f"Expected 'CD' after record x + replay, got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestNumberOps:
+    """Verify Ctrl-a (increment) and Ctrl-x (decrement)."""
+
+    def test_ctrl_a_increments(self):
+        """Ctrl-a on 'count=42' increments to 43."""
+        path = create_temp_file("count=42")
+        child = spawn_alfred(path)
+
+        # Move to the number
+        send_keys(child, "6")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # Ctrl-a to increment
+        child.send("\x01")  # Ctrl-a
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "43" in content, f"Expected '43' after Ctrl-a, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_ctrl_x_decrements(self):
+        """Ctrl-x on 'num=10' decrements to 9."""
+        path = create_temp_file("num=10")
+        child = spawn_alfred(path)
+
+        # Move to number
+        send_keys(child, "4")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        # Ctrl-x to decrement
+        child.send("\x18")  # Ctrl-x
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert "9" in content, f"Expected '9' after Ctrl-x, got: {repr(content)}"
+        os.unlink(path)
+
+
+class TestSimpleEditing:
+    """Verify r, D, S, s, P, X commands."""
+
+    def test_r_replaces_char(self):
+        """ra on 'hello' at col 0 → 'aello'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "r")
+        time.sleep(0.1)
+        send_keys(child, "a")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "aello", f"Expected 'aello', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_D_deletes_to_end(self):
+        """D on 'hello world' at col 5 → 'hello'."""
+        path = create_temp_file("hello world")
+        child = spawn_alfred(path)
+
+        send_keys(child, "5")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        send_keys(child, "D")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "hello", f"Expected 'hello' after D, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_s_substitutes_char(self):
+        """s on 'hello' at col 0 → deletes h, enters insert, type 'Y' → 'Yello'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "s")
+        time.sleep(0.3)
+        send_keys(child, "Y")
+        send_escape(child)
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "Yello", f"Expected 'Yello', got: {repr(content)}"
+        os.unlink(path)
+
+    def test_X_deletes_char_before(self):
+        """X on 'hello' at col 2 → 'hllo'."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "2")
+        time.sleep(0.1)
+        send_keys(child, "l")
+        time.sleep(0.2)
+
+        send_keys(child, "X")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "hllo", f"Expected 'hllo' after X, got: {repr(content)}"
+        os.unlink(path)
+
+    def test_X_at_col_0_is_noop(self):
+        """X at start of line does nothing."""
+        path = create_temp_file("hello")
+        child = spawn_alfred(path)
+
+        send_keys(child, "X")
+        time.sleep(0.3)
+
+        send_colon_command(child, "q")
+        wait_for_exit(child)
+
+        content = read_file(path).rstrip("\n")
+        assert content == "hello", f"Expected 'hello' unchanged, got: {repr(content)}"
+        os.unlink(path)
