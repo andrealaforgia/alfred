@@ -74,6 +74,19 @@ pub fn dispatch_hook(
         .unwrap_or_default()
 }
 
+/// Returns cloned Rc pointers to all callbacks registered for a hook.
+///
+/// This allows the caller to release the borrow on HookRegistry before
+/// executing the callbacks, avoiding RefCell conflicts when callbacks
+/// mutate EditorState (e.g., via Lisp primitives like `(message ...)`).
+pub fn get_callbacks(registry: &HookRegistry, hook_name: &str) -> Vec<Rc<HookCallbackFn>> {
+    registry
+        .hooks
+        .get(hook_name)
+        .map(|callbacks| callbacks.iter().map(|cb| cb.callback.clone()).collect())
+        .unwrap_or_default()
+}
+
 /// Removes a specific callback by its HookId from a named hook.
 /// If the hook name or ID is not found, this is a no-op.
 pub fn unregister_hook(registry: &mut HookRegistry, hook_name: &str, id: HookId) {

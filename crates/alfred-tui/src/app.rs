@@ -1398,6 +1398,11 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
             if ct_key.kind != KeyEventKind::Release {
                 let key = convert_crossterm_key(ct_key);
 
+                // Capture state before key handling for event dispatch
+                let prev_cursor = state_rc.borrow().cursor;
+                let prev_version = state_rc.borrow().buffer.version();
+                let prev_mode = state_rc.borrow().mode.clone();
+
                 // Handle the key event (borrow state, then drop before deferred action)
                 let (deferred, repeat) = {
                     let mut state = state_rc.borrow_mut();
@@ -1549,6 +1554,29 @@ pub fn run(state_rc: &Rc<RefCell<EditorState>>, runtime: &LispRuntime) -> io::Re
                         }
                     }
                     DeferredAction::None => {}
+                }
+
+                // Dispatch events to Lisp hooks based on what changed
+                let cursor_moved;
+                let buffer_changed;
+                let mode_changed;
+                {
+                    let state = state_rc.borrow();
+                    cursor_moved = state.cursor != prev_cursor;
+                    buffer_changed = state.buffer.version() != prev_version;
+                    mode_changed = state.mode != prev_mode;
+                }
+
+                // Dispatch events via Lisp runtime (outside any borrow)
+                if cursor_moved || buffer_changed || mode_changed {
+                    // cursor-moved is the most common, dispatch it for all changes
+                    let _ = runtime.eval("(dispatch-hook \"cursor-moved\")");
+                }
+                if buffer_changed {
+                    let _ = runtime.eval("(dispatch-hook \"buffer-changed\")");
+                }
+                if mode_changed {
+                    let _ = runtime.eval("(dispatch-hook \"mode-changed\")");
                 }
             }
         }
@@ -7624,5 +7652,200 @@ mod tests {
         // Then: buffer is restored to "Hello"
         let content = alfred_core::buffer::content(&state.buffer);
         assert_eq!(content, "Hello", "Undo should restore pre-tab state");
+    }
+
+    // -----------------------------------------------------------------------
+    // Event dispatch: hooks called after state changes
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    /// Helper: simulates the event loop's dispatch pattern for a single key event.
+    ///
+    /// Captures state before key handling, dispatches the key through the keymap,
+    /// executes deferred actions, then dispatches Lisp hooks based on what changed.
+    /// This mirrors the logic in `run()` without requiring a terminal.
+    fn dispatch_key_with_hooks(
+        state_rc: &std::rc::Rc<std::cell::RefCell<editor_state::EditorState>>,
+        runtime: &alfred_lisp::runtime::LispRuntime,
+        key: KeyEvent,
+        input_state: super::InputState,
+    ) -> super::InputState {
+        // Capture state before key handling
+        let prev_cursor = state_rc.borrow().cursor;
+        let prev_version = state_rc.borrow().buffer.version();
+        let prev_mode = state_rc.borrow().mode.clone();
+
+        // Handle the key event
+        let (new_input_state, action, _count) = {
+            let mut state = state_rc.borrow_mut();
+            super::handle_key_event(&mut state, key, input_state, None)
+        };
+
+        // Execute deferred actions (mirror the real event loop's ClonedHandler pattern)
+        match action {
+            super::DeferredAction::ExecCommand(ref cmd_name) => {
+                let handler = {
+                    let state = state_rc.borrow();
+                    state.commands.extract_handler(cmd_name)
+                };
+                match handler {
+                    Some(alfred_core::command::ClonedHandler::Native(f)) => {
+                        let _ = f(&mut state_rc.borrow_mut());
+                    }
+                    Some(alfred_core::command::ClonedHandler::Dynamic(f)) => {
+                        let mut dummy = alfred_core::editor_state::new(1, 1);
+                        let _ = f(&mut dummy);
+                    }
+                    None => {}
+                }
+            }
+            super::DeferredAction::Eval(ref expr) => {
+                super::eval_and_display(state_rc, runtime, expr);
+            }
+            _ => {}
+        }
+
+        // Dispatch events via Lisp runtime
+        let cursor_moved;
+        let buffer_changed;
+        let mode_changed;
+        {
+            let state = state_rc.borrow();
+            cursor_moved = state.cursor != prev_cursor;
+            buffer_changed = state.buffer.version() != prev_version;
+            mode_changed = state.mode != prev_mode;
+        }
+
+        if cursor_moved || buffer_changed || mode_changed {
+            let _ = runtime.eval("(dispatch-hook \"cursor-moved\")");
+        }
+        if buffer_changed {
+            let _ = runtime.eval("(dispatch-hook \"buffer-changed\")");
+        }
+        if mode_changed {
+            let _ = runtime.eval("(dispatch-hook \"mode-changed\")");
+        }
+
+        new_input_state
+    }
+
+    #[test]
+    fn given_cursor_movement_when_key_dispatched_then_cursor_moved_hook_called() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with multi-line buffer and hooks registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Line 1\nLine 2\nLine 3");
+            state.cursor = cursor::new(0, 0);
+            setup_standard_keymaps(&mut state);
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // Register a hook that sets a message when cursor-moved fires
+        runtime
+            .eval("(add-hook \"cursor-moved\" (lambda () (message \"cursor-moved-fired\")))")
+            .unwrap();
+
+        // When: press Down arrow (moves cursor)
+        dispatch_key_with_hooks(
+            &state_rc,
+            &runtime,
+            KeyEvent::plain(KeyCode::Down),
+            super::InputState::Normal,
+        );
+
+        // Then: cursor-moved hook was called
+        let state = state_rc.borrow();
+        assert_eq!(
+            state.message,
+            Some("cursor-moved-fired".to_string()),
+            "cursor-moved hook should be dispatched after cursor movement"
+        );
+    }
+
+    #[test]
+    fn given_buffer_edit_when_key_dispatched_then_buffer_changed_hook_called() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor in insert mode with hooks registered
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello");
+            state.cursor = cursor::new(0, 5);
+            state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
+            setup_standard_keymaps(&mut state);
+        }
+
+        let runtime = alfred_lisp::runtime::LispRuntime::new();
+        alfred_lisp::bridge::register_core_primitives(&runtime, state_rc.clone());
+        alfred_lisp::bridge::register_hook_primitives(&runtime, state_rc.clone());
+
+        // Register a hook that sets a message when buffer-changed fires
+        runtime
+            .eval("(add-hook \"buffer-changed\" (lambda () (message \"buffer-changed-fired\")))")
+            .unwrap();
+
+        // When: type a character in insert mode (modifies buffer)
+        dispatch_key_with_hooks(
+            &state_rc,
+            &runtime,
+            KeyEvent::plain(KeyCode::Char('x')),
+            super::InputState::Normal,
+        );
+
+        // Then: buffer-changed hook was called
+        let state = state_rc.borrow();
+        assert_eq!(
+            state.message,
+            Some("buffer-changed-fired".to_string()),
+            "buffer-changed hook should be dispatched after buffer edit"
+        );
+    }
+
+    #[test]
+    fn given_normal_mode_when_mode_switch_then_mode_changed_hook_called() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        // Given: editor with vim keybindings (which defines enter-insert-mode)
+        let state_rc = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut state = state_rc.borrow_mut();
+            state.buffer = Buffer::from_string("Hello");
+            state.cursor = cursor::new(0, 0);
+        }
+        let runtime = setup_vim_keybindings_via_lisp(&state_rc);
+
+        // Register a hook that sets a message when mode-changed fires
+        runtime
+            .eval("(add-hook \"mode-changed\" (lambda () (message \"mode-changed-fired\")))")
+            .unwrap();
+
+        // Clear any message from plugin loading
+        state_rc.borrow_mut().message = None;
+
+        // When: press 'i' to enter insert mode (triggers mode change)
+        dispatch_key_with_hooks(
+            &state_rc,
+            &runtime,
+            KeyEvent::plain(KeyCode::Char('i')),
+            super::InputState::Normal,
+        );
+
+        // Then: mode-changed hook was called
+        let state = state_rc.borrow();
+        assert_eq!(
+            state.message,
+            Some("mode-changed-fired".to_string()),
+            "mode-changed hook should be dispatched after mode switch"
+        );
     }
 }

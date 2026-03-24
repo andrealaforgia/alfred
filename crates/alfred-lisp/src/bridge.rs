@@ -15,6 +15,7 @@ use alfred_core::command;
 use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::hook;
+use alfred_core::panel;
 use alfred_core::theme;
 use alfred_core::viewport;
 
@@ -377,12 +378,16 @@ fn register_dispatch_hook(
         // Clear any previous hook errors
         hook_errors.borrow_mut().clear();
 
-        // Borrow state briefly to dispatch hooks, then release.
-        // Callbacks may accumulate errors in the shared error buffer.
-        let results = {
+        // Clone callback Rc pointers out of the registry, then release the borrow.
+        // This allows callbacks to mutate state (e.g., `(message ...)`) without
+        // hitting a RefCell borrow conflict during dispatch.
+        let callbacks: Vec<Rc<hook::HookCallbackFn>> = {
             let editor = state.borrow();
-            hook::dispatch_hook(&editor.hooks, &hook_name, &string_args)
+            hook::get_callbacks(&editor.hooks, &hook_name)
         };
+
+        // Execute callbacks outside the borrow
+        let results: Vec<Vec<String>> = callbacks.iter().map(|cb| cb(&string_args)).collect();
 
         // After dispatch (borrow released), propagate any errors as editor messages
         let errors = hook_errors.borrow().clone();
@@ -1201,6 +1206,189 @@ fn register_buffer_get_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
             .trim_end_matches('\n');
         Ok(Value::String(content.to_string()))
     });
+}
+
+/// Registers panel primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(define-panel name position size)` -- creates a panel at the given position
+/// - `(remove-panel name)` -- removes a panel by name
+/// - `(set-panel-content name text)` -- sets single-line content (top/bottom panels)
+/// - `(set-panel-line name line-num text)` -- sets per-line content (left/right panels)
+/// - `(set-panel-style name fg bg)` -- sets panel foreground/background colors
+/// - `(set-panel-size name size)` -- resizes a panel
+/// - `(viewport-top-line)` -- returns first visible line number (already registered by rendering)
+/// - `(viewport-height)` -- returns visible line count (already registered by rendering)
+pub fn register_panel_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_define_panel(env.clone(), state.clone());
+    register_remove_panel(env.clone(), state.clone());
+    register_set_panel_content(env.clone(), state.clone());
+    register_set_panel_line(env.clone(), state.clone());
+    register_set_panel_style(env.clone(), state.clone());
+    register_set_panel_size(env, state);
+}
+
+/// Registers `define-panel`: creates a panel at the given position.
+///
+/// Usage: `(define-panel "name" "position" size)`
+///
+/// Position must be one of "top", "bottom", "left", "right".
+/// Size is the height (for top/bottom) or width (for left/right) in rows/columns.
+fn register_define_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "define-panel", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "define-panel", "name")?;
+        let position_str = extract_string_arg_at(&args, 1, "define-panel", "position")?;
+        let size = match args.get(2) {
+            Some(Value::Int(n)) => *n as u16,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("define-panel: expected integer for size, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "define-panel: missing required argument 'size'".to_string(),
+                });
+            }
+        };
+
+        let position = parse_panel_position(&position_str).ok_or_else(|| RuntimeError {
+            msg: format!(
+                "define-panel: invalid position \"{}\", expected \"top\", \"bottom\", \"left\", or \"right\"",
+                position_str
+            ),
+        })?;
+
+        let mut editor = state.borrow_mut();
+        panel::define_panel(&mut editor.panels, &name, position, size)
+            .map_err(|e| RuntimeError { msg: e })?;
+
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `remove-panel`: removes a panel by name.
+///
+/// Usage: `(remove-panel "name")`
+fn register_remove_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "remove-panel", move |_env, args| {
+        let name = extract_string_arg(&args, "remove-panel")?;
+        let mut editor = state.borrow_mut();
+        panel::remove_panel(&mut editor.panels, &name);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-content`: sets single-line content for a panel.
+///
+/// Usage: `(set-panel-content "name" "text")`
+fn register_set_panel_content(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-content", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "set-panel-content", "name")?;
+        let text = extract_string_arg_at(&args, 1, "set-panel-content", "text")?;
+        let mut editor = state.borrow_mut();
+        panel::set_content(&mut editor.panels, &name, &text)
+            .map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-line`: sets per-line content for a panel.
+///
+/// Usage: `(set-panel-line "name" line-num "text")`
+fn register_set_panel_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-line", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "set-panel-line", "name")?;
+        let line_num = match args.get(1) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-panel-line: expected integer for line-num, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-line: missing required argument 'line-num'".to_string(),
+                });
+            }
+        };
+        let text = extract_string_arg_at(&args, 2, "set-panel-line", "text")?;
+        let mut editor = state.borrow_mut();
+        panel::set_line(&mut editor.panels, &name, line_num, &text)
+            .map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-style`: sets panel foreground/background colors.
+///
+/// Usage: `(set-panel-style "name" "fg" "bg")`
+///
+/// Pass "default" for either color to clear it (set to None).
+fn register_set_panel_style(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-style", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "set-panel-style", "name")?;
+        let fg_str = extract_string_arg_at(&args, 1, "set-panel-style", "fg")?;
+        let bg_str = extract_string_arg_at(&args, 2, "set-panel-style", "bg")?;
+
+        let fg = if fg_str == "default" {
+            None
+        } else {
+            Some(fg_str.as_str())
+        };
+        let bg = if bg_str == "default" {
+            None
+        } else {
+            Some(bg_str.as_str())
+        };
+
+        let mut editor = state.borrow_mut();
+        panel::set_style(&mut editor.panels, &name, fg, bg).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-size`: resizes a panel.
+///
+/// Usage: `(set-panel-size "name" size)`
+fn register_set_panel_size(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-size", move |_env, args| {
+        let name = extract_string_arg(&args, "set-panel-size")?;
+        let size = match args.get(1) {
+            Some(Value::Int(n)) => *n as u16,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("set-panel-size: expected integer for size, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-size: missing required argument 'size'".to_string(),
+                });
+            }
+        };
+        let mut editor = state.borrow_mut();
+        panel::set_size(&mut editor.panels, &name, size).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Parses a panel position string into the corresponding `PanelPosition` variant.
+///
+/// Returns `None` if the string does not match a known position.
+fn parse_panel_position(position_str: &str) -> Option<panel::PanelPosition> {
+    match position_str {
+        "top" => Some(panel::PanelPosition::Top),
+        "bottom" => Some(panel::PanelPosition::Bottom),
+        "left" => Some(panel::PanelPosition::Left),
+        "right" => Some(panel::PanelPosition::Right),
+        _ => None,
+    }
 }
 
 /// Registers pure string manipulation primitives into the Lisp runtime.
@@ -4469,6 +4657,169 @@ mod tests {
     #[test]
     fn given_viewport_height_24_when_viewport_height_evaluated_then_returns_24() {
         let (runtime, _state) = create_rendering_test_runtime();
+
+        let result = runtime.eval("(viewport-height)").unwrap();
+        assert_eq!(result.as_integer(), Some(24));
+    }
+
+    // -----------------------------------------------------------------------
+    // Panel primitives: define-panel, set-panel-content, set-panel-line,
+    // set-panel-style, set-panel-size, remove-panel
+    // Test Budget: 7 behaviors x 2 = 14 max
+    // -----------------------------------------------------------------------
+
+    fn create_panel_test_runtime() -> (LispRuntime, Rc<RefCell<EditorState>>) {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.viewport.top_line = 5;
+        }
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_panel_primitives(&runtime, state.clone());
+        register_rendering_primitives(&runtime, state.clone());
+        (runtime, state)
+    }
+
+    #[test]
+    fn given_empty_registry_when_define_panel_evaluated_then_panel_exists() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"status\" \"bottom\" 1)")
+            .unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "status");
+        assert!(
+            panel.is_some(),
+            "Panel 'status' should exist after define-panel"
+        );
+        let panel = panel.unwrap();
+        assert_eq!(panel.position, alfred_core::panel::PanelPosition::Bottom);
+        assert_eq!(panel.size, 1);
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_content_evaluated_then_content_updated() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"status\" \"bottom\" 1)")
+            .unwrap();
+        runtime
+            .eval("(set-panel-content \"status\" \" file.txt  Ln 1, Col 1 \")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "status").unwrap();
+        assert_eq!(panel.content, " file.txt  Ln 1, Col 1 ");
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_line_evaluated_then_line_content_stored() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"gutter\" \"left\" 4)")
+            .unwrap();
+        runtime
+            .eval("(set-panel-line \"gutter\" 0 \"  1 \")")
+            .unwrap();
+        runtime
+            .eval("(set-panel-line \"gutter\" 1 \"  2 \")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "gutter").unwrap();
+        assert_eq!(panel.lines.get(&0), Some(&"  1 ".to_string()));
+        assert_eq!(panel.lines.get(&1), Some(&"  2 ".to_string()));
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_style_evaluated_then_colors_updated() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"status\" \"bottom\" 1)")
+            .unwrap();
+        runtime
+            .eval("(set-panel-style \"status\" \"#cdd6f4\" \"#313244\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "status").unwrap();
+        assert_eq!(panel.fg_color, Some("#cdd6f4".to_string()));
+        assert_eq!(panel.bg_color, Some("#313244".to_string()));
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_style_with_default_then_colors_cleared() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"status\" \"bottom\" 1)")
+            .unwrap();
+        runtime
+            .eval("(set-panel-style \"status\" \"#cdd6f4\" \"#313244\")")
+            .unwrap();
+        runtime
+            .eval("(set-panel-style \"status\" \"default\" \"default\")")
+            .unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "status").unwrap();
+        assert_eq!(panel.fg_color, None);
+        assert_eq!(panel.bg_color, None);
+    }
+
+    #[test]
+    fn given_panel_when_remove_panel_evaluated_then_panel_gone() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"status\" \"bottom\" 1)")
+            .unwrap();
+        assert!(
+            alfred_core::panel::get(&state.borrow().panels, "status").is_some(),
+            "Panel should exist before removal"
+        );
+
+        runtime.eval("(remove-panel \"status\")").unwrap();
+
+        let editor = state.borrow();
+        assert!(
+            alfred_core::panel::get(&editor.panels, "status").is_none(),
+            "Panel should be gone after remove-panel"
+        );
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_size_evaluated_then_size_updated() {
+        let (runtime, state) = create_panel_test_runtime();
+
+        runtime
+            .eval("(define-panel \"gutter\" \"left\" 4)")
+            .unwrap();
+        runtime.eval("(set-panel-size \"gutter\" 6)").unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "gutter").unwrap();
+        assert_eq!(panel.size, 6);
+    }
+
+    #[test]
+    fn given_viewport_at_line_5_when_viewport_top_line_evaluated_via_panel_runtime_then_returns_5()
+    {
+        let (runtime, _state) = create_panel_test_runtime();
+
+        let result = runtime.eval("(viewport-top-line)").unwrap();
+        assert_eq!(result.as_integer(), Some(5));
+    }
+
+    #[test]
+    fn given_viewport_height_24_when_viewport_height_evaluated_via_panel_runtime_then_returns_24() {
+        let (runtime, _state) = create_panel_test_runtime();
 
         let result = runtime.eval("(viewport-height)").unwrap();
         assert_eq!(result.as_integer(), Some(24));
