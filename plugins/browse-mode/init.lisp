@@ -100,14 +100,14 @@
   (lambda ()
     (if (< browser-cursor (- (length browser-entries) 1))
       (set browser-cursor (+ browser-cursor 1))
-      #f)
+      nil)
     (browser-render)))
 
 (define-command "browser-cursor-up"
   (lambda ()
     (if (> browser-cursor 0)
       (set browser-cursor (- browser-cursor 1))
-      #f)
+      nil)
     (browser-render)))
 
 (define-command "browser-jump-first"
@@ -145,23 +145,23 @@
 (define-command "browser-parent"
   (lambda ()
     (if (= (path-parent browser-current-dir) browser-current-dir)
-      #f
+      nil
       (browser-do-go-parent))))
 
 (define browser-do-go-parent
   (lambda ()
     (if (> (length browser-history) 0)
       (set browser-cursor (nth 1 (first browser-history)))
-      #f)
+      nil)
     (if (> (length browser-history) 0)
       (set browser-history (rest browser-history))
-      #f)
+      nil)
     (set browser-current-dir (path-parent browser-current-dir))
     (set browser-entries
       (browser-add-parent-entry browser-current-dir (list-dir browser-current-dir)))
     (if (> browser-cursor (- (length browser-entries) 1))
       (set browser-cursor (- (length browser-entries) 1))
-      #f)
+      nil)
     (browser-render)))
 
 (define-command "browser-quit"
@@ -174,11 +174,11 @@
 (define browser-cli-arg (cli-argument))
 
 (if (= browser-cli-arg browser-empty-str)
-  #f
+  nil
   (if (is-dir? browser-cli-arg)
     (begin
       (set browser-root-dir browser-cli-arg)
       (browser-load-dir browser-cli-arg)
       (set-mode "browse")
       (set-active-keymap "browse-mode"))
-    #f))
+    nil))
