@@ -1335,6 +1335,8 @@ fn parse_panel_position(position_str: &str) -> Option<panel::PanelPosition> {
 /// - `(panel-cursor-down name)` -- move panel cursor down by 1
 /// - `(panel-cursor-up name)` -- move panel cursor up by 1
 /// - `(panel-entry-count name)` -- return number of lines set on the panel
+/// - `(clear-panel-lines name)` -- clear all lines and reset cursor
+/// - `(panel-set-cursor name line)` -- set panel cursor to specific line
 pub fn register_panel_focus_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -1343,15 +1345,17 @@ pub fn register_panel_focus_primitives(runtime: &LispRuntime, state: Rc<RefCell<
     register_panel_cursor_line(env.clone(), state.clone());
     register_panel_cursor_down(env.clone(), state.clone());
     register_panel_cursor_up(env.clone(), state.clone());
-    register_panel_entry_count(env, state);
+    register_panel_entry_count(env.clone(), state.clone());
+    register_clear_panel_lines(env.clone(), state.clone());
+    register_panel_set_cursor(env, state);
 }
 
 /// Registers `focus-panel`: gives keyboard focus to a named panel.
 ///
 /// Usage: `(focus-panel "name")`
 ///
-/// Sets `focused_panel` to the given name and switches mode/keymaps
-/// to `"panel-{name}"` / `["{name}-mode"]` so the panel's keymap receives input.
+/// Sets `focused_panel` to the given name. Mode and keymaps are NOT changed --
+/// the Lisp layer is responsible for setting mode/keymaps after calling this.
 fn register_focus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "focus-panel", move |_env, args| {
         let name = extract_string_arg(&args, "focus-panel")?;
@@ -1363,8 +1367,6 @@ fn register_focus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
             });
         }
         editor.focused_panel = Some(name.clone());
-        editor.mode = format!("panel-{}", name);
-        editor.active_keymaps = vec![format!("{}-mode", name)];
         Ok(Value::NIL)
     });
 }
@@ -1373,13 +1375,12 @@ fn register_focus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
 ///
 /// Usage: `(unfocus-panel)`
 ///
-/// Clears `focused_panel` and restores mode to "normal" with "normal-mode" keymap.
+/// Clears `focused_panel` only. Mode and keymaps are NOT changed --
+/// the Lisp layer is responsible for restoring mode/keymaps after calling this.
 fn register_unfocus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "unfocus-panel", move |_env, _args| {
         let mut editor = state.borrow_mut();
         editor.focused_panel = None;
-        editor.mode = "normal".to_string();
-        editor.active_keymaps = vec!["normal-mode".to_string()];
         Ok(Value::NIL)
     });
 }
@@ -1431,6 +1432,44 @@ fn register_panel_entry_count(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorSta
         let count =
             panel::panel_entry_count(&editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
         Ok(Value::Int(count as i32))
+    });
+}
+
+/// Registers `clear-panel-lines`: clears all lines from a panel and resets cursor to 0.
+///
+/// Usage: `(clear-panel-lines "name")`
+fn register_clear_panel_lines(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "clear-panel-lines", move |_env, args| {
+        let name = extract_string_arg(&args, "clear-panel-lines")?;
+        let mut editor = state.borrow_mut();
+        panel::clear_lines(&mut editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `panel-set-cursor`: sets panel cursor to a specific line.
+///
+/// Usage: `(panel-set-cursor "name" line)`
+fn register_panel_set_cursor(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "panel-set-cursor", move |_env, args| {
+        let name = extract_string_arg(&args, "panel-set-cursor")?;
+        let line = match args.get(1) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("panel-set-cursor: expected integer for line, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "panel-set-cursor: missing required argument 'line'".to_string(),
+                });
+            }
+        };
+        let mut editor = state.borrow_mut();
+        panel::set_panel_cursor(&mut editor.panels, &name, line)
+            .map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
     });
 }
 
@@ -5049,7 +5088,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn given_panel_when_focus_panel_then_focused_panel_set_and_mode_switched() {
+    fn given_panel_when_focus_panel_then_focused_panel_set() {
         let (runtime, state) = create_panel_test_runtime();
         runtime
             .eval("(define-panel \"sidebar\" \"left\" 20)")
@@ -5059,8 +5098,6 @@ mod tests {
 
         let editor = state.borrow();
         assert_eq!(editor.focused_panel, Some("sidebar".to_string()));
-        assert_eq!(editor.mode, "panel-sidebar");
-        assert_eq!(editor.active_keymaps, vec!["sidebar-mode".to_string()]);
     }
 
     #[test]
@@ -5075,7 +5112,7 @@ mod tests {
     }
 
     #[test]
-    fn given_focused_panel_when_unfocus_panel_then_mode_restored_to_normal() {
+    fn given_focused_panel_when_unfocus_panel_then_focused_panel_cleared() {
         let (runtime, state) = create_panel_test_runtime();
         runtime
             .eval("(define-panel \"sidebar\" \"left\" 20)")
@@ -5086,8 +5123,6 @@ mod tests {
 
         let editor = state.borrow();
         assert_eq!(editor.focused_panel, None);
-        assert_eq!(editor.mode, "normal");
-        assert_eq!(editor.active_keymaps, vec!["normal-mode".to_string()]);
     }
 
     #[test]
@@ -5158,6 +5193,58 @@ mod tests {
 
         let result = runtime.eval("(viewport-height)").unwrap();
         assert_eq!(result.as_integer(), Some(24));
+    }
+
+    // -----------------------------------------------------------------------
+    // clear-panel-lines primitive
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_panel_with_lines_when_clear_panel_lines_then_lines_empty() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+
+        runtime.eval("(clear-panel-lines \"tree\")").unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "tree").unwrap();
+        assert!(panel.lines.is_empty());
+        assert_eq!(panel.cursor_line, 0);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_clear_panel_lines_then_error() {
+        let (runtime, _state) = create_panel_test_runtime();
+        let result = runtime.eval("(clear-panel-lines \"nope\")");
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // panel-set-cursor primitive
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_panel_when_panel_set_cursor_then_cursor_at_target() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 2 \"c\")").unwrap();
+
+        runtime.eval("(panel-set-cursor \"tree\" 2)").unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "tree").unwrap();
+        assert_eq!(panel.cursor_line, 2);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_panel_set_cursor_then_error() {
+        let (runtime, _state) = create_panel_test_runtime();
+        let result = runtime.eval("(panel-set-cursor \"nope\" 0)");
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------

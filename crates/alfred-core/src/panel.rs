@@ -189,6 +189,29 @@ pub fn panel_entry_count(registry: &PanelRegistry, name: &str) -> Result<usize, 
         .ok_or_else(|| format!("Panel '{}' not found", name))
 }
 
+/// Clears all lines from a panel, resetting cursor_line to 0.
+///
+/// Returns an error if the panel does not exist.
+pub fn clear_lines(registry: &mut PanelRegistry, name: &str) -> Result<(), String> {
+    find_panel_mut(registry, name).map(|panel| {
+        panel.lines.clear();
+        panel.cursor_line = 0;
+    })
+}
+
+/// Sets the cursor line of a panel to an explicit value, clamped to valid range.
+///
+/// Returns an error if the panel does not exist.
+pub fn set_panel_cursor(
+    registry: &mut PanelRegistry,
+    name: &str,
+    line: usize,
+) -> Result<(), String> {
+    find_panel_mut(registry, name).map(|panel| {
+        panel.cursor_line = line;
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -477,5 +500,65 @@ mod tests {
     fn given_nonexistent_panel_when_entry_count_then_error() {
         let registry = new();
         assert!(panel_entry_count(&registry, "nope").is_err());
+    }
+
+    // -- clear_lines ----------------------------------------------------------
+
+    #[test]
+    fn given_panel_with_lines_when_clear_lines_then_lines_empty_and_cursor_reset() {
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+        set_line(&mut registry, "tree", 0, "a").unwrap();
+        set_line(&mut registry, "tree", 1, "b").unwrap();
+        set_line(&mut registry, "tree", 2, "c").unwrap();
+        panel_cursor_down(&mut registry, "tree").unwrap();
+        panel_cursor_down(&mut registry, "tree").unwrap();
+        assert_eq!(get(&registry, "tree").unwrap().cursor_line, 2);
+
+        clear_lines(&mut registry, "tree").unwrap();
+
+        let panel = get(&registry, "tree").unwrap();
+        assert!(panel.lines.is_empty());
+        assert_eq!(panel.cursor_line, 0);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_clear_lines_then_error() {
+        let mut registry = new();
+        assert!(clear_lines(&mut registry, "nope").is_err());
+    }
+
+    // -- set_panel_cursor -----------------------------------------------------
+
+    #[test]
+    fn given_panel_when_set_panel_cursor_then_cursor_moves_to_target() {
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+        set_line(&mut registry, "tree", 0, "a").unwrap();
+        set_line(&mut registry, "tree", 1, "b").unwrap();
+        set_line(&mut registry, "tree", 2, "c").unwrap();
+
+        set_panel_cursor(&mut registry, "tree", 2).unwrap();
+
+        assert_eq!(get(&registry, "tree").unwrap().cursor_line, 2);
+    }
+
+    #[test]
+    fn given_panel_when_set_panel_cursor_to_zero_then_cursor_at_zero() {
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+        set_line(&mut registry, "tree", 0, "a").unwrap();
+        set_line(&mut registry, "tree", 1, "b").unwrap();
+        panel_cursor_down(&mut registry, "tree").unwrap();
+
+        set_panel_cursor(&mut registry, "tree", 0).unwrap();
+
+        assert_eq!(get(&registry, "tree").unwrap().cursor_line, 0);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_set_panel_cursor_then_error() {
+        let mut registry = new();
+        assert!(set_panel_cursor(&mut registry, "nope", 0).is_err());
     }
 }

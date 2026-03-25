@@ -245,7 +245,16 @@
 (define-key "filetree-mode" "Char:l" "sidebar-enter")
 (define-key "filetree-mode" "Char:q" "sidebar-unfocus")
 (define-key "filetree-mode" "Escape" "sidebar-unfocus")
-(define-key "filetree-mode" "Ctrl:e" "sidebar-unfocus")
+(define-key "filetree-mode" "Ctrl:e" "toggle-sidebar")
+
+;; Prepend ".." entry for parent navigation unless at root
+(define sidebar-add-parent-entry
+  (lambda (dir entries)
+    (if (= dir browser-root-dir)
+      entries
+      (if (= (path-parent dir) dir)
+        entries
+        (cons (list ".." "dir") entries)))))
 
 ;; Populate sidebar panel lines from entries list
 (define sidebar-populate
@@ -260,11 +269,13 @@
             (if (= (nth 1 (nth idx entries)) "dir") "/" browser-empty-str))))
         (sidebar-populate entries (+ idx 1))))))
 
-;; Load sidebar entries for a directory
+;; Load sidebar entries for a directory -- clears old lines and resets cursor
 (define sidebar-load
   (lambda (dir)
+    (clear-panel-lines "filetree")
     (set sidebar-current-dir dir)
-    (set sidebar-entries (list-dir dir))
+    (set sidebar-entries (sidebar-add-parent-entry dir (list-dir dir)))
+    (panel-set-cursor "filetree" 0)
     (sidebar-populate sidebar-entries 0)))
 
 ;; Toggle sidebar visibility + focus
@@ -277,10 +288,10 @@
       (if sidebar-visible
         (begin
           (set sidebar-visible nil)
+          (set-panel-size "filetree" 0)
           (unfocus-panel)
           (set-mode "normal")
-          (set-active-keymap "normal-mode")
-          (set-panel-size "filetree" 0))
+          (set-active-keymap "normal-mode"))
         (begin
           (set sidebar-visible 1)
           (if sidebar-created
@@ -290,7 +301,10 @@
               (set sidebar-created 1)))
           (set-panel-style "filetree" "#6c7086" "#1e1e2e")
           (set-panel-size "filetree" sidebar-width)
-          (sidebar-load browser-root-dir)
+          (sidebar-load
+            (if (= sidebar-current-dir browser-empty-str)
+              browser-root-dir
+              sidebar-current-dir))
           (set sidebar-saved-mode (current-mode))
           (focus-panel "filetree")
           (set-mode "panel-filetree")
@@ -322,9 +336,15 @@
     (if (= (length sidebar-entries) 0)
       nil
       (if (= (sidebar-current-type) "dir")
-        (sidebar-load (path-join sidebar-current-dir (sidebar-current-name)))
+        (if (= (sidebar-current-name) "..")
+          (sidebar-load (path-parent sidebar-current-dir))
+          (sidebar-load (path-join sidebar-current-dir (sidebar-current-name))))
         (begin
+          (set sidebar-visible nil)
+          (set-panel-size "filetree" 0)
           (unfocus-panel)
+          (set-mode "normal")
+          (set-active-keymap "normal-mode")
           (open-file (path-join sidebar-current-dir (sidebar-current-name))))))))
 
 (define-command "sidebar-unfocus"
