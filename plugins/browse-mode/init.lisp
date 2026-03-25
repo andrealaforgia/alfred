@@ -61,6 +61,47 @@
             (browser-build-lines (rest entries) (+ idx 1))))))))
 
 ;; ---------------------------------------------------------------------------
+;; Colors
+;; ---------------------------------------------------------------------------
+
+(define browser-color-blue "#89b4fa")
+(define browser-color-pink "#f5c2e7")
+(define browser-color-gray "#cdd6f4")
+
+;; ---------------------------------------------------------------------------
+;; Style: apply per-line colors after buffer-set-content
+;; ---------------------------------------------------------------------------
+
+;; Style a single entry line (line-num is the buffer line, idx is the entry index)
+(define browser-style-entry
+  (lambda (entry idx line-num)
+    (if (= idx browser-cursor)
+      (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-pink)
+      (if (= (nth 1 entry) "dir")
+        (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-blue)
+        (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-gray)))))
+
+;; Recursively style all entry lines; entries start at buffer line 2
+(define browser-style-entries
+  (lambda (entries idx)
+    (if (= (length entries) 0)
+      nil
+      (begin
+        (browser-style-entry (first entries) idx (+ idx 2))
+        (if (> (length entries) 1)
+          (browser-style-entries (rest entries) (+ idx 1))
+          nil)))))
+
+;; Apply all line styles for the browser view
+(define browser-apply-styles
+  (lambda ()
+    (clear-line-styles)
+    (set-line-style 0 0 (str-length (buffer-get-line 0)) browser-color-blue)
+    (if (> (length browser-entries) 0)
+      (browser-style-entries browser-entries 0)
+      nil)))
+
+;; ---------------------------------------------------------------------------
 ;; Render: rebuild buffer text from current state
 ;; ---------------------------------------------------------------------------
 
@@ -73,7 +114,8 @@
           newline
           (if (= (length browser-entries) 0)
             "   (empty directory)"
-            (browser-build-lines browser-entries 0)))))))
+            (browser-build-lines browser-entries 0)))))
+    (browser-apply-styles)))
 
 ;; ---------------------------------------------------------------------------
 ;; Load entries for a directory
