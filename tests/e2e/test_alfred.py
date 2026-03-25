@@ -3565,3 +3565,154 @@ class TestLargeFileRopeChunkBoundary:
             f"Line 79 (last) should be untouched, got: {saved_lines[79]!r}"
 
         os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Interactive sidebar tests
+# ---------------------------------------------------------------------------
+
+class TestInteractiveSidebar:
+    """Verify the interactive file tree sidebar (Ctrl-e) works."""
+
+    def test_sidebar_toggle_and_quit(self):
+        """Ctrl-e opens sidebar, Ctrl-e again closes it, then :q quits."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
+        target = os.path.join(tmpdir, "hello.txt")
+        with open(target, "w") as f:
+            f.write("hello\n")
+
+        child = spawn_alfred(target)
+
+        # Open sidebar with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+
+        # Close sidebar with Ctrl-e (should return to normal mode)
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+
+        # Quit normally
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after sidebar toggle, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_sidebar_navigate_and_unfocus(self):
+        """Open sidebar, navigate with j/k, unfocus with q."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
+        for name in ["aaa.txt", "bbb.txt", "ccc.txt"]:
+            with open(os.path.join(tmpdir, name), "w") as f:
+                f.write(f"{name}\n")
+        target = os.path.join(tmpdir, "aaa.txt")
+
+        child = spawn_alfred(target)
+
+        # Open sidebar with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+
+        # Navigate down twice
+        send_keys(child, "j")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.1)
+
+        # Navigate up once
+        send_keys(child, "k")
+        time.sleep(0.1)
+
+        # Unfocus with q
+        send_keys(child, "q")
+        time.sleep(0.3)
+
+        # Should be back in normal mode — quit
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after sidebar navigate+unfocus, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_sidebar_open_file_from_sidebar(self):
+        """Open sidebar, select a file with Enter, verify it opens."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
+        target = os.path.join(tmpdir, "target.txt")
+        with open(target, "w") as f:
+            f.write("sidebar opened this\n")
+
+        # Open a different file first
+        other = os.path.join(tmpdir, "other.txt")
+        with open(other, "w") as f:
+            f.write("not this one\n")
+
+        child = spawn_alfred(other)
+
+        # Open sidebar with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(1.0)
+
+        # Sidebar shows root dir entries (sorted): other.txt, target.txt
+        # Navigate to target.txt (j to move down)
+        send_keys(child, "j")
+        time.sleep(0.2)
+
+        # Press Enter to open target.txt
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Should now be editing target.txt — save and quit
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after sidebar file open, got {exit_code}"
+
+        saved = read_file(target)
+        assert "sidebar opened this" in saved, \
+            f"Expected target.txt content, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_ctrl_b_toggles_to_browser_and_back(self):
+        """Ctrl-b opens full browser, select file returns to editor."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlb_")
+        target = os.path.join(tmpdir, "myfile.txt")
+        with open(target, "w") as f:
+            f.write("original content\n")
+
+        child = spawn_alfred(target)
+
+        # Press Ctrl-b to toggle to browser
+        child.send("\x02")  # Ctrl-b
+        time.sleep(1.0)
+
+        # Navigate to myfile.txt and open it
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Back in editor — save and quit
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after Ctrl-b toggle, got {exit_code}"
+
+        saved = read_file(target)
+        assert "original content" in saved, \
+            f"File should be preserved after Ctrl-b round-trip, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
