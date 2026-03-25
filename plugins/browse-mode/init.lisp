@@ -169,7 +169,7 @@
 (define-command "browser-quit"
   (lambda () (quit)))
 
-;; Return to browser from normal mode via :browse
+;; Return to browser from normal mode via :browse or Ctrl-b
 (define-command "browse"
   (lambda ()
     (if (= browser-root-dir browser-empty-str)
@@ -178,6 +178,49 @@
         (browser-load-dir browser-current-dir)
         (set-mode "browse")
         (set-active-keymap "browse-mode")))))
+
+;; Ctrl-b in normal mode toggles to browser
+(define-key "normal-mode" "Ctrl:b" "browse")
+
+;; ---------------------------------------------------------------------------
+;; File tree sidebar (read-only left panel)
+;; ---------------------------------------------------------------------------
+
+(define browser-sidebar-visible nil)
+(define browser-sidebar-width 30)
+
+(define browser-build-sidebar
+  (lambda (entries idx)
+    (if (= (length entries) 0)
+      nil
+      (begin
+        (set-panel-line "filetree" idx
+          (str-concat (list
+            " "
+            (first (nth idx entries))
+            (if (= (nth 1 (nth idx entries)) "dir") "/" browser-empty-str))))
+        (if (< (+ idx 1) (length entries))
+          (browser-build-sidebar entries (+ idx 1))
+          nil)))))
+
+(define-command "toggle-sidebar"
+  (lambda ()
+    (if (= browser-root-dir browser-empty-str)
+      (message "No browse directory set")
+      (if browser-sidebar-visible
+        (begin
+          (set browser-sidebar-visible nil)
+          (set-panel-size "filetree" 0))
+        (begin
+          (set browser-sidebar-visible 1)
+          (define-panel "filetree" "left" browser-sidebar-width)
+          (set-panel-style "filetree" "#6c7086" "default")
+          (set-panel-size "filetree" browser-sidebar-width)
+          (define sidebar-entries (list-dir browser-root-dir))
+          (browser-build-sidebar sidebar-entries 0))))))
+
+;; Ctrl-e in normal mode toggles sidebar
+(define-key "normal-mode" "Ctrl:e" "toggle-sidebar")
 
 ;; ---------------------------------------------------------------------------
 ;; Activation: check CLI argument on load
