@@ -167,6 +167,16 @@
 (define-command "browser-quit"
   (lambda () (quit)))
 
+;; Return to browser from normal mode via :browse
+(define-command "browse"
+  (lambda ()
+    (if (= browser-root-dir browser-empty-str)
+      (message "No browse directory set")
+      (begin
+        (browser-load-dir browser-current-dir)
+        (set-mode "browse")
+        (set-active-keymap "browse-mode")))))
+
 ;; ---------------------------------------------------------------------------
 ;; Activation: check CLI argument on load
 ;; ---------------------------------------------------------------------------
