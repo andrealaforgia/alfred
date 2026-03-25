@@ -1754,6 +1754,28 @@ pub fn register_list_primitives(runtime: &LispRuntime) {
     );
     env.borrow_mut()
         .define(Symbol("nil?".to_string()), Value::NativeFunc(native_is_nil));
+
+    // Register '=' as an alias for '==' (rust_lisp built-in).
+    // Standard Lisp/Scheme uses '=' for numeric equality, which is what
+    // rust_lisp's '==' provides. This alias lets plugins use the familiar '='.
+    env.borrow_mut().define(
+        Symbol("=".to_string()),
+        Value::NativeFunc(|_env, args| {
+            let a = args
+                .first()
+                .cloned()
+                .ok_or_else(|| rust_lisp::model::RuntimeError {
+                    msg: "= requires 2 arguments".to_string(),
+                })?;
+            let b = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| rust_lisp::model::RuntimeError {
+                    msg: "= requires 2 arguments".to_string(),
+                })?;
+            Ok(if a == b { Value::True } else { Value::False })
+        }),
+    );
 }
 
 /// Extracts a required list argument at the given index.
