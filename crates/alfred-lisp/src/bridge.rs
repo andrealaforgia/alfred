@@ -1413,6 +1413,13 @@ pub fn register_string_primitives(runtime: &LispRuntime) {
         Symbol("parse-int".to_string()),
         Value::NativeFunc(native_parse_int),
     );
+
+    // String constants: rust_lisp doesn't process escape sequences in string
+    // literals, so "\n" produces literal backslash-n. Provide a newline constant.
+    env.borrow_mut().define(
+        Symbol("newline".to_string()),
+        Value::String("\n".to_string()),
+    );
 }
 
 // ---------------------------------------------------------------------------

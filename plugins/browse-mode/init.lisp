@@ -57,7 +57,7 @@
         (str-concat
           (list
             (browser-format-entry (first entries) idx)
-            "\n"
+            newline
             (browser-build-lines (rest entries) (+ idx 1))))))))
 
 ;; ---------------------------------------------------------------------------
@@ -69,8 +69,8 @@
     (buffer-set-content
       (str-concat
         (list
-          " " browser-current-dir "\n"
-          "\n"
+          " " browser-current-dir newline
+          newline
           (if (= (length browser-entries) 0)
             "   (empty directory)"
             (browser-build-lines browser-entries 0)))))))
