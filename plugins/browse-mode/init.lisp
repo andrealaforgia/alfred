@@ -264,28 +264,28 @@
       (first entry)
       (if (= (nth 1 entry) "dir") "/" browser-empty-str)))))
 
-;; Populate sidebar panel lines from entries list
-(define sidebar-populate
-  (lambda (entries idx)
+;; Populate sidebar panel lines from entries list (offset by header)
+(define sidebar-populate-with-offset
+  (lambda (entries idx cursor-entry-idx)
     (if (= idx (length entries))
       nil
       (begin
-        (set-panel-line "filetree" idx
-          (sidebar-format-panel-entry (nth idx entries) idx (panel-cursor-line "filetree")))
-        (sidebar-populate entries (+ idx 1))))))
+        (set-panel-line "filetree" (+ idx sidebar-header-offset)
+          (sidebar-format-panel-entry (nth idx entries) idx cursor-entry-idx))
+        (sidebar-populate-with-offset entries (+ idx 1) cursor-entry-idx)))))
 
 ;; Apply per-line colors to sidebar entries
 (define sidebar-style-entry
   (lambda (entry idx cursor)
     (if (= idx cursor)
-      (set-panel-line-style "filetree" idx 0
+      (set-panel-line-style "filetree" (+ idx sidebar-header-offset) 0
         (str-length (sidebar-format-panel-entry entry idx cursor))
         browser-color-pink)
       (if (= (nth 1 entry) "dir")
-        (set-panel-line-style "filetree" idx 0
+        (set-panel-line-style "filetree" (+ idx sidebar-header-offset) 0
           (str-length (sidebar-format-panel-entry entry idx cursor))
           browser-color-blue)
-        (set-panel-line-style "filetree" idx 0
+        (set-panel-line-style "filetree" (+ idx sidebar-header-offset) 0
           (str-length (sidebar-format-panel-entry entry idx cursor))
           browser-color-gray)))))
 
@@ -302,18 +302,31 @@
 (define sidebar-apply-styles
   (lambda ()
     (clear-panel-line-styles "filetree")
+    ;; Re-style header
+    (set-panel-line-style "filetree" 0 0
+      (+ (str-length sidebar-current-dir) 1) browser-color-blue)
     (if (> (length sidebar-entries) 0)
-      (sidebar-style-entries sidebar-entries 0 (panel-cursor-line "filetree"))
+      (sidebar-style-entries sidebar-entries 0
+        (- (panel-cursor-line "filetree") sidebar-header-offset))
       nil)))
 
 ;; Load sidebar entries for a directory -- clears old lines and resets cursor
+;; Line 0 = header (directory path), Line 1 = separator, Lines 2+ = entries
+(define sidebar-header-offset 2)
+
 (define sidebar-load
   (lambda (dir)
     (clear-panel-lines "filetree")
     (set sidebar-current-dir dir)
     (set sidebar-entries (sidebar-add-parent-entry dir (list-dir dir)))
-    (panel-set-cursor "filetree" 0)
-    (sidebar-populate sidebar-entries 0)
+    (panel-set-cursor "filetree" sidebar-header-offset)
+    ;; Header line
+    (set-panel-line "filetree" 0 (str-concat (list " " dir)))
+    (set-panel-line-style "filetree" 0 0 (+ (str-length dir) 1) browser-color-blue)
+    ;; Separator
+    (set-panel-line "filetree" 1 (str-concat (list)))
+    ;; Entries start at line 2
+    (sidebar-populate-with-offset sidebar-entries 0 (- (panel-cursor-line "filetree") sidebar-header-offset))
     (sidebar-apply-styles)))
 
 ;; Toggle sidebar visibility + focus
@@ -350,27 +363,38 @@
           (set-active-keymap "filetree-mode"))))))
 
 ;; Sidebar commands — re-populate lines after cursor move to update ">" indicator
+(define sidebar-refresh
+  (lambda ()
+    (sidebar-populate-with-offset sidebar-entries 0
+      (- (panel-cursor-line "filetree") sidebar-header-offset))
+    (sidebar-apply-styles)))
+
 (define-command "sidebar-cursor-down"
   (lambda ()
     (panel-cursor-down "filetree")
-    (sidebar-populate sidebar-entries 0)
-    (sidebar-apply-styles)))
+    (sidebar-refresh)))
 
 (define-command "sidebar-cursor-up"
   (lambda ()
-    (panel-cursor-up "filetree")
-    (sidebar-populate sidebar-entries 0)
-    (sidebar-apply-styles)))
+    (if (> (panel-cursor-line "filetree") sidebar-header-offset)
+      (panel-cursor-up "filetree")
+      nil)
+    (sidebar-refresh)))
+
+;; Helper: entry index from visual cursor (subtract header offset)
+(define sidebar-entry-index
+  (lambda ()
+    (- (panel-cursor-line "filetree") sidebar-header-offset)))
 
 ;; Helper to get current sidebar entry name
 (define sidebar-current-name
   (lambda ()
-    (first (nth (panel-cursor-line "filetree") sidebar-entries))))
+    (first (nth (sidebar-entry-index) sidebar-entries))))
 
 ;; Helper to get current sidebar entry type
 (define sidebar-current-type
   (lambda ()
-    (nth 1 (nth (panel-cursor-line "filetree") sidebar-entries))))
+    (nth 1 (nth (sidebar-entry-index) sidebar-entries))))
 
 (define-command "sidebar-enter"
   (lambda ()
@@ -381,8 +405,6 @@
           (sidebar-load (path-parent sidebar-current-dir))
           (sidebar-load (path-join sidebar-current-dir (sidebar-current-name))))
         (begin
-          (set sidebar-visible nil)
-          (set-panel-size "filetree" 0)
           (unfocus-panel)
           (set-mode "normal")
           (set-active-keymap "normal-mode")
