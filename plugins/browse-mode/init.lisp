@@ -268,6 +268,8 @@
     (sidebar-populate sidebar-entries 0)))
 
 ;; Toggle sidebar visibility + focus
+(define sidebar-created nil)
+
 (define-command "toggle-sidebar"
   (lambda ()
     (if (= browser-root-dir browser-empty-str)
@@ -276,10 +278,16 @@
         (begin
           (set sidebar-visible nil)
           (unfocus-panel)
+          (set-mode "normal")
+          (set-active-keymap "normal-mode")
           (set-panel-size "filetree" 0))
         (begin
           (set sidebar-visible 1)
-          (define-panel "filetree" "left" sidebar-width)
+          (if sidebar-created
+            nil
+            (begin
+              (define-panel "filetree" "left" sidebar-width)
+              (set sidebar-created 1)))
           (set-panel-style "filetree" "#6c7086" "#1e1e2e")
           (set-panel-size "filetree" sidebar-width)
           (sidebar-load browser-root-dir)
