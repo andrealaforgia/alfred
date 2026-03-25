@@ -2287,6 +2287,7 @@ fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
                 editor.viewport.top_line = 0;
                 editor.mode = "normal".to_string();
                 editor.active_keymaps = vec!["normal-mode".to_string()];
+                editor.focused_panel = None;
                 editor.message = Some(filename);
                 Ok(Value::NIL)
             }

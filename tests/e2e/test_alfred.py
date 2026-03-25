@@ -3348,10 +3348,8 @@ class TestFolderBrowser:
 
         child = spawn_alfred(tmpdir)
 
-        # Sorted entries: ../ (0), subdir/ (1), aaa.txt (2), zzz.txt (3)
-        # Navigate to aaa.txt: j j (cursor starts at 0 = ../)
-        send_keys(child, "j")
-        time.sleep(0.1)
+        # Sorted entries (no ../ at root): subdir/ (0), aaa.txt (1), zzz.txt (2)
+        # Navigate to aaa.txt: j once (cursor starts at 0 = subdir/)
         send_keys(child, "j")
         time.sleep(0.1)
 
@@ -3764,12 +3762,9 @@ class TestBrowserEditorInteraction:
             shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render 'src/' on startup")
 
-        # Step 2: Enter src/ directory (j past README, to src/)
-        # Sorted: README.md, src/ — src is a dir so it comes first
-        # Actually sorted: dirs first: src/, then files: README.md
-        send_keys(child, "j")  # move to src/
-        time.sleep(0.2)
-        child.send("\r")  # enter src/
+        # Step 2: Enter src/ directory (cursor starts at 0 = src/, no ../ at root)
+        # Sorted: dirs first: src/ (0), then files: README.md (1)
+        child.send("\r")  # enter src/ (already at cursor 0)
         time.sleep(1.0)
 
         # Inside src/: main.rs — navigate to it and open
@@ -3928,13 +3923,11 @@ class TestBrowserEditorInteraction:
             shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render 'deep/'")
 
-        # Enter deep/
-        send_keys(child, "j")
-        time.sleep(0.2)
+        # Enter deep/ (at cursor 0, no ../ at root)
         child.send("\r")
         time.sleep(1.0)
 
-        # Open nested.txt
+        # Inside deep/: ../ (0), nested.txt (1) — navigate to nested.txt
         send_keys(child, "j")  # past ../
         time.sleep(0.2)
         child.send("\r")

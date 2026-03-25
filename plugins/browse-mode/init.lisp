@@ -299,22 +299,25 @@
     (panel-cursor-up "filetree")
     nil))
 
+;; Helper to get current sidebar entry name
+(define sidebar-current-name
+  (lambda ()
+    (first (nth (panel-cursor-line "filetree") sidebar-entries))))
+
+;; Helper to get current sidebar entry type
+(define sidebar-current-type
+  (lambda ()
+    (nth 1 (nth (panel-cursor-line "filetree") sidebar-entries))))
+
 (define-command "sidebar-enter"
   (lambda ()
     (if (= (length sidebar-entries) 0)
       nil
-      (begin
-        (define idx (panel-cursor-line "filetree"))
-        (define entry (nth idx sidebar-entries))
-        (define name (first entry))
-        (define etype (nth 1 entry))
-        (if (= etype "dir")
-          (begin
-            (sidebar-load (path-join sidebar-current-dir name))
-            nil)
-          (begin
-            (unfocus-panel)
-            (open-file (path-join sidebar-current-dir name))))))))
+      (if (= (sidebar-current-type) "dir")
+        (sidebar-load (path-join sidebar-current-dir (sidebar-current-name)))
+        (begin
+          (unfocus-panel)
+          (open-file (path-join sidebar-current-dir (sidebar-current-name))))))))
 
 (define-command "sidebar-unfocus"
   (lambda ()
@@ -336,7 +339,11 @@
   (if (is-dir? browser-cli-arg)
     (begin
       (set browser-root-dir browser-cli-arg)
+      (set browser-current-dir browser-cli-arg)
       (browser-load-dir browser-cli-arg)
       (set-mode "browse")
       (set-active-keymap "browse-mode"))
-    nil))
+    (begin
+      (set browser-root-dir (path-parent browser-cli-arg))
+      (set browser-current-dir (path-parent browser-cli-arg))
+      nil)))
