@@ -1424,6 +1424,7 @@ pub fn run(
 
     let mut input_state = InputState::Normal;
     let mut pending_count: Option<u32> = None;
+    let mut last_buffer_id: u64 = state_rc.borrow().buffer.id();
 
     // Initial syntax highlighting: set language from filename if available
     {
@@ -1473,6 +1474,23 @@ pub fn run(
             }
             state.viewport.height = term_height.saturating_sub(reserved_rows);
             state.viewport.width = term_width;
+        }
+
+        // Detect if a new file was opened (e.g., via Lisp open-file primitive)
+        // by checking if the buffer id changed. Re-initialize syntax highlighting.
+        {
+            let current_id = state_rc.borrow().buffer.id();
+            if current_id != last_buffer_id {
+                last_buffer_id = current_id;
+                let state = state_rc.borrow();
+                if let Some(filename) = state.buffer.filename() {
+                    let fname = filename.to_string();
+                    let source = alfred_core::buffer::content(&state.buffer);
+                    drop(state);
+                    highlighter.set_language_for_file(&fname);
+                    highlighter.parse(&source);
+                }
+            }
         }
 
         // Apply syntax highlighting to line_styles before rendering
