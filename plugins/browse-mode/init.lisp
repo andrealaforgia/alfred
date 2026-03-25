@@ -27,8 +27,9 @@
 ;; Browser state
 ;; ---------------------------------------------------------------------------
 
-(define browser-current-dir "")
-(define browser-root-dir "")
+(define browser-empty-str (str-concat (list)))
+(define browser-current-dir browser-empty-str)
+(define browser-root-dir browser-empty-str)
 (define browser-entries (list))
 (define browser-cursor 0)
 (define browser-history (list))
@@ -44,13 +45,13 @@
       (list
         (if (= idx browser-cursor) " > " "   ")
         (first entry)
-        (if (= (nth 1 entry) "dir") "/" "")))))
+        (if (= (nth 1 entry) "dir") "/" browser-empty-str)))))
 
 ;; Recursive line builder
 (define browser-build-lines
   (lambda (entries idx)
     (if (= (length entries) 0)
-      ""
+      browser-empty-str
       (if (= (length entries) 1)
         (browser-format-entry (first entries) idx)
         (str-concat
@@ -172,7 +173,7 @@
 
 (define browser-cli-arg (cli-argument))
 
-(if (= browser-cli-arg "")
+(if (= browser-cli-arg browser-empty-str)
   #f
   (if (is-dir? browser-cli-arg)
     (begin
