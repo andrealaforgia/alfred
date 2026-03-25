@@ -289,10 +289,12 @@
         (begin
           (set sidebar-visible nil)
           (set-panel-size "filetree" 0)
+          (set-panel-size "gutter" (compute-gutter-width))
           (unfocus-panel)
           (set-mode "normal")
           (set-active-keymap "normal-mode"))
         (begin
+          (set-panel-size "gutter" 0)
           (set sidebar-visible 1)
           (if sidebar-created
             nil
@@ -342,6 +344,7 @@
         (begin
           (set sidebar-visible nil)
           (set-panel-size "filetree" 0)
+          (set-panel-size "gutter" (compute-gutter-width))
           (unfocus-panel)
           (set-mode "normal")
           (set-active-keymap "normal-mode")
@@ -349,6 +352,7 @@
 
 (define-command "sidebar-unfocus"
   (lambda ()
+    (set-panel-size "gutter" (compute-gutter-width))
     (unfocus-panel)
     (set-mode "normal")
     (set-active-keymap "normal-mode")))

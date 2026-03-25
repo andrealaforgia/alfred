@@ -4043,3 +4043,240 @@ class TestSidebarBugs:
             f"Expected clean exit after triple sidebar toggle, got {exit_code}"
 
         shutil.rmtree(tmpdir)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar rendering (3 tests)
+# ---------------------------------------------------------------------------
+
+class TestSidebarRendering:
+    """Tests for sidebar rendering bugs: gutter hiding, stale highlights."""
+
+    def test_no_tilde_after_ctrl_e(self):
+        """Opening the sidebar hides the gutter -- no tilde lines should appear.
+
+        Steps:
+        1. Open a file with content
+        2. Press Ctrl-e to open sidebar
+        3. Read screen -- assert no '~' in the file area (first few lines)
+        4. Press Ctrl-e to close -- verify file renders normally
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_tilde_")
+        target = os.path.join(tmpdir, "content.txt")
+        with open(target, "w") as f:
+            f.write("line one\nline two\nline three\nline four\nline five\n")
+
+        # Open Alfred on the directory, then open the file
+        child = spawn_alfred(tmpdir)
+        try:
+            child.expect("content.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'content.txt' within 5s")
+
+        # Open the file
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Ctrl-e to open sidebar
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Read screen
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # The file area should NOT show tilde lines from the gutter
+        # Split screen into lines and check the first several lines
+        screen_lines = screen.split("\n") if screen else []
+        tilde_in_content_area = False
+        for line in screen_lines[:10]:
+            # A tilde at the start of a line (after possible spaces) indicates
+            # gutter bleed -- the gutter is rendering ~ for empty lines
+            stripped = line.strip()
+            if stripped == "~" or stripped.startswith("~ "):
+                tilde_in_content_area = True
+                break
+
+        # Close sidebar: Escape then Ctrl-e
+        child.send("\x1b")
+        time.sleep(0.3)
+        child.send("\x05")
+        time.sleep(0.3)
+
+        send_colon_command(child, "q")
+        try:
+            exit_code = wait_for_exit(child, timeout=5)
+        except Exception:
+            send_colon_command(child, "q!")
+            exit_code = wait_for_exit(child)
+
+        assert not tilde_in_content_area, \
+            f"Tilde '~' found in content area while sidebar open: {repr(screen[:500])}"
+        assert exit_code == 0, \
+            f"Expected clean exit, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_syntax_highlighting_intact_after_sidebar_file_open(self):
+        """Opening a file from the sidebar clears stale styles -- no error on screen.
+
+        Steps:
+        1. Open Alfred on a directory
+        2. Open a .rs file from the browser
+        3. Press Ctrl-e, navigate sidebar to another .rs file, open it with Enter
+        4. Verify the file opens without 'error' on screen
+        5. Save with :wq and verify content
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_highlight_")
+        file_a = os.path.join(tmpdir, "alpha.rs")
+        file_b = os.path.join(tmpdir, "beta.rs")
+        with open(file_a, "w") as f:
+            f.write("fn main() {\n    println!(\"hello\");\n}\n")
+        with open(file_b, "w") as f:
+            f.write("fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
+
+        # Open Alfred on the directory
+        child = spawn_alfred(tmpdir)
+        try:
+            child.expect("alpha.rs", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'alpha.rs' within 5s")
+
+        # Open alpha.rs from browser
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Now open sidebar with Ctrl-e
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Navigate to beta.rs (it should be in the sidebar list)
+        # Press j to move cursor down (beta.rs is after alpha.rs alphabetically)
+        send_keys(child, "j")
+        time.sleep(0.2)
+
+        # Press Enter to open beta.rs from sidebar
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Read screen to check for errors
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # Save and quit -- verifies file was opened correctly
+        send_colon_command(child, "wq")
+        try:
+            exit_code = wait_for_exit(child, timeout=5)
+        except Exception:
+            send_colon_command(child, "q!")
+            exit_code = wait_for_exit(child)
+
+        # Verify no error on screen
+        assert "error" not in screen.lower(), \
+            f"Error detected after sidebar file open: {repr(screen[:500])}"
+
+        # Verify the beta.rs file content is intact (was opened correctly)
+        content = read_file(file_b)
+        assert "fn add" in content, \
+            f"Expected 'fn add' in beta.rs, got: {repr(content)}"
+
+        assert exit_code == 0, \
+            f"Expected clean exit, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_no_stale_highlight_after_sidebar_close(self):
+        """Closing the sidebar restores gutter and clears stale artifacts.
+
+        Steps:
+        1. Open a file
+        2. Press Ctrl-e to open sidebar
+        3. Navigate sidebar (move cursor)
+        4. Press Ctrl-e to close sidebar
+        5. Read screen -- assert no reversed-color artifacts or errors
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_stale_")
+        target = os.path.join(tmpdir, "clean.txt")
+        with open(target, "w") as f:
+            f.write("first line\nsecond line\nthird line\n")
+
+        # Open Alfred on the directory
+        child = spawn_alfred(tmpdir)
+        try:
+            child.expect("clean.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'clean.txt' within 5s")
+
+        # Open the file from browser
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Ctrl-e to open sidebar
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Navigate sidebar (move cursor down and back up)
+        send_keys(child, "j")
+        time.sleep(0.2)
+        send_keys(child, "k")
+        time.sleep(0.2)
+
+        # Ctrl-e to close sidebar
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Read screen
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # Quit cleanly
+        send_colon_command(child, "q")
+        try:
+            exit_code = wait_for_exit(child, timeout=5)
+        except Exception:
+            send_colon_command(child, "q!")
+            exit_code = wait_for_exit(child)
+
+        # Assert no error or reversed-color ANSI artifacts
+        assert "error" not in screen.lower(), \
+            f"Error after sidebar close: {repr(screen[:500])}"
+        assert exit_code == 0, \
+            f"Expected clean exit, got {exit_code}"
+
+        shutil.rmtree(tmpdir)

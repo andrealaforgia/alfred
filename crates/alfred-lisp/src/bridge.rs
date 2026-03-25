@@ -2322,6 +2322,7 @@ fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
                 let filename = new_buffer.filename().unwrap_or(&path_str).to_string();
                 let mut editor = state.borrow_mut();
                 editor.buffer = new_buffer;
+                editor.line_styles.clear(); // Clear stale styles from previous file/browser
                 editor.cursor = cursor::new(0, 0);
                 editor.viewport.top_line = 0;
                 editor.mode = "normal".to_string();
