@@ -20,6 +20,8 @@
 (define-key "browse-mode" "Char:h" "browser-parent")
 (define-key "browse-mode" "Backspace" "browser-parent")
 (define-key "browse-mode" "Char:q" "browser-quit")
+(define-key "browse-mode" "Ctrl:e" "toggle-sidebar")
+(define-key "browse-mode" "Ctrl:b" "browse")
 
 (set-cursor-shape "browse" "block")
 
@@ -161,18 +163,22 @@
 
 (define-command "browser-jump-last"
   (lambda ()
-    (set browser-cursor (- (length browser-entries) 1))
+    (if (> (length browser-entries) 0)
+      (set browser-cursor (- (length browser-entries) 1))
+      nil)
     (browser-render)))
 
 (define-command "browser-enter"
   (lambda ()
-    (if (= (nth 1 (nth browser-cursor browser-entries)) "dir")
-      (if (= (first (nth browser-cursor browser-entries)) "..")
-        (browser-do-parent)
-        (browser-do-enter-dir (first (nth browser-cursor browser-entries))))
-      (open-file
-        (path-join browser-current-dir
-          (first (nth browser-cursor browser-entries)))))))
+    (if (= (length browser-entries) 0)
+      nil
+      (if (= (nth 1 (nth browser-cursor browser-entries)) "dir")
+        (if (= (first (nth browser-cursor browser-entries)) "..")
+          (browser-do-parent)
+          (browser-do-enter-dir (first (nth browser-cursor browser-entries))))
+        (open-file
+          (path-join browser-current-dir
+            (first (nth browser-cursor browser-entries))))))))
 
 (define browser-do-enter-dir
   (lambda (name)
