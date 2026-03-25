@@ -81,9 +81,11 @@
 
 (define browser-add-parent-entry
   (lambda (dir entries)
-    (if (= (path-parent dir) dir)
+    (if (= dir browser-root-dir)
       entries
-      (cons (list ".." "dir") entries))))
+      (if (= (path-parent dir) dir)
+        entries
+        (cons (list ".." "dir") entries)))))
 
 (define browser-load-dir
   (lambda (dir)
