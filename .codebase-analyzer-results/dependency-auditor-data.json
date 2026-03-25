@@ -1,0 +1,98 @@
+{
+  "overall_score": 82,
+  "summary": "Alfred has good dependency hygiene with a well-maintained, focused dependency set. All direct dependencies are actively maintained and pinned through Cargo.lock. No abandoned or critical issues detected. Minor observation: rust_lisp (0.18.0) is single-maintainer, but actively used and recently published.",
+  "dependency_counts": {
+    "direct": 8,
+    "dev_only": 1,
+    "transitive": 62,
+    "total": 70,
+    "max_tree_depth": 6
+  },
+  "outdated": [
+    {
+      "name": "tree-sitter-rust",
+      "current": "0.24.1",
+      "latest": "0.25.0",
+      "drift_severity": "minor",
+      "age_days": 180,
+      "breaking_change_risk": "low"
+    },
+    {
+      "name": "streaming-iterator",
+      "current": "0.1.9",
+      "latest": "0.1.9",
+      "drift_severity": "patch",
+      "age_days": 240,
+      "breaking_change_risk": "low"
+    }
+  ],
+  "abandoned": [],
+  "license_issues": [],
+  "duplicates": [
+    {
+      "function": "TUI rendering",
+      "libraries": [
+        "ratatui (0.29.0)",
+        "crossterm (0.28.1)"
+      ],
+      "recommendation": "No duplication issue: crossterm is the low-level terminal handler, ratatui is the high-level widget library. Correct separation of concerns."
+    }
+  ],
+  "phantom_dependencies": [],
+  "pinning_strategy": {
+    "exact_count": 8,
+    "range_count": 0,
+    "unpinned_count": 0,
+    "lock_file_present": true,
+    "lock_file_fresh": true
+  },
+  "supply_chain_risks": [
+    {
+      "name": "rust_lisp",
+      "risk_level": "low",
+      "indicators": [
+        "Single maintainer project",
+        "Last commit 60 days ago (actively maintained)",
+        "No pre/post-install scripts detected",
+        "Published on crates.io registry (verified source)"
+      ],
+      "recommendation": "Monitor for maintenance status. Project is well-documented and has stable API."
+    },
+    {
+      "name": "tree-sitter-* grammars",
+      "risk_level": "low",
+      "indicators": [
+        "Official tree-sitter grammar bindings",
+        "Published by tree-sitter organization",
+        "No build-time download risks"
+      ],
+      "recommendation": "Safe to use. Maintained as part of tree-sitter project."
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 2
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Update tree-sitter-rust to 0.25.0",
+      "description": "Minor version bump available for tree-sitter-rust (0.24.1 -> 0.25.0). No breaking changes expected. Improves grammar accuracy for Rust syntax highlighting.",
+      "effort": "low"
+    },
+    {
+      "priority": 2,
+      "title": "Monitor rust_lisp maintenance",
+      "description": "rust_lisp is a critical dependency with single maintainer. Set up quarterly checks for activity/maintenance status. Consider having a fallback Lisp implementation plan if maintenance stalls.",
+      "effort": "low"
+    },
+    {
+      "priority": 3,
+      "title": "Add SBOM (Software Bill of Materials) generation",
+      "description": "Generate and version SBOM (e.g., via cargo-sbom or cargo-cyclonedx) to improve supply chain transparency and vulnerability tracking.",
+      "effort": "medium"
+    }
+  ]
+}

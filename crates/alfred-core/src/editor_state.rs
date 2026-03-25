@@ -140,6 +140,9 @@ pub struct EditorState {
     /// The CLI argument (file/directory path) Alfred was started with.
     /// `None` if no argument was provided.
     pub cli_argument: Option<String>,
+    /// The name of the panel that currently has keyboard focus, or None for the editor.
+    /// When a panel is focused, key events are routed through the panel's keymap.
+    pub focused_panel: Option<String>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -1495,6 +1498,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         line_styles: HashMap::new(),
         panels: crate::panel::new(),
         cli_argument: None,
+        focused_panel: None,
     }
 }
 

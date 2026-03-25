@@ -1,0 +1,44 @@
+{
+  "overall_score": 5.5,
+  "bounded_context_count": 4,
+  "subdomain_distribution": {
+    "core": 1,
+    "supporting": 3,
+    "generic": 2
+  },
+  "anti_patterns": [
+    {
+      "name": "God Aggregate / Monolithic State",
+      "severity": "High",
+      "location": "crates/alfred-core/src/editor_state.rs (EditorState struct, 40+ public fields)"
+    },
+    {
+      "name": "Anemic Domain Model",
+      "severity": "Medium",
+      "location": "crates/alfred-core/src/ -- most domain types (Buffer, Cursor, Viewport) are data containers; all behavior lives in free functions in the same module rather than on the types themselves"
+    },
+    {
+      "name": "Leaking Tactical Patterns into TUI Shell",
+      "severity": "Medium",
+      "location": "crates/alfred-tui/src/app.rs -- InputState enum, Operator enum, execute_motion, execute_delete_with_motion are domain logic living in the imperative shell rather than alfred-core"
+    },
+    {
+      "name": "Missing Domain Events",
+      "severity": "Medium",
+      "location": "No domain event types defined; hook system (alfred-core/hook.rs) provides dispatching infrastructure but hooks are stringly-typed with no domain event model"
+    },
+    {
+      "name": "Shared Kernel Overload",
+      "severity": "Low",
+      "location": "crates/alfred-core/src/ contains 12 modules covering unrelated concerns (buffer, cursor, rainbow_csv, theme, text_object, viewport, panel, hook, command, key_event, error, editor_state)"
+    }
+  ],
+  "pattern_maturity": {
+    "strategic": 6,
+    "tactical": 4,
+    "language": 7,
+    "boundaries": 7,
+    "events": 2
+  },
+  "context_map_mermaid": "graph TD\n  Core[\"alfred-core\\n(Pure Domain Kernel)\\nBuffer, Cursor, Viewport,\\nCommands, Keymaps, Hooks,\\nTheme, Panels, EditorState\"]\n  Lisp[\"alfred-lisp\\n(FFI Bridge)\\nLispRuntime, Bridge primitives\"]\n  Plugin[\"alfred-plugin\\n(Plugin Lifecycle)\\nDiscovery, Registry, Metadata\"]\n  Syntax[\"alfred-syntax\\n(Syntax Highlighting)\\nSyntaxHighlighter, LanguageConfig\"]\n  TUI[\"alfred-tui\\n(Imperative Shell)\\nEvent loop, Renderer, InputState\"]\n  Bin[\"alfred-bin\\n(Composition Root)\\nmain, run_editor, load_plugins\"]\n  Plugins[\"plugins/\\n(Lisp Extension Layer)\\nvim-keybindings, status-bar,\\nline-numbers, browse-mode, etc.\"]\n\n  Core -->|\"depended on by\"| Lisp\n  Core -->|\"depended on by\"| Plugin\n  Core -->|\"depended on by\"| Syntax\n  Core -->|\"depended on by\"| TUI\n  Lisp -->|\"depended on by\"| Plugin\n  Lisp -->|\"depended on by\"| Bin\n  Plugin -->|\"depended on by\"| Bin\n  TUI -->|\"depended on by\"| Bin\n  Syntax -->|\"depended on by\"| Bin\n  Bin -->|\"loads at runtime\"| Plugins\n  Plugins -->|\"calls via bridge\"| Lisp"
+}

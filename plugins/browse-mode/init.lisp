@@ -225,15 +225,32 @@
 (define-key "normal-mode" "Ctrl:b" "browse")
 
 ;; ---------------------------------------------------------------------------
-;; File tree sidebar (read-only left panel)
+;; Interactive file tree sidebar (left panel with focus)
 ;; ---------------------------------------------------------------------------
 
-(define browser-sidebar-visible nil)
-(define browser-sidebar-width 30)
+(define sidebar-visible nil)
+(define sidebar-width 30)
+(define sidebar-entries (list))
+(define sidebar-current-dir browser-empty-str)
+(define sidebar-saved-mode browser-empty-str)
+(define sidebar-saved-keymaps (list))
 
-(define browser-build-sidebar
+;; Filetree keymap for when sidebar is focused
+(make-keymap "filetree-mode")
+(define-key "filetree-mode" "Char:j" "sidebar-cursor-down")
+(define-key "filetree-mode" "Char:k" "sidebar-cursor-up")
+(define-key "filetree-mode" "Down" "sidebar-cursor-down")
+(define-key "filetree-mode" "Up" "sidebar-cursor-up")
+(define-key "filetree-mode" "Enter" "sidebar-enter")
+(define-key "filetree-mode" "Char:l" "sidebar-enter")
+(define-key "filetree-mode" "Char:q" "sidebar-unfocus")
+(define-key "filetree-mode" "Escape" "sidebar-unfocus")
+(define-key "filetree-mode" "Ctrl:e" "sidebar-unfocus")
+
+;; Populate sidebar panel lines from entries list
+(define sidebar-populate
   (lambda (entries idx)
-    (if (= (length entries) 0)
+    (if (= idx (length entries))
       nil
       (begin
         (set-panel-line "filetree" idx
@@ -241,25 +258,69 @@
             " "
             (first (nth idx entries))
             (if (= (nth 1 (nth idx entries)) "dir") "/" browser-empty-str))))
-        (if (< (+ idx 1) (length entries))
-          (browser-build-sidebar entries (+ idx 1))
-          nil)))))
+        (sidebar-populate entries (+ idx 1))))))
 
+;; Load sidebar entries for a directory
+(define sidebar-load
+  (lambda (dir)
+    (set sidebar-current-dir dir)
+    (set sidebar-entries (list-dir dir))
+    (sidebar-populate sidebar-entries 0)))
+
+;; Toggle sidebar visibility + focus
 (define-command "toggle-sidebar"
   (lambda ()
     (if (= browser-root-dir browser-empty-str)
       (message "No browse directory set")
-      (if browser-sidebar-visible
+      (if sidebar-visible
         (begin
-          (set browser-sidebar-visible nil)
+          (set sidebar-visible nil)
+          (unfocus-panel)
           (set-panel-size "filetree" 0))
         (begin
-          (set browser-sidebar-visible 1)
-          (define-panel "filetree" "left" browser-sidebar-width)
-          (set-panel-style "filetree" "#6c7086" "default")
-          (set-panel-size "filetree" browser-sidebar-width)
-          (define sidebar-entries (list-dir browser-root-dir))
-          (browser-build-sidebar sidebar-entries 0))))))
+          (set sidebar-visible 1)
+          (define-panel "filetree" "left" sidebar-width)
+          (set-panel-style "filetree" "#6c7086" "#1e1e2e")
+          (set-panel-size "filetree" sidebar-width)
+          (sidebar-load browser-root-dir)
+          (set sidebar-saved-mode (current-mode))
+          (focus-panel "filetree")
+          (set-mode "panel-filetree")
+          (set-active-keymap "filetree-mode"))))))
+
+;; Sidebar commands
+(define-command "sidebar-cursor-down"
+  (lambda ()
+    (panel-cursor-down "filetree")
+    nil))
+
+(define-command "sidebar-cursor-up"
+  (lambda ()
+    (panel-cursor-up "filetree")
+    nil))
+
+(define-command "sidebar-enter"
+  (lambda ()
+    (if (= (length sidebar-entries) 0)
+      nil
+      (begin
+        (define idx (panel-cursor-line "filetree"))
+        (define entry (nth idx sidebar-entries))
+        (define name (first entry))
+        (define etype (nth 1 entry))
+        (if (= etype "dir")
+          (begin
+            (sidebar-load (path-join sidebar-current-dir name))
+            nil)
+          (begin
+            (unfocus-panel)
+            (open-file (path-join sidebar-current-dir name))))))))
+
+(define-command "sidebar-unfocus"
+  (lambda ()
+    (unfocus-panel)
+    (set-mode "normal")
+    (set-active-keymap "normal-mode")))
 
 ;; Ctrl-e in normal mode toggles sidebar
 (define-key "normal-mode" "Ctrl:e" "toggle-sidebar")

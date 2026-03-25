@@ -1326,6 +1326,114 @@ fn parse_panel_position(position_str: &str) -> Option<panel::PanelPosition> {
     }
 }
 
+/// Registers panel focus and cursor primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(focus-panel name)` -- give keyboard focus to the named panel
+/// - `(unfocus-panel)` -- return keyboard focus to the editor
+/// - `(panel-cursor-line name)` -- return the cursor line of the named panel
+/// - `(panel-cursor-down name)` -- move panel cursor down by 1
+/// - `(panel-cursor-up name)` -- move panel cursor up by 1
+/// - `(panel-entry-count name)` -- return number of lines set on the panel
+pub fn register_panel_focus_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_focus_panel(env.clone(), state.clone());
+    register_unfocus_panel(env.clone(), state.clone());
+    register_panel_cursor_line(env.clone(), state.clone());
+    register_panel_cursor_down(env.clone(), state.clone());
+    register_panel_cursor_up(env.clone(), state.clone());
+    register_panel_entry_count(env, state);
+}
+
+/// Registers `focus-panel`: gives keyboard focus to a named panel.
+///
+/// Usage: `(focus-panel "name")`
+///
+/// Sets `focused_panel` to the given name and switches mode/keymaps
+/// to `"panel-{name}"` / `["{name}-mode"]` so the panel's keymap receives input.
+fn register_focus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "focus-panel", move |_env, args| {
+        let name = extract_string_arg(&args, "focus-panel")?;
+        let mut editor = state.borrow_mut();
+        // Verify the panel exists
+        if panel::get(&editor.panels, &name).is_none() {
+            return Err(RuntimeError {
+                msg: format!("focus-panel: panel '{}' not found", name),
+            });
+        }
+        editor.focused_panel = Some(name.clone());
+        editor.mode = format!("panel-{}", name);
+        editor.active_keymaps = vec![format!("{}-mode", name)];
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `unfocus-panel`: returns keyboard focus to the editor.
+///
+/// Usage: `(unfocus-panel)`
+///
+/// Clears `focused_panel` and restores mode to "normal" with "normal-mode" keymap.
+fn register_unfocus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "unfocus-panel", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        editor.focused_panel = None;
+        editor.mode = "normal".to_string();
+        editor.active_keymaps = vec!["normal-mode".to_string()];
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `panel-cursor-line`: returns the cursor line of a named panel.
+///
+/// Usage: `(panel-cursor-line "name")` -> integer
+fn register_panel_cursor_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "panel-cursor-line", move |_env, args| {
+        let name = extract_string_arg(&args, "panel-cursor-line")?;
+        let editor = state.borrow();
+        let line =
+            panel::panel_cursor_line(&editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::Int(line as i32))
+    });
+}
+
+/// Registers `panel-cursor-down`: moves panel cursor down by 1.
+///
+/// Usage: `(panel-cursor-down "name")`
+fn register_panel_cursor_down(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "panel-cursor-down", move |_env, args| {
+        let name = extract_string_arg(&args, "panel-cursor-down")?;
+        let mut editor = state.borrow_mut();
+        panel::panel_cursor_down(&mut editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `panel-cursor-up`: moves panel cursor up by 1.
+///
+/// Usage: `(panel-cursor-up "name")`
+fn register_panel_cursor_up(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "panel-cursor-up", move |_env, args| {
+        let name = extract_string_arg(&args, "panel-cursor-up")?;
+        let mut editor = state.borrow_mut();
+        panel::panel_cursor_up(&mut editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `panel-entry-count`: returns number of lines set on a panel.
+///
+/// Usage: `(panel-entry-count "name")` -> integer
+fn register_panel_entry_count(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "panel-entry-count", move |_env, args| {
+        let name = extract_string_arg(&args, "panel-entry-count")?;
+        let editor = state.borrow();
+        let count =
+            panel::panel_entry_count(&editor.panels, &name).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::Int(count as i32))
+    });
+}
+
 /// Registers pure string manipulation primitives into the Lisp runtime.
 ///
 /// These are pure functions (no EditorState access) registered as `NativeFunc`
@@ -4803,6 +4911,7 @@ mod tests {
         let runtime = LispRuntime::new();
         register_core_primitives(&runtime, state.clone());
         register_panel_primitives(&runtime, state.clone());
+        register_panel_focus_primitives(&runtime, state.clone());
         register_rendering_primitives(&runtime, state.clone());
         (runtime, state)
     }
@@ -4932,6 +5041,105 @@ mod tests {
         let editor = state.borrow();
         let panel = alfred_core::panel::get(&editor.panels, "gutter").unwrap();
         assert_eq!(panel.size, 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Panel focus primitives
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_panel_when_focus_panel_then_focused_panel_set_and_mode_switched() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime
+            .eval("(define-panel \"sidebar\" \"left\" 20)")
+            .unwrap();
+
+        runtime.eval("(focus-panel \"sidebar\")").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.focused_panel, Some("sidebar".to_string()));
+        assert_eq!(editor.mode, "panel-sidebar");
+        assert_eq!(editor.active_keymaps, vec!["sidebar-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_focus_panel_then_error() {
+        let (runtime, _state) = create_panel_test_runtime();
+
+        let result = runtime.eval("(focus-panel \"nope\")");
+        assert!(
+            result.is_err(),
+            "focus-panel on nonexistent panel should fail"
+        );
+    }
+
+    #[test]
+    fn given_focused_panel_when_unfocus_panel_then_mode_restored_to_normal() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime
+            .eval("(define-panel \"sidebar\" \"left\" 20)")
+            .unwrap();
+        runtime.eval("(focus-panel \"sidebar\")").unwrap();
+
+        runtime.eval("(unfocus-panel)").unwrap();
+
+        let editor = state.borrow();
+        assert_eq!(editor.focused_panel, None);
+        assert_eq!(editor.mode, "normal");
+        assert_eq!(editor.active_keymaps, vec!["normal-mode".to_string()]);
+    }
+
+    #[test]
+    fn given_panel_with_lines_when_panel_cursor_down_then_cursor_advances() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+
+        runtime.eval("(panel-cursor-down \"tree\")").unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "tree").unwrap();
+        assert_eq!(panel.cursor_line, 1);
+    }
+
+    #[test]
+    fn given_panel_with_cursor_at_1_when_panel_cursor_up_then_cursor_at_0() {
+        let (runtime, state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+        runtime.eval("(panel-cursor-down \"tree\")").unwrap();
+
+        runtime.eval("(panel-cursor-up \"tree\")").unwrap();
+
+        let editor = state.borrow();
+        let panel = alfred_core::panel::get(&editor.panels, "tree").unwrap();
+        assert_eq!(panel.cursor_line, 0);
+    }
+
+    #[test]
+    fn given_panel_with_lines_when_panel_cursor_line_then_returns_position() {
+        let (runtime, _state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+        runtime.eval("(panel-cursor-down \"tree\")").unwrap();
+
+        let result = runtime.eval("(panel-cursor-line \"tree\")").unwrap();
+        assert_eq!(result.as_integer(), Some(1));
+    }
+
+    #[test]
+    fn given_panel_with_3_lines_when_panel_entry_count_then_returns_3() {
+        let (runtime, _state) = create_panel_test_runtime();
+        runtime.eval("(define-panel \"tree\" \"left\" 20)").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 0 \"a\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 1 \"b\")").unwrap();
+        runtime.eval("(set-panel-line \"tree\" 2 \"c\")").unwrap();
+
+        let result = runtime.eval("(panel-entry-count \"tree\")").unwrap();
+        assert_eq!(result.as_integer(), Some(3));
     }
 
     #[test]

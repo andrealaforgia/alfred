@@ -103,7 +103,18 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
                     width: panel.size,
                     height: gutter_area.height,
                 };
-                let gutter_content = collect_panel_lines(panel, panel_area.height as usize);
+                let is_focused = state.focused_panel.as_deref() == Some(&panel.name);
+                let focused_cursor = if is_focused {
+                    Some(panel.cursor_line)
+                } else {
+                    None
+                };
+                let gutter_content = collect_panel_lines(
+                    panel,
+                    panel_area.height as usize,
+                    focused_cursor,
+                    panel.size,
+                );
                 let style = resolve_panel_style(state, panel);
                 let gutter_widget = Paragraph::new(gutter_content).style(style);
                 frame.render_widget(gutter_widget, panel_area);
@@ -198,15 +209,28 @@ fn resolve_panel_style(state: &EditorState, panel: &alfred_core::panel::Panel) -
 /// Collects per-line content from a left/right panel for rendering.
 ///
 /// Reads from the panel's `lines` HashMap. If a line index has no content,
-/// an empty string is used.
+/// an empty string is used. When `focused_cursor` is `Some(line)`, the
+/// cursor line is highlighted with a reversed style.
 fn collect_panel_lines(
     panel: &alfred_core::panel::Panel,
     visible_height: usize,
+    focused_cursor: Option<usize>,
+    panel_width: u16,
 ) -> Vec<Line<'static>> {
     (0..visible_height)
         .map(|row| {
             let content = panel.lines.get(&row).map(|s| s.as_str()).unwrap_or("");
-            Line::raw(content.to_string())
+            match focused_cursor {
+                Some(cursor_row) if cursor_row == row => {
+                    // Pad content to fill the full panel width so the highlight spans the row
+                    let padded = format!("{:<width$}", content, width = panel_width as usize);
+                    let highlight_style = Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(205, 214, 244)); // light text on highlight bg
+                    Line::from(Span::styled(padded, highlight_style))
+                }
+                _ => Line::raw(content.to_string()),
+            }
         })
         .collect()
 }

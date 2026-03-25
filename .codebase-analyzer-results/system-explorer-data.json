@@ -1,0 +1,75 @@
+{
+  "overall_score": 74,
+  "summary": "Alfred is an architecturally intentional Rust text editor with a clear functional-core / imperative-shell split enforced at crate boundaries. The codebase is well-documented at the decision level (8 ADRs, walkthrough docs, feature architecture docs) and module-level (comprehensive Rustdoc on every module and public function). The main comprehensibility risk is the size concentration in two files (app.rs ~8000 lines, bridge.rs ~5200 lines) that act as complexity hotspots. The absence of a README at the repo root is a significant discoverability gap for new contributors.",
+  "documentation_coverage": {
+    "readme_present": false,
+    "adrs_count": 8,
+    "inline_doc_ratio": 0.88,
+    "api_doc_present": true
+  },
+  "architecture_clarity": {
+    "layers_detected": 5,
+    "circular_dependencies": 0,
+    "entry_points_identified": 1,
+    "naming_consistency_score": 88
+  },
+  "hotspot_count": 3,
+  "top_hotspots": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "complexity_score": 9.2,
+      "change_frequency": 18,
+      "notes": "Most frequently changed file in recent git history (browse-mode, keybinding, operator logic). Contains ~8000 lines mixing event loop, key conversion, operator dispatch, motion resolution, and command execution. High McCabe complexity from nested match arms."
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "complexity_score": 7.5,
+      "change_frequency": 12,
+      "notes": "~5200 lines of Lisp primitive registrations. Each primitive is a closure capturing shared mutable state. Changes to the bridge require understanding closure lifetimes and RefCell borrowing rules. Recently extended with filesystem primitives."
+    },
+    {
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "complexity_score": 6.8,
+      "change_frequency": 10,
+      "notes": "~3350 lines. The EditorState struct itself (40+ public fields) is the single most coupled type in the system -- any feature addition touches this file. Recent additions: panels, line_styles, focused_panel, cli_argument."
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 2,
+    "medium": 4,
+    "low": 21
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Add a root README.md",
+      "description": "The repository has no README at the project root. This is the primary entry point for new contributors and is checked by every code hosting platform and automated tool. A README should cover: project purpose, quickstart, crate overview, and link to the ADRs and walkthrough docs.",
+      "effort": "low"
+    },
+    {
+      "priority": 2,
+      "title": "Decompose app.rs into focused modules",
+      "description": "alfred-tui/src/app.rs is ~8000 lines and contains the event loop, key conversion, operator/motion dispatch, and all key handling logic. Split into at minimum: event_loop.rs (I/O), key_dispatch.rs (pure key handling), operator.rs (operator/motion logic), and command_execution.rs. This would also allow moving operator/motion domain logic back into alfred-core where it belongs.",
+      "effort": "high"
+    },
+    {
+      "priority": 3,
+      "title": "Introduce domain event types to replace stringly-typed hooks",
+      "description": "The HookRegistry uses string hook names (e.g. 'render-gutter-hook', 'on-save'). Define a typed HookEvent enum or at minimum constants for hook names in alfred-core to prevent typos, enable compile-time discovery, and make hook contracts explicit.",
+      "effort": "medium"
+    },
+    {
+      "priority": 4,
+      "title": "Move InputState and Operator enums to alfred-core",
+      "description": "InputState and Operator are defined in alfred-tui/src/app.rs but represent editor domain concepts (modal editing state, operator-pending state). Moving them to alfred-core would allow unit testing operator/motion logic without the TUI layer and clarify the domain model.",
+      "effort": "medium"
+    },
+    {
+      "priority": 5,
+      "title": "Decompose EditorState into sub-structs",
+      "description": "EditorState has 40+ public fields covering unrelated concerns: editing state (buffer, cursor, viewport), modal state (mode, selection_start, visual_line_mode), macro state (macro_recording, macro_buffer, macro_registers), search state, jump/change lists, and rendering state (line_styles, panels). Grouping into sub-structs (ModalState, MacroState, SearchState, etc.) would reduce the coupling surface and make each concern independently understandable.",
+      "effort": "high"
+    }
+  ]
+}
