@@ -3716,3 +3716,256 @@ class TestInteractiveSidebar:
             f"File should be preserved after Ctrl-b round-trip, got: {saved!r}"
 
         shutil.rmtree(tmpdir)
+
+
+class TestBrowserEditorInteraction:
+    """Exercise all interactions between browsing and editing panels.
+
+    Tests the full lifecycle: open directory, browse, select file, edit,
+    toggle sidebar/browser, verify focus and content stability across
+    all combinations of Ctrl-e and Ctrl-b.
+    """
+
+    def test_full_browse_edit_sidebar_browser_lifecycle(self):
+        """Complete lifecycle: browse -> open file -> sidebar -> browser -> edit -> save.
+
+        Steps:
+        1. Open alfred on a directory (browser mode)
+        2. Navigate to and open a file (editor mode)
+        3. Ctrl-e: open sidebar, navigate it, unfocus
+        4. Ctrl-b: switch to full browser (should show same directory)
+        5. Navigate back to same file, open it
+        6. Edit the file, save, verify content
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_lifecycle_")
+        os.mkdir(os.path.join(tmpdir, "src"))
+        target = os.path.join(tmpdir, "src", "main.rs")
+        with open(target, "w") as f:
+            f.write("fn main() {}\n")
+        with open(os.path.join(tmpdir, "README.md"), "w") as f:
+            f.write("# Project\n")
+
+        # Step 1: Open directory in browser mode
+        child = spawn_alfred(tmpdir)
+
+        # Wait for browser to render
+        try:
+            child.expect("src/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'src/' on startup")
+
+        # Step 2: Enter src/ directory (j past README, to src/)
+        # Sorted: README.md, src/ — src is a dir so it comes first
+        # Actually sorted: dirs first: src/, then files: README.md
+        send_keys(child, "j")  # move to src/
+        time.sleep(0.2)
+        child.send("\r")  # enter src/
+        time.sleep(1.0)
+
+        # Inside src/: main.rs — navigate to it and open
+        send_keys(child, "j")  # past ../ to main.rs
+        time.sleep(0.2)
+        child.send("\r")  # open main.rs
+        time.sleep(1.0)
+
+        # Step 3: Now in editor mode with main.rs open
+        # Open sidebar with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(1.0)
+
+        # Navigate sidebar down twice
+        send_keys(child, "j")
+        time.sleep(0.1)
+        send_keys(child, "j")
+        time.sleep(0.1)
+
+        # Navigate sidebar back up
+        send_keys(child, "k")
+        time.sleep(0.1)
+
+        # Unfocus sidebar (back to editor) with Escape
+        child.send("\x1b")  # Escape
+        time.sleep(0.5)
+
+        # Step 4: Toggle to full browser with Ctrl-b
+        child.send("\x02")  # Ctrl-b
+        time.sleep(1.0)
+
+        # Browser should show the last browsed directory (src/)
+        # Navigate to main.rs and open it again
+        send_keys(child, "j")  # past ../ to main.rs
+        time.sleep(0.2)
+        child.send("\r")  # open main.rs
+        time.sleep(1.0)
+
+        # Step 5: Back in editor — open sidebar again with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+
+        # Close sidebar immediately with Ctrl-e
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+
+        # Step 6: Edit the file and save
+        send_keys(child, "A")  # append at end of line
+        time.sleep(0.2)
+        send_keys(child, " // edited")
+        time.sleep(0.2)
+        child.send("\x1b")  # Escape
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after full lifecycle, got {exit_code}"
+
+        saved = read_file(target)
+        assert "// edited" in saved, \
+            f"Expected '// edited' in file after lifecycle, got: {saved!r}"
+        assert "fn main()" in saved, \
+            f"Original content should be preserved, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_ctrl_e_ctrl_b_alternation_stability(self):
+        """Rapidly alternating Ctrl-e and Ctrl-b doesn't crash or corrupt state.
+
+        Exercises: Ctrl-e open, Ctrl-e close, Ctrl-b open, select file,
+        Ctrl-e open, navigate, Ctrl-e close, repeat.
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_alternation_")
+        target = os.path.join(tmpdir, "stable.txt")
+        with open(target, "w") as f:
+            f.write("stability test\n")
+        with open(os.path.join(tmpdir, "other.txt"), "w") as f:
+            f.write("other\n")
+
+        child = spawn_alfred(target)
+
+        # Round 1: Ctrl-e open, navigate, close
+        child.send("\x05")  # Ctrl-e open sidebar
+        time.sleep(0.5)
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\x05")  # Ctrl-e close sidebar
+        time.sleep(0.5)
+
+        # Round 2: Ctrl-b to full browser, select file, back to editor
+        child.send("\x02")  # Ctrl-b
+        time.sleep(1.0)
+        send_keys(child, "j")  # navigate
+        time.sleep(0.1)
+        child.send("\r")  # open file (whichever is selected)
+        time.sleep(1.0)
+
+        # Round 3: Ctrl-e again
+        child.send("\x05")  # Ctrl-e
+        time.sleep(0.5)
+        send_keys(child, "j")
+        time.sleep(0.1)
+        send_keys(child, "k")
+        time.sleep(0.1)
+        child.send("\x1b")  # Escape to unfocus
+        time.sleep(0.5)
+
+        # Round 4: Ctrl-b again
+        child.send("\x02")  # Ctrl-b
+        time.sleep(1.0)
+        # Select stable.txt — navigate to it
+        send_keys(child, "j")
+        time.sleep(0.1)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Should be editing a file now — quit cleanly
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after alternation stress test, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_browser_remembers_directory_after_file_open(self):
+        """After opening a file from a subdirectory, Ctrl-b returns to that subdir."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_remember_")
+        subdir = os.path.join(tmpdir, "deep")
+        os.mkdir(subdir)
+        target = os.path.join(subdir, "nested.txt")
+        with open(target, "w") as f:
+            f.write("deep file\n")
+        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
+            f.write("top\n")
+
+        child = spawn_alfred(tmpdir)
+
+        # Navigate into deep/ subdirectory
+        try:
+            child.expect("deep/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'deep/'")
+
+        # Enter deep/
+        send_keys(child, "j")
+        time.sleep(0.2)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Open nested.txt
+        send_keys(child, "j")  # past ../
+        time.sleep(0.2)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Now editing nested.txt — Ctrl-b should return to deep/ directory
+        child.send("\x02")  # Ctrl-b
+        time.sleep(1.0)
+
+        # Browser should show deep/ contents — verify by looking for nested.txt
+        try:
+            child.expect("nested.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail(
+                "Ctrl-b did not return to deep/ directory (nested.txt not found)"
+            )
+
+        # Quit from browser
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
