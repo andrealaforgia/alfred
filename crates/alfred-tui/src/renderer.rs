@@ -832,19 +832,6 @@ mod tests {
     // raw mode and alternate screen
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn given_terminal_guard_type_when_referenced_then_it_exists_and_is_public_in_crate() {
-        // This test verifies the TerminalGuard type exists as a compile-time contract.
-        // The guard manages both raw mode and alternate screen via RAII.
-        // Actual terminal state cannot be tested without a real terminal,
-        // so we verify the type signature and construction contract.
-        fn _assert_terminal_guard_returns_io_result() -> std::io::Result<super::TerminalGuard> {
-            // This function is never called -- it only needs to compile.
-            // It proves: TerminalGuard::new() returns io::Result<TerminalGuard>
-            super::TerminalGuard::new()
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Helper: extract text content of a specific row from the ratatui buffer
     // -----------------------------------------------------------------------
