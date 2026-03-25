@@ -210,7 +210,8 @@ fn resolve_panel_style(state: &EditorState, panel: &alfred_core::panel::Panel) -
 ///
 /// Reads from the panel's `lines` HashMap. If a line index has no content,
 /// an empty string is used. When `focused_cursor` is `Some(line)`, the
-/// cursor line is highlighted with a reversed style.
+/// cursor line is highlighted with a reversed style. When `line_styles`
+/// has entries for a row, colored Spans are built (similar to buffer styling).
 fn collect_panel_lines(
     panel: &alfred_core::panel::Panel,
     visible_height: usize,
@@ -229,7 +230,10 @@ fn collect_panel_lines(
                         .bg(Color::Rgb(205, 214, 244)); // light text on highlight bg
                     Line::from(Span::styled(padded, highlight_style))
                 }
-                _ => Line::raw(content.to_string()),
+                _ => {
+                    // Check for per-line styles on this panel row
+                    build_styled_line(content, panel.line_styles.get(&row))
+                }
             }
         })
         .collect()
@@ -1326,6 +1330,128 @@ mod tests {
             Color::Reset,
             "Delimiter should use default color but was: {:?}",
             comma_cell.fg
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: gutter stays visible when sidebar (filetree) is open
+    // Layout should be [filetree | gutter | editor]
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_filetree_and_gutter_panels_when_rendered_then_gutter_visible_between_filetree_and_editor(
+    ) {
+        // Given: an EditorState with both filetree (priority 10) and gutter (priority 100)
+        let mut state = editor_state::new(60, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.viewport.gutter_width = 4;
+
+        // Gutter: priority 100 (rightmost, next to editor)
+        panel::define_panel(&mut state.panels, "gutter", PanelPosition::Left, 4).unwrap();
+        panel::set_panel_priority(&mut state.panels, "gutter", 100).unwrap();
+        panel::set_line(&mut state.panels, "gutter", 0, " 1 ").unwrap();
+        panel::set_line(&mut state.panels, "gutter", 1, " 2 ").unwrap();
+
+        // Filetree: priority 10 (leftmost)
+        panel::define_panel(&mut state.panels, "filetree", PanelPosition::Left, 20).unwrap();
+        panel::set_panel_priority(&mut state.panels, "filetree", 10).unwrap();
+        panel::set_line(&mut state.panels, "filetree", 0, " > src/").unwrap();
+        panel::set_line(&mut state.panels, "filetree", 1, "   main.rs").unwrap();
+
+        let backend = TestBackend::new(60, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: the filetree content appears at the leftmost columns
+        let rendered = terminal.backend();
+        let row0 = extract_row_text(rendered.buffer(), 0);
+        assert!(
+            row0.starts_with(" > src/"),
+            "Row 0 should start with filetree content but was: '{}'",
+            row0
+        );
+
+        // And: gutter content appears after filetree (column 20)
+        let gutter_area = &row0[20..24];
+        assert!(
+            gutter_area.starts_with(" 1 "),
+            "Gutter should appear at col 20 but was: '{}'",
+            gutter_area
+        );
+
+        // And: editor text appears after gutter (column 24)
+        let editor_area = &row0[24..];
+        assert!(
+            editor_area.starts_with("Hello"),
+            "Editor text should appear at col 24 but was: '{}'",
+            editor_area
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: panel line styles render colored text in panels
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_panel_with_line_styles_when_rendered_then_panel_text_has_colors() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: a left panel with per-line styles
+        let mut state = editor_state::new(40, 5);
+        state.buffer = Buffer::from_string("Hello");
+        state.viewport.gutter_width = 0;
+
+        panel::define_panel(&mut state.panels, "sidebar", PanelPosition::Left, 15).unwrap();
+        panel::set_line(&mut state.panels, "sidebar", 0, " > src/").unwrap();
+        panel::set_line(&mut state.panels, "sidebar", 1, "   main.rs").unwrap();
+
+        // Pink for cursor line (row 0)
+        panel::add_panel_line_style(
+            &mut state.panels,
+            "sidebar",
+            0,
+            0,
+            7,
+            ThemeColor::Rgb(245, 194, 231),
+        )
+        .unwrap();
+        // Gray for file line (row 1)
+        panel::add_panel_line_style(
+            &mut state.panels,
+            "sidebar",
+            1,
+            0,
+            10,
+            ThemeColor::Rgb(205, 214, 244),
+        )
+        .unwrap();
+
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: row 0 of the panel uses pink foreground
+        let rendered = terminal.backend();
+        let cell0 = &rendered.buffer()[(1, 0)]; // column 1 in panel (inside " > src/")
+        assert_eq!(
+            cell0.fg,
+            Color::Rgb(245, 194, 231),
+            "Panel cursor line should be pink but was: {:?}",
+            cell0.fg
+        );
+
+        // And: row 1 of the panel uses gray foreground
+        let cell1 = &rendered.buffer()[(3, 1)]; // column 3 in panel (inside "   main.rs")
+        assert_eq!(
+            cell1.fg,
+            Color::Rgb(205, 214, 244),
+            "Panel file line should be gray but was: {:?}",
+            cell1.fg
         );
     }
 }

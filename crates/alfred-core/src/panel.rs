@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use crate::theme::ThemeColor;
+
 /// Where a panel is positioned on screen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PanelPosition {
@@ -30,6 +32,12 @@ pub struct Panel {
     pub visible: bool,
     /// Cursor row within the panel (used when the panel has focus).
     pub cursor_line: usize,
+    /// Rendering priority: lower values render more to the left (for left panels).
+    /// Default is 50 (middle priority).
+    pub priority: u16,
+    /// Per-line style segments for colored text within panel lines.
+    /// Maps line number -> Vec of (start_col, end_col, ThemeColor) segments.
+    pub line_styles: HashMap<usize, Vec<(usize, usize, ThemeColor)>>,
 }
 
 /// Registry of all panels, ordered by creation time within each position.
@@ -65,6 +73,8 @@ pub fn define_panel(
         bg_color: None,
         visible: true,
         cursor_line: 0,
+        priority: 50,
+        line_styles: HashMap::new(),
     });
     Ok(())
 }
@@ -124,13 +134,60 @@ pub fn set_size(registry: &mut PanelRegistry, name: &str, size: u16) -> Result<(
     })
 }
 
-/// Returns panels at the given position, in creation order.
+/// Sets the rendering priority of a panel.
+///
+/// Lower priority = rendered more to the left for left panels.
+/// Returns an error if the panel does not exist.
+pub fn set_panel_priority(
+    registry: &mut PanelRegistry,
+    name: &str,
+    priority: u16,
+) -> Result<(), String> {
+    find_panel_mut(registry, name).map(|panel| {
+        panel.priority = priority;
+    })
+}
+
+/// Adds a style segment to a specific line of a panel.
+///
+/// Returns an error if the panel does not exist.
+pub fn add_panel_line_style(
+    registry: &mut PanelRegistry,
+    name: &str,
+    line: usize,
+    start: usize,
+    end: usize,
+    color: ThemeColor,
+) -> Result<(), String> {
+    find_panel_mut(registry, name).map(|panel| {
+        panel
+            .line_styles
+            .entry(line)
+            .or_default()
+            .push((start, end, color));
+    })
+}
+
+/// Clears all per-line styles from a panel.
+///
+/// Returns an error if the panel does not exist.
+pub fn clear_panel_line_styles(registry: &mut PanelRegistry, name: &str) -> Result<(), String> {
+    find_panel_mut(registry, name).map(|panel| {
+        panel.line_styles.clear();
+    })
+}
+
+/// Returns panels at the given position, sorted by priority (ascending).
+///
+/// Lower priority values render first (leftmost for left panels).
 pub fn panels_at<'a>(registry: &'a PanelRegistry, position: &PanelPosition) -> Vec<&'a Panel> {
-    registry
+    let mut panels: Vec<&Panel> = registry
         .panels
         .iter()
         .filter(|p| &p.position == position)
-        .collect()
+        .collect();
+    panels.sort_by_key(|p| p.priority);
+    panels
 }
 
 /// Looks up a panel by name.
@@ -195,6 +252,7 @@ pub fn panel_entry_count(registry: &PanelRegistry, name: &str) -> Result<usize, 
 pub fn clear_lines(registry: &mut PanelRegistry, name: &str) -> Result<(), String> {
     find_panel_mut(registry, name).map(|panel| {
         panel.lines.clear();
+        panel.line_styles.clear();
         panel.cursor_line = 0;
     })
 }
@@ -560,5 +618,116 @@ mod tests {
     fn given_nonexistent_panel_when_set_panel_cursor_then_error() {
         let mut registry = new();
         assert!(set_panel_cursor(&mut registry, "nope", 0).is_err());
+    }
+
+    // -- set_panel_priority ---------------------------------------------------
+
+    #[test]
+    fn given_panel_when_set_priority_then_priority_updated() {
+        let mut registry = new();
+        define_panel(&mut registry, "gutter", PanelPosition::Left, 4).unwrap();
+        assert_eq!(get(&registry, "gutter").unwrap().priority, 50); // default
+
+        set_panel_priority(&mut registry, "gutter", 100).unwrap();
+
+        assert_eq!(get(&registry, "gutter").unwrap().priority, 100);
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_set_priority_then_error() {
+        let mut registry = new();
+        assert!(set_panel_priority(&mut registry, "nope", 10).is_err());
+    }
+
+    // -- panels_at sorted by priority -----------------------------------------
+
+    #[test]
+    fn given_left_panels_with_different_priorities_when_panels_at_then_sorted_by_priority() {
+        let mut registry = new();
+        define_panel(&mut registry, "gutter", PanelPosition::Left, 4).unwrap();
+        set_panel_priority(&mut registry, "gutter", 100).unwrap();
+        define_panel(&mut registry, "filetree", PanelPosition::Left, 30).unwrap();
+        set_panel_priority(&mut registry, "filetree", 10).unwrap();
+
+        let left = panels_at(&registry, &PanelPosition::Left);
+
+        assert_eq!(left.len(), 2);
+        assert_eq!(left[0].name, "filetree"); // priority 10 = leftmost
+        assert_eq!(left[1].name, "gutter"); // priority 100 = rightmost
+    }
+
+    #[test]
+    fn given_panels_with_same_priority_when_panels_at_then_stable_creation_order() {
+        let mut registry = new();
+        define_panel(&mut registry, "alpha", PanelPosition::Left, 4).unwrap();
+        define_panel(&mut registry, "beta", PanelPosition::Left, 4).unwrap();
+
+        let left = panels_at(&registry, &PanelPosition::Left);
+
+        assert_eq!(left[0].name, "alpha");
+        assert_eq!(left[1].name, "beta");
+    }
+
+    // -- panel line_styles ----------------------------------------------------
+
+    #[test]
+    fn given_panel_when_add_line_style_then_style_stored() {
+        use crate::theme::ThemeColor;
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+
+        add_panel_line_style(
+            &mut registry,
+            "tree",
+            0,
+            0,
+            10,
+            ThemeColor::Rgb(137, 180, 250),
+        )
+        .unwrap();
+
+        let panel = get(&registry, "tree").unwrap();
+        assert_eq!(panel.line_styles.len(), 1);
+        let styles = panel.line_styles.get(&0).unwrap();
+        assert_eq!(styles.len(), 1);
+        assert_eq!(styles[0], (0, 10, ThemeColor::Rgb(137, 180, 250)));
+    }
+
+    #[test]
+    fn given_panel_with_styles_when_clear_panel_line_styles_then_styles_empty() {
+        use crate::theme::ThemeColor;
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+        add_panel_line_style(&mut registry, "tree", 0, 0, 5, ThemeColor::Rgb(255, 0, 0)).unwrap();
+        add_panel_line_style(&mut registry, "tree", 1, 0, 3, ThemeColor::Rgb(0, 255, 0)).unwrap();
+
+        clear_panel_line_styles(&mut registry, "tree").unwrap();
+
+        let panel = get(&registry, "tree").unwrap();
+        assert!(panel.line_styles.is_empty());
+    }
+
+    #[test]
+    fn given_panel_with_styles_when_clear_lines_then_line_styles_also_cleared() {
+        use crate::theme::ThemeColor;
+        let mut registry = new();
+        define_panel(&mut registry, "tree", PanelPosition::Left, 20).unwrap();
+        set_line(&mut registry, "tree", 0, "hello").unwrap();
+        add_panel_line_style(&mut registry, "tree", 0, 0, 5, ThemeColor::Rgb(255, 0, 0)).unwrap();
+
+        clear_lines(&mut registry, "tree").unwrap();
+
+        let panel = get(&registry, "tree").unwrap();
+        assert!(panel.lines.is_empty());
+        assert!(panel.line_styles.is_empty());
+    }
+
+    #[test]
+    fn given_nonexistent_panel_when_add_line_style_then_error() {
+        use crate::theme::ThemeColor;
+        let mut registry = new();
+        assert!(
+            add_panel_line_style(&mut registry, "nope", 0, 0, 5, ThemeColor::Rgb(0, 0, 0)).is_err()
+        );
     }
 }

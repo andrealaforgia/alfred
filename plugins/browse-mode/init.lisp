@@ -256,6 +256,14 @@
         entries
         (cons (list ".." "dir") entries)))))
 
+;; Format a sidebar entry with cursor indicator
+(define sidebar-format-panel-entry
+  (lambda (entry idx cursor)
+    (str-concat (list
+      (if (= idx cursor) " > " "   ")
+      (first entry)
+      (if (= (nth 1 entry) "dir") "/" browser-empty-str)))))
+
 ;; Populate sidebar panel lines from entries list
 (define sidebar-populate
   (lambda (entries idx)
@@ -263,11 +271,40 @@
       nil
       (begin
         (set-panel-line "filetree" idx
-          (str-concat (list
-            " "
-            (first (nth idx entries))
-            (if (= (nth 1 (nth idx entries)) "dir") "/" browser-empty-str))))
+          (sidebar-format-panel-entry (nth idx entries) idx (panel-cursor-line "filetree")))
         (sidebar-populate entries (+ idx 1))))))
+
+;; Apply per-line colors to sidebar entries
+(define sidebar-style-entry
+  (lambda (entry idx cursor)
+    (if (= idx cursor)
+      (set-panel-line-style "filetree" idx 0
+        (str-length (sidebar-format-panel-entry entry idx cursor))
+        browser-color-pink)
+      (if (= (nth 1 entry) "dir")
+        (set-panel-line-style "filetree" idx 0
+          (str-length (sidebar-format-panel-entry entry idx cursor))
+          browser-color-blue)
+        (set-panel-line-style "filetree" idx 0
+          (str-length (sidebar-format-panel-entry entry idx cursor))
+          browser-color-gray)))))
+
+;; Recursively style all sidebar entries
+(define sidebar-style-entries
+  (lambda (entries idx cursor)
+    (if (= idx (length entries))
+      nil
+      (begin
+        (sidebar-style-entry (nth idx entries) idx cursor)
+        (sidebar-style-entries entries (+ idx 1) cursor)))))
+
+;; Apply all styles to sidebar
+(define sidebar-apply-styles
+  (lambda ()
+    (clear-panel-line-styles "filetree")
+    (if (> (length sidebar-entries) 0)
+      (sidebar-style-entries sidebar-entries 0 (panel-cursor-line "filetree"))
+      nil)))
 
 ;; Load sidebar entries for a directory -- clears old lines and resets cursor
 (define sidebar-load
@@ -276,7 +313,8 @@
     (set sidebar-current-dir dir)
     (set sidebar-entries (sidebar-add-parent-entry dir (list-dir dir)))
     (panel-set-cursor "filetree" 0)
-    (sidebar-populate sidebar-entries 0)))
+    (sidebar-populate sidebar-entries 0)
+    (sidebar-apply-styles)))
 
 ;; Toggle sidebar visibility + focus
 (define sidebar-created nil)
@@ -289,17 +327,16 @@
         (begin
           (set sidebar-visible nil)
           (set-panel-size "filetree" 0)
-          (set-panel-size "gutter" (compute-gutter-width))
           (unfocus-panel)
           (set-mode "normal")
           (set-active-keymap "normal-mode"))
         (begin
-          (set-panel-size "gutter" 0)
           (set sidebar-visible 1)
           (if sidebar-created
             nil
             (begin
               (define-panel "filetree" "left" sidebar-width)
+              (set-panel-priority "filetree" 10)
               (set sidebar-created 1)))
           (set-panel-style "filetree" "#6c7086" "#1e1e2e")
           (set-panel-size "filetree" sidebar-width)
@@ -312,16 +349,18 @@
           (set-mode "panel-filetree")
           (set-active-keymap "filetree-mode"))))))
 
-;; Sidebar commands
+;; Sidebar commands — re-populate lines after cursor move to update ">" indicator
 (define-command "sidebar-cursor-down"
   (lambda ()
     (panel-cursor-down "filetree")
-    nil))
+    (sidebar-populate sidebar-entries 0)
+    (sidebar-apply-styles)))
 
 (define-command "sidebar-cursor-up"
   (lambda ()
     (panel-cursor-up "filetree")
-    nil))
+    (sidebar-populate sidebar-entries 0)
+    (sidebar-apply-styles)))
 
 ;; Helper to get current sidebar entry name
 (define sidebar-current-name
@@ -344,15 +383,14 @@
         (begin
           (set sidebar-visible nil)
           (set-panel-size "filetree" 0)
-          (set-panel-size "gutter" (compute-gutter-width))
           (unfocus-panel)
           (set-mode "normal")
           (set-active-keymap "normal-mode")
+          (clear-line-styles)
           (open-file (path-join sidebar-current-dir (sidebar-current-name))))))))
 
 (define-command "sidebar-unfocus"
   (lambda ()
-    (set-panel-size "gutter" (compute-gutter-width))
     (unfocus-panel)
     (set-mode "normal")
     (set-active-keymap "normal-mode")))

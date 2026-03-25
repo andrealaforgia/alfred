@@ -9,6 +9,7 @@
 
 ;; Create a left panel for line numbers
 (define-panel "gutter" "left" 4)
+(set-panel-priority "gutter" 100)
 (set-panel-style "gutter" "#6c7086" "default")
 
 ;; Update gutter content for visible lines

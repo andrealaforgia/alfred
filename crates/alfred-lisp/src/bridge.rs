@@ -1162,7 +1162,10 @@ pub fn register_panel_primitives(runtime: &LispRuntime, state: Rc<RefCell<Editor
     register_set_panel_content(env.clone(), state.clone());
     register_set_panel_line(env.clone(), state.clone());
     register_set_panel_style(env.clone(), state.clone());
-    register_set_panel_size(env, state);
+    register_set_panel_size(env.clone(), state.clone());
+    register_set_panel_priority(env.clone(), state.clone());
+    register_set_panel_line_style(env.clone(), state.clone());
+    register_clear_panel_line_styles(env, state);
 }
 
 /// Registers `define-panel`: creates a panel at the given position.
@@ -1309,6 +1312,117 @@ fn register_set_panel_size(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>
         };
         let mut editor = state.borrow_mut();
         panel::set_size(&mut editor.panels, &name, size).map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-priority`: sets the rendering priority of a panel.
+///
+/// Usage: `(set-panel-priority "name" priority)`
+///
+/// Lower priority = rendered more to the left for left panels.
+fn register_set_panel_priority(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-priority", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "set-panel-priority", "name")?;
+        let priority = match args.get(1) {
+            Some(Value::Int(n)) => *n as u16,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-panel-priority: expected integer for priority, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-priority: missing required argument 'priority'".to_string(),
+                });
+            }
+        };
+        let mut editor = state.borrow_mut();
+        panel::set_panel_priority(&mut editor.panels, &name, priority)
+            .map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-panel-line-style`: adds a color segment to a panel line.
+///
+/// Usage: `(set-panel-line-style "name" line start end color)`
+fn register_set_panel_line_style(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-panel-line-style", move |_env, args| {
+        let name = extract_string_arg_at(&args, 0, "set-panel-line-style", "name")?;
+        let line = match args.get(1) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-panel-line-style: expected integer for line, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-line-style: missing required argument 'line'".to_string(),
+                });
+            }
+        };
+        let start_col = match args.get(2) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-panel-line-style: expected integer for start, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-line-style: missing required argument 'start'".to_string(),
+                });
+            }
+        };
+        let end_col = match args.get(3) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "set-panel-line-style: expected integer for end, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "set-panel-line-style: missing required argument 'end'".to_string(),
+                });
+            }
+        };
+        let color_str = extract_string_arg_at(&args, 4, "set-panel-line-style", "color")?;
+
+        let color = theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
+            msg: format!("set-panel-line-style: invalid color \"{}\"", color_str),
+        })?;
+
+        let mut editor = state.borrow_mut();
+        panel::add_panel_line_style(&mut editor.panels, &name, line, start_col, end_col, color)
+            .map_err(|e| RuntimeError { msg: e })?;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `clear-panel-line-styles`: clears all per-line styles from a panel.
+///
+/// Usage: `(clear-panel-line-styles "name")`
+fn register_clear_panel_line_styles(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "clear-panel-line-styles", move |_env, args| {
+        let name = extract_string_arg(&args, "clear-panel-line-styles")?;
+        let mut editor = state.borrow_mut();
+        panel::clear_panel_line_styles(&mut editor.panels, &name)
+            .map_err(|e| RuntimeError { msg: e })?;
         Ok(Value::NIL)
     });
 }
