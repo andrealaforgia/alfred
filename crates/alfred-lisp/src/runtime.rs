@@ -283,6 +283,71 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[test]
+    fn eval_set_mutates_variable() {
+        let runtime = LispRuntime::new();
+        runtime.eval("(define x 0)").unwrap();
+        runtime.eval("(set x 42)").unwrap();
+        let result = runtime.eval("x").unwrap();
+        assert_eq!(result.as_integer(), Some(42));
+    }
+
+    #[test]
+    fn eval_begin_with_define_and_set() {
+        let runtime = LispRuntime::new();
+        let result = runtime.eval("(begin (define x 10) (set x 20) x)").unwrap();
+        assert_eq!(result.as_integer(), Some(20));
+    }
+
+    #[test]
+    fn eval_lambda_define_inside_begin_is_not_supported() {
+        // rust_lisp does not support (define ...) inside (begin ...) in lambda bodies.
+        // This is a known limitation. Plugins must avoid local defines in lambdas.
+        let runtime = LispRuntime::new();
+        let result = runtime.eval("(define f (lambda () (begin (define y 99) y)))");
+        // Either the define or the call should fail
+        if result.is_ok() {
+            let call_result = runtime.eval("(f)");
+            assert!(
+                call_result.is_err(),
+                "define inside begin+lambda should fail in rust_lisp"
+            );
+        }
+        // If define itself failed, that's also the expected behavior
+    }
+
+    #[test]
+    fn eval_lambda_with_set_on_outer_variable() {
+        let runtime = LispRuntime::new();
+        runtime.eval("(define counter 0)").unwrap();
+        runtime
+            .eval("(define inc (lambda () (begin (set counter (+ counter 1)) counter)))")
+            .unwrap();
+        runtime.eval("(inc)").unwrap();
+        runtime.eval("(inc)").unwrap();
+        let result = runtime.eval("counter").unwrap();
+        assert_eq!(result.as_integer(), Some(2));
+    }
+
+    #[test]
+    fn eval_if_with_arithmetic() {
+        let runtime = LispRuntime::new();
+        // Use a non-nil value as truthy (rust_lisp: any non-NIL is truthy)
+        let result = runtime.eval("(if 1 (+ 10 5) 0)").unwrap();
+        assert_eq!(result.as_integer(), Some(15));
+    }
+
+    #[test]
+    fn eval_cons_and_car() {
+        let runtime = LispRuntime::new();
+        runtime.eval("(define lst (list))").unwrap();
+        runtime.eval("(set lst (cons 1 lst))").unwrap();
+        runtime.eval("(set lst (cons 2 lst))").unwrap();
+        // car is a built-in, first is a bridge primitive
+        let result = runtime.eval("(car lst)").unwrap();
+        assert_eq!(result.as_integer(), Some(2));
+    }
 }
 
 /// Performance baseline tests measuring single Lisp primitive eval latency.

@@ -1,6 +1,7 @@
 ;;; name: browse-mode
-;;; version: 2.0.0
+;;; version: 2.2.0
 ;;; description: Pure Lisp folder browser — renders directory listing as buffer text
+;;; depends: vim-keybindings
 
 ;; ---------------------------------------------------------------------------
 ;; Keymap
@@ -8,70 +9,55 @@
 
 (make-keymap "browse-mode")
 
-;; Navigation
 (define-key "browse-mode" "Char:j" "browser-cursor-down")
 (define-key "browse-mode" "Char:k" "browser-cursor-up")
 (define-key "browse-mode" "Down" "browser-cursor-down")
 (define-key "browse-mode" "Up" "browser-cursor-up")
 (define-key "browse-mode" "Char:g" "browser-jump-first")
 (define-key "browse-mode" "Char:G" "browser-jump-last")
-
-;; Actions
 (define-key "browse-mode" "Enter" "browser-enter")
 (define-key "browse-mode" "Char:l" "browser-enter")
 (define-key "browse-mode" "Char:h" "browser-parent")
 (define-key "browse-mode" "Backspace" "browser-parent")
-
-;; Quit
 (define-key "browse-mode" "Char:q" "browser-quit")
 
-;; Cursor shape
 (set-cursor-shape "browse" "block")
 
 ;; ---------------------------------------------------------------------------
-;; Browser state (module-level variables, mutated via `set`)
+;; Browser state
 ;; ---------------------------------------------------------------------------
 
 (define browser-current-dir "")
 (define browser-root-dir "")
-(define browser-entries '())
+(define browser-entries (list))
 (define browser-cursor 0)
-(define browser-history '())
+(define browser-history (list))
 
 ;; ---------------------------------------------------------------------------
-;; Helpers
+;; Helpers — no local (define) inside lambdas, use args or inline
 ;; ---------------------------------------------------------------------------
 
-;; Count elements in a list
-(define browser-count
-  (lambda (lst)
-    (length lst)))
-
-;; Return the entry at index n (0-based) from browser-entries
-(define browser-entry-at
-  (lambda (n)
-    (nth n browser-entries)))
-
-;; Format a single entry for display: "   name/" or "   name"
+;; Format entry: prefix + name + suffix
 (define browser-format-entry
   (lambda (entry idx)
-    (define name (first entry))
-    (define type (nth 1 entry))
-    (define prefix (if (= idx browser-cursor) " > " "   "))
-    (define suffix (if (= type "dir") "/" ""))
-    (str-concat (list prefix name suffix))))
+    (str-concat
+      (list
+        (if (= idx browser-cursor) " > " "   ")
+        (first entry)
+        (if (= (nth 1 entry) "dir") "/" "")))))
 
-;; Build a display line for each entry, joined with newlines
+;; Recursive line builder
 (define browser-build-lines
   (lambda (entries idx)
     (if (= (length entries) 0)
       ""
-      (define entry (first entries))
-      (define line (browser-format-entry entry idx))
-      (define rest-lines (browser-build-lines (rest entries) (+ idx 1)))
-      (if (= rest-lines "")
-        line
-        (str-concat (list line "\n" rest-lines))))))
+      (if (= (length entries) 1)
+        (browser-format-entry (first entries) idx)
+        (str-concat
+          (list
+            (browser-format-entry (first entries) idx)
+            "\n"
+            (browser-build-lines (rest entries) (+ idx 1))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Render: rebuild buffer text from current state
@@ -79,30 +65,29 @@
 
 (define browser-render
   (lambda ()
-    (define header (str-concat (list " " browser-current-dir)))
-    (define separator "")
-    (define body
-      (if (= (browser-count browser-entries) 0)
-        "   (empty directory)"
-        (browser-build-lines browser-entries 0)))
-    (define content (str-concat (list header "\n" separator "\n" body)))
-    (buffer-set-content content)))
+    (buffer-set-content
+      (str-concat
+        (list
+          " " browser-current-dir "\n"
+          "\n"
+          (if (= (length browser-entries) 0)
+            "   (empty directory)"
+            (browser-build-lines browser-entries 0)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Load entries for a directory
 ;; ---------------------------------------------------------------------------
 
+(define browser-add-parent-entry
+  (lambda (dir entries)
+    (if (= (path-parent dir) dir)
+      entries
+      (cons (list ".." "dir") entries))))
+
 (define browser-load-dir
   (lambda (dir)
     (set browser-current-dir dir)
-    (define raw-entries (list-dir dir))
-    ;; Prepend ../ entry if directory has a parent
-    (define parent (path-parent dir))
-    (define with-parent
-      (if (= parent dir)
-        raw-entries
-        (cons (list ".." "dir") raw-entries)))
-    (set browser-entries with-parent)
+    (set browser-entries (browser-add-parent-entry dir (list-dir dir)))
     (set browser-cursor 0)
     (browser-render)))
 
@@ -112,8 +97,7 @@
 
 (define-command "browser-cursor-down"
   (lambda ()
-    (define max-idx (- (browser-count browser-entries) 1))
-    (if (< browser-cursor max-idx)
+    (if (< browser-cursor (- (length browser-entries) 1))
       (set browser-cursor (+ browser-cursor 1))
       #f)
     (browser-render)))
@@ -132,63 +116,55 @@
 
 (define-command "browser-jump-last"
   (lambda ()
-    (set browser-cursor (- (browser-count browser-entries) 1))
+    (set browser-cursor (- (length browser-entries) 1))
     (browser-render)))
 
 (define-command "browser-enter"
   (lambda ()
-    (define entry (browser-entry-at browser-cursor))
-    (define name (first entry))
-    (define type (nth 1 entry))
-    (if (= type "dir")
-      ;; Enter directory
-      (begin
-        (define target
-          (if (= name "..")
-            (path-parent browser-current-dir)
-            (path-join browser-current-dir name)))
-        ;; Push current state onto history
-        (set browser-history
-          (cons (list browser-current-dir browser-cursor) browser-history))
-        (browser-load-dir target))
-      ;; Open file
-      (begin
-        (define file-path (path-join browser-current-dir name))
-        (open-file file-path)))))
+    (if (= (nth 1 (nth browser-cursor browser-entries)) "dir")
+      (if (= (first (nth browser-cursor browser-entries)) "..")
+        (browser-do-parent)
+        (browser-do-enter-dir (first (nth browser-cursor browser-entries))))
+      (open-file
+        (path-join browser-current-dir
+          (first (nth browser-cursor browser-entries)))))))
+
+(define browser-do-enter-dir
+  (lambda (name)
+    (set browser-history
+      (cons (list browser-current-dir browser-cursor) browser-history))
+    (browser-load-dir (path-join browser-current-dir name))))
+
+(define browser-do-parent
+  (lambda ()
+    (set browser-history
+      (cons (list browser-current-dir browser-cursor) browser-history))
+    (browser-load-dir (path-parent browser-current-dir))))
 
 (define-command "browser-parent"
   (lambda ()
-    (define parent (path-parent browser-current-dir))
-    (if (= parent browser-current-dir)
-      #f  ;; already at root
-      (begin
-        ;; Restore cursor from history if available
-        (define saved-cursor 0)
-        (if (> (length browser-history) 0)
-          (begin
-            (define top (first browser-history))
-            (set saved-cursor (nth 1 top))
-            (set browser-history (rest browser-history)))
-          #f)
-        (set browser-current-dir parent)
-        (define raw-entries (list-dir parent))
-        (define grand-parent (path-parent parent))
-        (define with-parent
-          (if (= grand-parent parent)
-            raw-entries
-            (cons (list ".." "dir") raw-entries)))
-        (set browser-entries with-parent)
-        (set browser-cursor saved-cursor)
-        ;; Clamp cursor to valid range
-        (define max-idx (- (browser-count browser-entries) 1))
-        (if (> browser-cursor max-idx)
-          (set browser-cursor max-idx)
-          #f)
-        (browser-render)))))
+    (if (= (path-parent browser-current-dir) browser-current-dir)
+      #f
+      (browser-do-go-parent))))
+
+(define browser-do-go-parent
+  (lambda ()
+    (if (> (length browser-history) 0)
+      (set browser-cursor (nth 1 (first browser-history)))
+      #f)
+    (if (> (length browser-history) 0)
+      (set browser-history (rest browser-history))
+      #f)
+    (set browser-current-dir (path-parent browser-current-dir))
+    (set browser-entries
+      (browser-add-parent-entry browser-current-dir (list-dir browser-current-dir)))
+    (if (> browser-cursor (- (length browser-entries) 1))
+      (set browser-cursor (- (length browser-entries) 1))
+      #f)
+    (browser-render)))
 
 (define-command "browser-quit"
-  (lambda ()
-    (quit)))
+  (lambda () (quit)))
 
 ;; ---------------------------------------------------------------------------
 ;; Activation: check CLI argument on load
@@ -197,12 +173,11 @@
 (define browser-cli-arg (cli-argument))
 
 (if (= browser-cli-arg "")
-  #f  ;; No argument, do nothing
+  #f
   (if (is-dir? browser-cli-arg)
-    ;; Directory argument: activate browse mode
     (begin
       (set browser-root-dir browser-cli-arg)
       (browser-load-dir browser-cli-arg)
       (set-mode "browse")
       (set-active-keymap "browse-mode"))
-    #f))  ;; File argument, handled elsewhere
+    #f))
