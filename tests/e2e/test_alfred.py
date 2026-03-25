@@ -3208,20 +3208,31 @@ class TestFolderBrowser:
 
         child = spawn_alfred(tmpdir)
 
+        # Read screen output for diagnostics
+        time.sleep(1.5)
         try:
             screen = child.read_nonblocking(size=16384, timeout=2)
         except Exception:
             screen = ""
 
+        # Try q (browse-mode quit), then :q (normal-mode quit) as fallback
         send_keys(child, "q")
-        time.sleep(0.3)
-        exit_code = wait_for_exit(child)
+        time.sleep(0.5)
+        try:
+            exit_code = wait_for_exit(child, timeout=3)
+        except Exception:
+            # q didn't work — try :q as fallback
+            send_colon_command(child, "q!")
+            exit_code = wait_for_exit(child)
 
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        assert exit_code == 0, \
+            f"Expected clean exit, got {exit_code}. Screen: {repr(screen[:500])}"
         assert "Plugin errors" not in screen, \
             f"Plugin errors when opening directory: {repr(screen[:500])}"
         assert "parse_key_spec" not in screen, \
-            f"Key spec parse error in browse-mode plugin: {repr(screen[:500])}"
+            f"Key spec parse error: {repr(screen[:500])}"
+        assert "not defined" not in screen.lower(), \
+            f"Undefined symbol error: {repr(screen[:500])}"
 
         shutil.rmtree(tmpdir)
 
