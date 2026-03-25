@@ -3962,3 +3962,82 @@ class TestBrowserEditorInteraction:
             f"Expected clean exit, got {exit_code}"
 
         shutil.rmtree(tmpdir)
+
+
+class TestSidebarBugs:
+    """Regression tests for sidebar-related bugs."""
+
+    def test_sidebar_triple_toggle_no_error(self):
+        """Toggling the sidebar three times after opening a file from browser must not error.
+
+        Reproduces the bug where:
+        1. Open Alfred on a directory (browser mode)
+        2. Select and open a file (Enter) -- switches to editor mode
+        3. Ctrl-e (open sidebar)
+        4. Ctrl-e (close sidebar)
+        5. Ctrl-e (open sidebar again) -- ERROR: "Panel 'filetree' already exists"
+
+        The third Ctrl-e should open the sidebar cleanly without any error.
+        """
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_triple_toggle_")
+        target = os.path.join(tmpdir, "hello.txt")
+        with open(target, "w") as f:
+            f.write("hello world\n")
+
+        # Step 1: Open Alfred on the directory (browser mode)
+        child = spawn_alfred(tmpdir)
+
+        # Wait for browser to render the file entry
+        try:
+            child.expect("hello.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'hello.txt' within 5s")
+
+        # Step 2: Select the file and press Enter to open it in editor mode
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Step 3: Ctrl-e -- open sidebar (first toggle)
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Step 4: Ctrl-e -- close sidebar (second toggle)
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Step 5: Ctrl-e -- open sidebar again (third toggle)
+        # This is where the bug triggers: "Panel 'filetree' already exists"
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Read screen output to check for error messages
+        try:
+            screen = child.read_nonblocking(size=16384, timeout=2)
+        except Exception:
+            screen = ""
+
+        # Clean exit: close sidebar, then quit
+        child.send("\x05")  # Ctrl-e to close sidebar if it opened
+        time.sleep(0.3)
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        # Assert no error appeared on screen
+        assert "error" not in screen.lower(), \
+            f"Error detected after triple sidebar toggle: {repr(screen[:500])}"
+        assert "already exists" not in screen.lower(), \
+            f"Panel duplication error after triple toggle: {repr(screen[:500])}"
+        assert exit_code == 0, \
+            f"Expected clean exit after triple sidebar toggle, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
