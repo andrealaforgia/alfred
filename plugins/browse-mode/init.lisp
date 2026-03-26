@@ -362,6 +362,113 @@
       nil)
     (browser-render)))
 
+;; ---------------------------------------------------------------------------
+;; Browser search keymap — per-character commands
+;; ---------------------------------------------------------------------------
+
+(make-keymap "browser-search-mode")
+
+;; Navigation and control keys
+(define-key "browser-search-mode" "Escape" "browser-search-cancel")
+(define-key "browser-search-mode" "Enter" "browser-search-enter")
+(define-key "browser-search-mode" "Backspace" "browser-search-backspace")
+(define-key "browser-search-mode" "Down" "browser-search-cursor-down")
+(define-key "browser-search-mode" "Up" "browser-search-cursor-up")
+
+;; Per-character commands for search input: lowercase a-z
+(define-command "browser-search-char-a" (lambda () (browser-search-append-char "a")))
+(define-command "browser-search-char-b" (lambda () (browser-search-append-char "b")))
+(define-command "browser-search-char-c" (lambda () (browser-search-append-char "c")))
+(define-command "browser-search-char-d" (lambda () (browser-search-append-char "d")))
+(define-command "browser-search-char-e" (lambda () (browser-search-append-char "e")))
+(define-command "browser-search-char-f" (lambda () (browser-search-append-char "f")))
+(define-command "browser-search-char-g" (lambda () (browser-search-append-char "g")))
+(define-command "browser-search-char-h" (lambda () (browser-search-append-char "h")))
+(define-command "browser-search-char-i" (lambda () (browser-search-append-char "i")))
+(define-command "browser-search-char-j" (lambda () (browser-search-append-char "j")))
+(define-command "browser-search-char-k" (lambda () (browser-search-append-char "k")))
+(define-command "browser-search-char-l" (lambda () (browser-search-append-char "l")))
+(define-command "browser-search-char-m" (lambda () (browser-search-append-char "m")))
+(define-command "browser-search-char-n" (lambda () (browser-search-append-char "n")))
+(define-command "browser-search-char-o" (lambda () (browser-search-append-char "o")))
+(define-command "browser-search-char-p" (lambda () (browser-search-append-char "p")))
+(define-command "browser-search-char-q" (lambda () (browser-search-append-char "q")))
+(define-command "browser-search-char-r" (lambda () (browser-search-append-char "r")))
+(define-command "browser-search-char-s" (lambda () (browser-search-append-char "s")))
+(define-command "browser-search-char-t" (lambda () (browser-search-append-char "t")))
+(define-command "browser-search-char-u" (lambda () (browser-search-append-char "u")))
+(define-command "browser-search-char-v" (lambda () (browser-search-append-char "v")))
+(define-command "browser-search-char-w" (lambda () (browser-search-append-char "w")))
+(define-command "browser-search-char-x" (lambda () (browser-search-append-char "x")))
+(define-command "browser-search-char-y" (lambda () (browser-search-append-char "y")))
+(define-command "browser-search-char-z" (lambda () (browser-search-append-char "z")))
+
+;; Keybindings for lowercase a-z
+(define-key "browser-search-mode" "Char:a" "browser-search-char-a")
+(define-key "browser-search-mode" "Char:b" "browser-search-char-b")
+(define-key "browser-search-mode" "Char:c" "browser-search-char-c")
+(define-key "browser-search-mode" "Char:d" "browser-search-char-d")
+(define-key "browser-search-mode" "Char:e" "browser-search-char-e")
+(define-key "browser-search-mode" "Char:f" "browser-search-char-f")
+(define-key "browser-search-mode" "Char:g" "browser-search-char-g")
+(define-key "browser-search-mode" "Char:h" "browser-search-char-h")
+(define-key "browser-search-mode" "Char:i" "browser-search-char-i")
+(define-key "browser-search-mode" "Char:j" "browser-search-char-j")
+(define-key "browser-search-mode" "Char:k" "browser-search-char-k")
+(define-key "browser-search-mode" "Char:l" "browser-search-char-l")
+(define-key "browser-search-mode" "Char:m" "browser-search-char-m")
+(define-key "browser-search-mode" "Char:n" "browser-search-char-n")
+(define-key "browser-search-mode" "Char:o" "browser-search-char-o")
+(define-key "browser-search-mode" "Char:p" "browser-search-char-p")
+(define-key "browser-search-mode" "Char:q" "browser-search-char-q")
+(define-key "browser-search-mode" "Char:r" "browser-search-char-r")
+(define-key "browser-search-mode" "Char:s" "browser-search-char-s")
+(define-key "browser-search-mode" "Char:t" "browser-search-char-t")
+(define-key "browser-search-mode" "Char:u" "browser-search-char-u")
+(define-key "browser-search-mode" "Char:v" "browser-search-char-v")
+(define-key "browser-search-mode" "Char:w" "browser-search-char-w")
+(define-key "browser-search-mode" "Char:x" "browser-search-char-x")
+(define-key "browser-search-mode" "Char:y" "browser-search-char-y")
+(define-key "browser-search-mode" "Char:z" "browser-search-char-z")
+
+;; Per-character commands for digits 0-9
+(define-command "browser-search-char-0" (lambda () (browser-search-append-char "0")))
+(define-command "browser-search-char-1" (lambda () (browser-search-append-char "1")))
+(define-command "browser-search-char-2" (lambda () (browser-search-append-char "2")))
+(define-command "browser-search-char-3" (lambda () (browser-search-append-char "3")))
+(define-command "browser-search-char-4" (lambda () (browser-search-append-char "4")))
+(define-command "browser-search-char-5" (lambda () (browser-search-append-char "5")))
+(define-command "browser-search-char-6" (lambda () (browser-search-append-char "6")))
+(define-command "browser-search-char-7" (lambda () (browser-search-append-char "7")))
+(define-command "browser-search-char-8" (lambda () (browser-search-append-char "8")))
+(define-command "browser-search-char-9" (lambda () (browser-search-append-char "9")))
+
+;; Keybindings for digits 0-9
+(define-key "browser-search-mode" "Char:0" "browser-search-char-0")
+(define-key "browser-search-mode" "Char:1" "browser-search-char-1")
+(define-key "browser-search-mode" "Char:2" "browser-search-char-2")
+(define-key "browser-search-mode" "Char:3" "browser-search-char-3")
+(define-key "browser-search-mode" "Char:4" "browser-search-char-4")
+(define-key "browser-search-mode" "Char:5" "browser-search-char-5")
+(define-key "browser-search-mode" "Char:6" "browser-search-char-6")
+(define-key "browser-search-mode" "Char:7" "browser-search-char-7")
+(define-key "browser-search-mode" "Char:8" "browser-search-char-8")
+(define-key "browser-search-mode" "Char:9" "browser-search-char-9")
+
+;; Per-character commands for common symbols in filenames
+(define-command "browser-search-char-dash" (lambda () (browser-search-append-char "-")))
+(define-command "browser-search-char-underscore" (lambda () (browser-search-append-char "_")))
+(define-command "browser-search-char-dot" (lambda () (browser-search-append-char ".")))
+(define-command "browser-search-char-space" (lambda () (browser-search-append-char " ")))
+
+;; Keybindings for common symbols
+(define-key "browser-search-mode" "Char:-" "browser-search-char-dash")
+(define-key "browser-search-mode" "Char:_" "browser-search-char-underscore")
+(define-key "browser-search-mode" "Char:." "browser-search-char-dot")
+(define-key "browser-search-mode" "Char: " "browser-search-char-space")
+
+;; ---------------------------------------------------------------------------
+
 ;; Return to browser from normal mode via :browse or Ctrl-b
 (define-command "browse"
   (lambda ()
