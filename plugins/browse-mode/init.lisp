@@ -20,6 +20,7 @@
 (define-key "browse-mode" "Char:h" "browser-parent")
 (define-key "browse-mode" "Backspace" "browser-parent")
 (define-key "browse-mode" "Char:q" "browser-quit")
+(define-key "browse-mode" "Char:/" "browser-start-search")
 (define-key "browse-mode" "Ctrl:e" "toggle-sidebar")
 (define-key "browse-mode" "Ctrl:b" "browse")
 
