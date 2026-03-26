@@ -2359,6 +2359,7 @@ fn native_is_nil(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runt
 ///
 /// After calling this, the following Lisp functions become available:
 /// - `(list-dir path)` -- list directory entries as `((name type) ...)`
+/// - `(list-dir-recursive path)` -- recursively list all entries as `((relative-path type) ...)`
 /// - `(is-dir? path)` -- returns `#t` if path is a directory
 /// - `(path-join base child)` -- joins two path components
 /// - `(path-parent path)` -- returns the parent directory of path
@@ -2368,6 +2369,7 @@ pub fn register_filesystem_primitives(runtime: &LispRuntime, state: Rc<RefCell<E
     let env = runtime.env();
 
     register_list_dir(env.clone());
+    register_list_dir_recursive(env.clone());
     register_is_dir(env.clone());
     register_path_join(env.clone());
     register_path_parent(env.clone());
@@ -2427,6 +2429,88 @@ fn register_list_dir(env: Rc<RefCell<Env>>) {
         }
 
         let result_list: List = all_entries.into_iter().collect();
+        Ok(Value::List(result_list))
+    });
+}
+
+/// Walks a directory tree recursively, collecting all entries with relative paths.
+///
+/// Skips hidden files and directories (names starting with `.`).
+/// Returns a sorted vector of `(relative_path, type_label)` pairs.
+fn walk_directory_recursive(
+    base: &std::path::Path,
+    current: &std::path::Path,
+) -> Vec<(String, String)> {
+    let read_dir = match std::fs::read_dir(current) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: Vec<std::fs::DirEntry> = read_dir.filter_map(|e| e.ok()).collect();
+    entries.sort_by_key(|a| a.file_name());
+
+    let mut result: Vec<(String, String)> = Vec::new();
+
+    for entry in entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+        // Skip hidden files/directories
+        if name.starts_with('.') {
+            continue;
+        }
+
+        let relative = entry
+            .path()
+            .strip_prefix(base)
+            .unwrap_or(entry.path().as_path())
+            .to_string_lossy()
+            .to_string();
+
+        let file_type = entry.file_type().ok();
+        let is_dir = file_type.as_ref().is_some_and(|ft| ft.is_dir());
+        let type_label = if is_dir { "dir" } else { "file" };
+
+        result.push((relative.clone(), type_label.to_string()));
+
+        if is_dir {
+            let children = walk_directory_recursive(base, &entry.path());
+            result.extend(children);
+        }
+    }
+
+    result
+}
+
+/// Registers `list-dir-recursive`: recursively lists all entries under a directory.
+///
+/// Usage: `(list-dir-recursive "/some/path")`
+///
+/// Returns a list of `(relative-path type)` pairs for every file and directory
+/// found recursively. Hidden files/dirs (starting with `.`) are excluded.
+/// Files are sorted alphabetically by relative path.
+/// Returns empty list on error.
+fn register_list_dir_recursive(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "list-dir-recursive", move |_env, args| {
+        let path_str = extract_string_arg(&args, "list-dir-recursive")?;
+        let base = std::path::Path::new(&path_str);
+
+        if !base.is_dir() {
+            return Ok(Value::List(List::NIL));
+        }
+
+        let mut entries = walk_directory_recursive(base, base);
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let values: Vec<Value> = entries
+            .into_iter()
+            .map(|(rel_path, type_label)| {
+                let pair: List = vec![Value::String(rel_path), Value::String(type_label)]
+                    .into_iter()
+                    .collect();
+                Value::List(pair)
+            })
+            .collect();
+
+        let result_list: List = values.into_iter().collect();
         Ok(Value::List(result_list))
     });
 }
@@ -5512,6 +5596,128 @@ mod tests {
             Value::List(List::NIL) => {} // expected empty list
             _ => panic!(
                 "list-dir on nonexistent path should return empty list, got {:?}",
+                inner
+            ),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: list-dir-recursive
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_nested_directory_when_list_dir_recursive_then_returns_all_entries_with_relative_paths()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        // Create nested structure:
+        // dir/
+        //   top.txt
+        //   src/
+        //     main.rs
+        //   src/core/
+        //     deep.rs
+        std::fs::write(dir.path().join("top.txt"), "content").unwrap();
+        std::fs::create_dir_all(dir.path().join("src").join("core")).unwrap();
+        std::fs::write(dir.path().join("src").join("main.rs"), "content").unwrap();
+        std::fs::write(
+            dir.path().join("src").join("core").join("deep.rs"),
+            "content",
+        )
+        .unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(list-dir-recursive \"{}\")", dir_path))
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                // Should contain: src (dir), src/core (dir), src/core/deep.rs (file),
+                //                 src/main.rs (file), top.txt (file)
+                assert_eq!(items.len(), 5, "Should have 5 entries, got {:?}", items);
+
+                // Extract all entries as (path, type) pairs for easier assertions
+                let entries: Vec<(String, String)> = items
+                    .iter()
+                    .map(|item| match item {
+                        Value::List(l) => {
+                            let pair: Vec<Value> = l.clone().into_iter().collect();
+                            match (&pair[0], &pair[1]) {
+                                (Value::String(p), Value::String(t)) => (p.clone(), t.clone()),
+                                _ => panic!("Expected string pair"),
+                            }
+                        }
+                        other => panic!("Expected list, got {:?}", other),
+                    })
+                    .collect();
+
+                // Sorted alphabetically by relative path
+                assert_eq!(entries[0], ("src".to_string(), "dir".to_string()));
+                assert_eq!(entries[1], ("src/core".to_string(), "dir".to_string()));
+                assert_eq!(
+                    entries[2],
+                    ("src/core/deep.rs".to_string(), "file".to_string())
+                );
+                assert_eq!(entries[3], ("src/main.rs".to_string(), "file".to_string()));
+                assert_eq!(entries[4], ("top.txt".to_string(), "file".to_string()));
+            }
+            _ => panic!("list-dir-recursive should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_directory_with_hidden_files_when_list_dir_recursive_then_hidden_entries_excluded() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("visible.txt"), "content").unwrap();
+        std::fs::write(dir.path().join(".hidden"), "content").unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".git").join("config"), "content").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(list-dir-recursive \"{}\")", dir_path))
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(list) => {
+                let items: Vec<Value> = list.into_iter().collect();
+                assert_eq!(
+                    items.len(),
+                    1,
+                    "Should only have visible.txt, got {:?}",
+                    items
+                );
+            }
+            _ => panic!("list-dir-recursive should return a list, got {:?}", inner),
+        }
+    }
+
+    #[test]
+    fn given_nonexistent_path_when_list_dir_recursive_then_returns_empty_list() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(list-dir-recursive \"/nonexistent/path/that/does/not/exist\")")
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(List::NIL) => {} // expected empty list
+            _ => panic!(
+                "list-dir-recursive on nonexistent path should return empty list, got {:?}",
                 inner
             ),
         }

@@ -1,0 +1,321 @@
+journey:
+  name: "Browser File Search"
+  goal: "Find and open a file by typing a partial name to filter the browser listing"
+  persona: "Kai Nakamura -- backend developer comfortable with vim keybindings and fuzzy finders"
+
+  emotional_arc:
+    start: "Mildly frustrated -- too many entries to scroll through with j/k"
+    middle: "Focused and engaged -- each keystroke narrows the list, showing progress"
+    end: "Confident and satisfied -- target file found and opened efficiently"
+
+  contexts:
+    - id: fullscreen
+      name: "Full-Screen Browser"
+      activation: "alfred . or Ctrl-b"
+      rendering: "buffer-set-content (full buffer text)"
+      keymap: "browse-mode"
+    - id: sidebar
+      name: "Sidebar File Tree"
+      activation: "Ctrl-e"
+      rendering: "set-panel-line (panel line-by-line)"
+      keymap: "filetree-mode"
+
+steps:
+  - id: 1
+    name: "Browse Large Directory"
+    command: "j/k navigation in browse-mode or filetree-mode"
+    precondition: "User is in browser or sidebar viewing a directory with many entries"
+
+    tui_mockup: |
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |                                                                       |
+      |    app.rs                                                             |
+      |    auth.rs                                                            |
+      |  > bridge.rs                                                          |
+      |    bridge_helpers.rs                                                  |
+      |    cache.rs                                                           |
+      |    ...22 more entries...                                              |
+      +-----------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "browser_current_dir"
+        source: "browse-mode/init.lisp:browser-current-dir"
+        displayed_as: "${browser-current-dir}"
+        consumers: ["header line", "path-join for open-file", "list-dir call"]
+      - name: "browser_entries"
+        source: "browse-mode/init.lisp:browser-entries"
+        displayed_as: "entry list lines"
+        consumers: ["rendered listing", "cursor bounds", "search filter input"]
+
+    emotional_state:
+      entry: "Oriented but mildly frustrated by entry count"
+      exit: "Decides to search rather than scroll"
+
+    gherkin: |
+      Scenario: User sees a directory with many entries
+        Given Kai is browsing /home/kai/projects/webapi/src in the full-screen browser
+        And the directory contains 23 entries
+        When Kai looks at the listing
+        Then all 23 entries are visible (with scrolling if needed)
+        And the cursor is on the first entry
+
+  - id: 2
+    name: "Enter Search Mode"
+    command: "Press / in browse-mode or filetree-mode"
+    precondition: "User is in browser or sidebar, not already in search mode"
+
+    tui_mockup: |
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |  /                                                                    |
+      |    app.rs                                                             |
+      |    auth.rs                                                            |
+      |  > bridge.rs                                                          |
+      |    ...                                                                |
+      +-----------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "search_query"
+        source: "browse-mode/init.lisp:browser-search-query (new state)"
+        displayed_as: "${search-query}"
+        consumers: ["search prompt line", "filter function", "re-render trigger"]
+      - name: "search_active"
+        source: "browse-mode/init.lisp:browser-search-active (new state)"
+        displayed_as: "presence of / prompt"
+        consumers: ["keymap routing", "render function", "escape handler"]
+      - name: "pre_search_cursor"
+        source: "browse-mode/init.lisp:browser-pre-search-cursor (new state)"
+        displayed_as: "not displayed (internal)"
+        consumers: ["escape handler to restore cursor position"]
+
+    emotional_state:
+      entry: "Determined to find a file quickly"
+      exit: "Expectant -- ready to type"
+
+    integration_checkpoint: |
+      Search prompt must appear on line 2 (replacing blank separator).
+      Full entry list remains visible until first character typed.
+      Keymap must route printable characters to query append, not navigation.
+
+    gherkin: |
+      Scenario: Activate search in full-screen browser
+        Given Kai is browsing /home/kai/projects/webapi/src in the full-screen browser
+        When Kai presses /
+        Then a search prompt "/" appears on the second line
+        And the full directory listing remains visible below the prompt
+        And the browser is in search mode
+
+      Scenario: Activate search in sidebar
+        Given Kai has the sidebar open showing /home/kai/projects/webapi/src
+        When Kai presses /
+        Then a search prompt "/" appears on the second line of the sidebar panel
+        And the full directory listing remains visible below the prompt
+        And the sidebar is in search mode
+
+  - id: 3
+    name: "Type Query and Filter"
+    command: "Type characters while in search mode"
+    precondition: "Search mode is active (step 2 completed)"
+
+    tui_mockup: |
+      After typing "run":
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |  / run                                                                |
+      |  > runtime.rs                                                         |
+      +-----------------------------------------------------------------------+
+
+      After typing "br":
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |  / br                                                                 |
+      |  > bridge.rs                                                          |
+      |    bridge_helpers.rs                                                  |
+      +-----------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "search_query"
+        source: "browse-mode/init.lisp:browser-search-query"
+        displayed_as: "/ ${search-query}"
+        consumers: ["prompt display", "filter predicate"]
+      - name: "filtered_entries"
+        source: "browse-mode/init.lisp (computed from browser-entries + search-query)"
+        displayed_as: "filtered entry list"
+        consumers: ["rendered listing", "cursor bounds", "enter handler"]
+
+    emotional_state:
+      entry: "Focused -- each keystroke is purposeful"
+      exit: "Engaged -- can see the list narrowing"
+
+    integration_checkpoint: |
+      Filter applies on every keystroke (incremental).
+      Matching is case-insensitive substring.
+      Cursor resets to first filtered entry after each keystroke.
+      Entry count in filtered list used for cursor bounds.
+
+    gherkin: |
+      Scenario: Typing filters entries incrementally
+        Given Kai is in search mode in the full-screen browser showing /home/kai/projects/webapi/src
+        When Kai types "run"
+        Then only entries containing "run" are displayed
+        And "runtime.rs" is visible in the filtered list
+        And the cursor is on the first matching entry
+
+      Scenario: Case-insensitive matching
+        Given Kai is in search mode in the full-screen browser
+        And the directory contains "README.md" and "routes/"
+        When Kai types "rea"
+        Then "README.md" is visible in the filtered list
+
+      Scenario: Multiple matches shown
+        Given Kai is in search mode in the full-screen browser showing /home/kai/projects/webapi/src
+        When Kai types "br"
+        Then "bridge.rs" and "bridge_helpers.rs" are both visible
+        And Kai can navigate between them with j/k
+
+  - id: 4
+    name: "Handle No Matches"
+    command: "Type query that matches nothing"
+    precondition: "Search mode active, query typed"
+
+    tui_mockup: |
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |  / xyz                                                                |
+      |    (no matches)                                                       |
+      +-----------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "filtered_entries"
+        source: "browse-mode/init.lisp (empty list after filter)"
+        displayed_as: "(no matches)"
+        consumers: ["render function", "enter handler (no-op)"]
+
+    emotional_state:
+      entry: "Briefly uncertain -- the list is empty"
+      exit: "Informed -- clear message, knows to adjust query or press Escape"
+
+    integration_checkpoint: |
+      Empty filter result must display "(no matches)", not a blank screen.
+      Enter is a no-op when no matches exist.
+      Backspace and Escape remain functional.
+
+    gherkin: |
+      Scenario: No entries match the search query
+        Given Kai is in search mode in the full-screen browser showing /home/kai/projects/webapi/src
+        When Kai types "xyz"
+        Then the listing shows "(no matches)"
+        And pressing Enter does nothing
+        And Kai can press Backspace to edit the query
+
+  - id: 5
+    name: "Open File from Filtered List"
+    command: "Press Enter on a file entry in filtered results"
+    precondition: "Search mode active, filtered list has at least one entry, cursor on a file"
+
+    shared_artifacts:
+      - name: "browser_current_dir"
+        source: "browse-mode/init.lisp:browser-current-dir"
+        displayed_as: "not displayed at this step"
+        consumers: ["path-join to construct full file path"]
+      - name: "selected_entry"
+        source: "browse-mode/init.lisp:filtered-entries at cursor index"
+        displayed_as: "cursor indicator >"
+        consumers: ["open-file argument", "enter-dir argument"]
+
+    emotional_state:
+      entry: "Confident -- the target is selected"
+      exit: "Satisfied -- file is open, search is done"
+
+    gherkin: |
+      Scenario: Open file from search results in full-screen browser
+        Given Kai is in search mode in the full-screen browser
+        And the filtered list shows "runtime.rs" with the cursor on it
+        When Kai presses Enter
+        Then Alfred opens /home/kai/projects/webapi/src/runtime.rs in the editor buffer
+        And search mode is dismissed
+        And the editor mode is "normal"
+
+      Scenario: Enter directory from search results
+        Given Kai is in search mode in the full-screen browser
+        And the filtered list shows "models/" with the cursor on it
+        When Kai presses Enter
+        Then the browser navigates into the models/ directory
+        And the full listing of models/ is displayed
+        And search mode is dismissed
+
+  - id: 6
+    name: "Dismiss Search"
+    command: "Press Escape (or Backspace on empty query)"
+    precondition: "Search mode is active"
+
+    tui_mockup: |
+      Before (search active):
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |  / br                                                                 |
+      |  > bridge.rs                                                          |
+      |    bridge_helpers.rs                                                  |
+      +-----------------------------------------------------------------------+
+
+      After Escape:
+      +-----------------------------------------------------------------------+
+      |  /home/kai/projects/webapi/src                                        |
+      |                                                                       |
+      |    app.rs                                                             |
+      |    auth.rs                                                            |
+      |  > bridge.rs                                                          |
+      |    bridge_helpers.rs                                                  |
+      |    ...                                                                |
+      +-----------------------------------------------------------------------+
+
+    shared_artifacts:
+      - name: "pre_search_cursor"
+        source: "browse-mode/init.lisp:browser-pre-search-cursor"
+        displayed_as: "cursor position restored"
+        consumers: ["escape handler"]
+      - name: "search_active"
+        source: "browse-mode/init.lisp:browser-search-active"
+        displayed_as: "search prompt removed"
+        consumers: ["render function", "keymap routing"]
+
+    emotional_state:
+      entry: "Wants to abort search (wrong query, changed mind)"
+      exit: "Relieved -- safe return to full listing, nothing lost"
+
+    integration_checkpoint: |
+      Search prompt removed from line 2.
+      Full entry list restored (not just filtered entries).
+      Cursor restored to pre-search position.
+      Keymap reverts to browse-mode/filetree-mode navigation.
+
+    gherkin: |
+      Scenario: Escape dismisses search and restores full listing
+        Given Kai is in search mode in the full-screen browser
+        And the search query is "br" showing 2 filtered results
+        When Kai presses Escape
+        Then the search prompt disappears
+        And the full directory listing is restored with all 23 entries
+        And the cursor returns to its pre-search position
+
+      Scenario: Backspace on empty query dismisses search
+        Given Kai is in search mode with an empty query
+        When Kai presses Backspace
+        Then search mode is dismissed
+        And the full directory listing is restored
+
+integration_validation:
+  shared_artifact_consistency:
+    - artifact: "browser_current_dir"
+      must_match_across: [1, 2, 3, 5]
+      failure_message: "Directory path displayed in header must match the directory used for list-dir and path-join"
+    - artifact: "search_query"
+      must_match_across: [2, 3, 4]
+      failure_message: "Search query in prompt must be the same string used for filtering entries"
+    - artifact: "filtered_entries"
+      must_match_across: [3, 4, 5]
+      failure_message: "Entries displayed in filtered view must be the same list used for cursor navigation and open-file"
+    - artifact: "search_active"
+      must_match_across: [2, 3, 4, 5, 6]
+      failure_message: "Search active flag must be consistent between render, keymap routing, and escape handling"
