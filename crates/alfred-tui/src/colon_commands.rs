@@ -6,7 +6,7 @@
 
 use alfred_core::editor_state::EditorState;
 
-use crate::app::{DeferredAction, InputState};
+use crate::input::{DeferredAction, InputState};
 
 // ---------------------------------------------------------------------------
 // Parsed command representation

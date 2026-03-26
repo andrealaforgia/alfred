@@ -6,6 +6,7 @@
 
 pub mod app;
 pub(crate) mod colon_commands;
+pub(crate) mod input;
 pub mod renderer;
 
 /// Returns the crate version string.
