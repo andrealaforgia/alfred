@@ -3194,289 +3194,6 @@ class TestEdgeCases:
 # Large file / rope chunk boundary tests
 # ---------------------------------------------------------------------------
 
-class TestFolderBrowser:
-    """Verify the folder browser feature works when opening a directory."""
-
-    def test_open_directory_no_plugin_errors(self):
-        """Opening a directory should not produce plugin errors."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        with open(os.path.join(tmpdir, "hello.txt"), "w") as f:
-            f.write("hello world\n")
-        os.mkdir(os.path.join(tmpdir, "subdir"))
-
-        child = spawn_alfred(tmpdir)
-
-        # Read screen output for diagnostics
-        time.sleep(1.5)
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=2)
-        except Exception:
-            screen = ""
-
-        # Try q (browse-mode quit), then :q (normal-mode quit) as fallback
-        send_keys(child, "q")
-        time.sleep(0.5)
-        try:
-            exit_code = wait_for_exit(child, timeout=3)
-        except Exception:
-            # q didn't work — try :q as fallback
-            send_colon_command(child, "q!")
-            exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit, got {exit_code}. Screen: {repr(screen[:500])}"
-        assert "Plugin errors" not in screen, \
-            f"Plugin errors when opening directory: {repr(screen[:500])}"
-        assert "parse_key_spec" not in screen, \
-            f"Key spec parse error: {repr(screen[:500])}"
-        assert "not defined" not in screen.lower(), \
-            f"Undefined symbol error: {repr(screen[:500])}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browser_displays_directory_entries(self):
-        """Opening a directory renders the folder browser with correct entries.
-
-        Uses sequential pexpect.expect calls to wait for each entry to appear
-        in the PTY output stream. This is reliable because ratatui writes
-        entries in order (row by row) within a single frame flush.
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        os.mkdir(os.path.join(tmpdir, "alpha_dir"))
-        os.mkdir(os.path.join(tmpdir, "beta_dir"))
-        with open(os.path.join(tmpdir, "gamma.txt"), "w") as f:
-            f.write("gamma content\n")
-        with open(os.path.join(tmpdir, "delta.rs"), "w") as f:
-            f.write("fn main() {}\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Wait for directory listing to render by looking for a known entry.
-        # The browser writes entries as buffer text, which ratatui renders.
-        try:
-            child.expect("alpha_dir/", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'alpha_dir/' within 5s")
-
-        # Browser rendered at least one entry — verify we can quit
-        send_keys(child, "q")
-        time.sleep(0.3)
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browser_shows_subdirectory_after_enter(self):
-        """Entering a subdirectory and opening a file from it works correctly.
-
-        Verified through file content after save, not screen reading.
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        subdir = os.path.join(tmpdir, "aaa_subdir")
-        os.mkdir(subdir)
-        target = os.path.join(subdir, "target.txt")
-        with open(target, "w") as f:
-            f.write("subdir content\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Wait for browser to render
-        try:
-            child.expect("aaa_subdir/", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'aaa_subdir/'")
-
-        # Navigate to subdir (j past ../) and enter it
-        send_keys(child, "j")
-        time.sleep(0.2)
-        child.send("\r")  # Enter subdir
-        time.sleep(1.0)
-
-        # Inside subdir: ../ (0), target.txt (1) — navigate to target.txt
-        send_keys(child, "j")
-        time.sleep(0.2)
-        child.send("\r")  # Open target.txt
-        time.sleep(1.0)
-
-        # Now in editor mode — save to verify correct file was opened
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        saved = read_file(target)
-        assert "subdir content" in saved, \
-            f"Expected 'subdir content' after browse+subdir+open, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browse_and_open_file_then_save(self):
-        """Browse a directory, open a file, edit it, save, and verify content."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        # Create a known structure: one subdir, two files
-        # Sorted order will be: ../, subdir/, aaa.txt, zzz.txt
-        os.mkdir(os.path.join(tmpdir, "subdir"))
-        target = os.path.join(tmpdir, "aaa.txt")
-        with open(target, "w") as f:
-            f.write("original\n")
-        with open(os.path.join(tmpdir, "zzz.txt"), "w") as f:
-            f.write("other\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Sorted entries (no ../ at root): subdir/ (0), aaa.txt (1), zzz.txt (2)
-        # Navigate to aaa.txt: j once (cursor starts at 0 = subdir/)
-        send_keys(child, "j")
-        time.sleep(0.1)
-
-        # Open the file with Enter
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Now in editor mode — go to insert mode and add text
-        send_keys(child, "A")  # append at end of line
-        time.sleep(0.2)
-        send_keys(child, " EDITED")
-        time.sleep(0.2)
-
-        # Escape to normal mode, then save and quit
-        child.send("\x1b")
-        time.sleep(0.3)
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-
-        saved = read_file(target)
-        assert "EDITED" in saved, \
-            f"Expected 'EDITED' in saved file after browse+edit, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browse_enter_subdirectory_and_go_back(self):
-        """Enter a subdirectory, then navigate back to parent."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        subdir = os.path.join(tmpdir, "src")
-        os.mkdir(subdir)
-        with open(os.path.join(subdir, "main.rs"), "w") as f:
-            f.write("fn main() {}\n")
-        with open(os.path.join(tmpdir, "README.md"), "w") as f:
-            f.write("# Hello\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Sorted: ../ (0), src/ (1), README.md (2)
-        # Navigate to src/ and enter it
-        send_keys(child, "j")
-        time.sleep(0.1)
-        child.send("\r")  # Enter src/
-        time.sleep(0.5)
-
-        # Now inside src/ — entries: ../ (0), main.rs (1)
-        # Go back to parent with h
-        send_keys(child, "h")
-        time.sleep(0.5)
-
-        # Should be back in tmpdir — navigate to README.md and open it
-        # Sorted: ../ (0), src/ (1), README.md (2)
-        send_keys(child, "j")
-        time.sleep(0.1)
-        send_keys(child, "j")
-        time.sleep(0.1)
-        child.send("\r")  # Open README.md
-        time.sleep(1.0)
-
-        # Now in editor — save to verify we opened the right file
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-
-        # Verify README.md content is intact
-        readme_content = read_file(os.path.join(tmpdir, "README.md"))
-        assert "# Hello" in readme_content, \
-            f"Expected README.md content after browse+subdir+back+open, got: {readme_content!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browse_quit_with_q(self):
-        """Pressing q in browser mode exits Alfred cleanly."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        with open(os.path.join(tmpdir, "file.txt"), "w") as f:
-            f.write("content\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Press q to quit from browser
-        send_keys(child, "q")
-        time.sleep(0.3)
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit with q, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_browse_jump_first_and_last(self):
-        """g jumps to first entry, G jumps to last, then open last file."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browse_")
-        # Create several files so there's something to jump across
-        for name in ["aaa.txt", "bbb.txt", "ccc.txt", "ddd.txt"]:
-            with open(os.path.join(tmpdir, name), "w") as f:
-                f.write(f"{name} content\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Jump to last with G
-        send_keys(child, "G")
-        time.sleep(0.2)
-
-        # Open last entry (should be ddd.txt)
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Save to verify correct file
-        target = os.path.join(tmpdir, "ddd.txt")
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        saved = read_file(target)
-        assert "ddd.txt content" in saved, \
-            f"Expected ddd.txt content (last file), got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-
 class TestLargeFileRopeChunkBoundary:
     """
     Verifies that all lines in a large file are correctly accessible,
@@ -3565,758 +3282,194 @@ class TestLargeFileRopeChunkBoundary:
         os.unlink(path)
 
 
+
+
 # ---------------------------------------------------------------------------
-# Interactive sidebar tests
+# Browser panel tests (sidebar with browse + search)
 # ---------------------------------------------------------------------------
 
-class TestInteractiveSidebar:
-    """Verify the interactive file tree sidebar (Ctrl-e) works."""
+class TestBrowserPanel:
+    """Verify the file browser panel (Ctrl-e / alfred .)."""
 
-    def test_sidebar_toggle_and_quit(self):
-        """Ctrl-e opens sidebar, Ctrl-e again closes it, then :q quits."""
+    def test_open_directory_shows_browser_panel(self):
+        """alfred . opens a browser panel on the left with directory entries."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
-        target = os.path.join(tmpdir, "hello.txt")
-        with open(target, "w") as f:
-            f.write("hello\n")
-
-        child = spawn_alfred(target)
-
-        # Open sidebar with Ctrl-e
-        child.send("\x05")  # Ctrl-e
-        time.sleep(0.5)
-
-        # Close sidebar with Ctrl-e (should return to normal mode)
-        child.send("\x05")  # Ctrl-e
-        time.sleep(0.5)
-
-        # Quit normally
-        send_colon_command(child, "q")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after sidebar toggle, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_sidebar_navigate_and_unfocus(self):
-        """Open sidebar, navigate with j/k, unfocus with q."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
-        for name in ["aaa.txt", "bbb.txt", "ccc.txt"]:
-            with open(os.path.join(tmpdir, name), "w") as f:
-                f.write(f"{name}\n")
-        target = os.path.join(tmpdir, "aaa.txt")
-
-        child = spawn_alfred(target)
-
-        # Open sidebar with Ctrl-e
-        child.send("\x05")  # Ctrl-e
-        time.sleep(0.5)
-
-        # Navigate down twice
-        send_keys(child, "j")
-        time.sleep(0.1)
-        send_keys(child, "j")
-        time.sleep(0.1)
-
-        # Navigate up once
-        send_keys(child, "k")
-        time.sleep(0.1)
-
-        # Unfocus with q
-        send_keys(child, "q")
-        time.sleep(0.3)
-
-        # Should be back in normal mode — quit
-        send_colon_command(child, "q")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after sidebar navigate+unfocus, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_sidebar_open_file_from_sidebar(self):
-        """Open sidebar, select a file with Enter, verify it opens."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_sidebar_")
-        target = os.path.join(tmpdir, "target.txt")
-        with open(target, "w") as f:
-            f.write("sidebar opened this\n")
-
-        # Open a different file first
-        other = os.path.join(tmpdir, "other.txt")
-        with open(other, "w") as f:
-            f.write("not this one\n")
-
-        child = spawn_alfred(other)
-
-        # Open sidebar with Ctrl-e
-        child.send("\x05")  # Ctrl-e
-        time.sleep(1.0)
-
-        # Sidebar shows root dir entries (sorted): other.txt, target.txt
-        # Navigate to target.txt (j to move down)
-        send_keys(child, "j")
-        time.sleep(0.2)
-
-        # Press Enter to open target.txt
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Should now be editing target.txt — save and quit
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after sidebar file open, got {exit_code}"
-
-        saved = read_file(target)
-        assert "sidebar opened this" in saved, \
-            f"Expected target.txt content, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_ctrl_b_toggles_to_browser_and_back(self):
-        """Ctrl-b opens full browser, select file returns to editor."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlb_")
-        target = os.path.join(tmpdir, "myfile.txt")
-        with open(target, "w") as f:
-            f.write("original content\n")
-
-        child = spawn_alfred(target)
-
-        # Press Ctrl-b to toggle to browser
-        child.send("\x02")  # Ctrl-b
-        time.sleep(1.0)
-
-        # Navigate to myfile.txt and open it
-        send_keys(child, "j")
-        time.sleep(0.1)
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Back in editor — save and quit
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after Ctrl-b toggle, got {exit_code}"
-
-        saved = read_file(target)
-        assert "original content" in saved, \
-            f"File should be preserved after Ctrl-b round-trip, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-
-class TestBrowserEditorInteraction:
-    """Exercise all interactions between browsing and editing panels.
-
-    Tests the full lifecycle: open directory, browse, select file, edit,
-    toggle sidebar/browser, verify focus and content stability across
-    all combinations of Ctrl-e and Ctrl-b.
-    """
-
-    def test_full_browse_edit_sidebar_browser_lifecycle(self):
-        """Complete lifecycle: browse -> open file -> sidebar -> browser -> edit -> save.
-
-        Steps:
-        1. Open alfred on a directory (browser mode)
-        2. Navigate to and open a file (editor mode)
-        3. Ctrl-e: open sidebar, navigate it, unfocus
-        4. Ctrl-b: switch to full browser (should show same directory)
-        5. Navigate back to same file, open it
-        6. Edit the file, save, verify content
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_lifecycle_")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browser_")
         os.mkdir(os.path.join(tmpdir, "src"))
-        target = os.path.join(tmpdir, "src", "main.rs")
-        with open(target, "w") as f:
-            f.write("fn main() {}\n")
         with open(os.path.join(tmpdir, "README.md"), "w") as f:
-            f.write("# Project\n")
+            f.write("# Hello\n")
 
-        # Step 1: Open directory in browser mode
         child = spawn_alfred(tmpdir)
 
-        # Wait for browser to render
+        # Browser should render entry names
         try:
             child.expect("src/", timeout=5)
         except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
             shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'src/' on startup")
+            pytest.fail("Browser did not render 'src/'")
 
-        # Step 2: Enter src/ directory (cursor starts at 0 = src/, no ../ at root)
-        # Sorted: dirs first: src/ (0), then files: README.md (1)
-        child.send("\r")  # enter src/ (already at cursor 0)
-        time.sleep(1.0)
-
-        # Inside src/: main.rs — navigate to it and open
-        send_keys(child, "j")  # past ../ to main.rs
-        time.sleep(0.2)
-        child.send("\r")  # open main.rs
-        time.sleep(1.0)
-
-        # Step 3: Now in editor mode with main.rs open
-        # Open sidebar with Ctrl-e
-        child.send("\x05")  # Ctrl-e
-        time.sleep(1.0)
-
-        # Navigate sidebar down twice
-        send_keys(child, "j")
-        time.sleep(0.1)
-        send_keys(child, "j")
-        time.sleep(0.1)
-
-        # Navigate sidebar back up
-        send_keys(child, "k")
-        time.sleep(0.1)
-
-        # Unfocus sidebar (back to editor) with Escape
-        child.send("\x1b")  # Escape
-        time.sleep(0.5)
-
-        # Step 4: Toggle to full browser with Ctrl-b
-        child.send("\x02")  # Ctrl-b
-        time.sleep(1.0)
-
-        # Browser should show the last browsed directory (src/)
-        # Navigate to main.rs and open it again
-        send_keys(child, "j")  # past ../ to main.rs
-        time.sleep(0.2)
-        child.send("\r")  # open main.rs
-        time.sleep(1.0)
-
-        # Step 5: Back in editor — open sidebar again with Ctrl-e
-        child.send("\x05")  # Ctrl-e
-        time.sleep(0.5)
-
-        # Unfocus sidebar with Escape, then close with Ctrl-e
-        child.send("\x1b")  # Escape to unfocus
+        # Quit from the browser
+        send_keys(child, "q")
         time.sleep(0.3)
-        child.send("\x05")  # Ctrl-e to close sidebar
-        time.sleep(0.5)
-
-        # Step 6: Ensure we're in normal mode and save
-        child.send("\x1b")  # Escape (ensure normal mode)
-        time.sleep(0.3)
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after full lifecycle, got {exit_code}"
-
-        saved = read_file(target)
-        assert "fn main()" in saved, \
-            f"Original content should be preserved through lifecycle, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_ctrl_e_ctrl_b_alternation_stability(self):
-        """Rapidly alternating Ctrl-e and Ctrl-b doesn't crash or corrupt state.
-
-        Exercises: Ctrl-e open, Ctrl-e close, Ctrl-b open, select file,
-        Ctrl-e open, navigate, Ctrl-e close, repeat.
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_alternation_")
-        target = os.path.join(tmpdir, "stable.txt")
-        with open(target, "w") as f:
-            f.write("stability test\n")
-        with open(os.path.join(tmpdir, "other.txt"), "w") as f:
-            f.write("other\n")
-
-        child = spawn_alfred(target)
-
-        # Round 1: Ctrl-e open, navigate, close
-        child.send("\x05")  # Ctrl-e open sidebar
-        time.sleep(0.5)
-        send_keys(child, "j")
-        time.sleep(0.1)
-        child.send("\x05")  # Ctrl-e close sidebar
-        time.sleep(0.5)
-
-        # Round 2: Ctrl-b to full browser, select file, back to editor
-        child.send("\x02")  # Ctrl-b
-        time.sleep(1.0)
-        send_keys(child, "j")  # navigate
-        time.sleep(0.1)
-        child.send("\r")  # open file (whichever is selected)
-        time.sleep(1.0)
-
-        # Round 3: Ctrl-e again
-        child.send("\x05")  # Ctrl-e
-        time.sleep(0.5)
-        send_keys(child, "j")
-        time.sleep(0.1)
-        send_keys(child, "k")
-        time.sleep(0.1)
-        child.send("\x1b")  # Escape to unfocus
-        time.sleep(0.5)
-
-        # Round 4: Ctrl-b again
-        child.send("\x02")  # Ctrl-b
-        time.sleep(1.0)
-        # Select stable.txt — navigate to it
-        send_keys(child, "j")
-        time.sleep(0.1)
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Should be editing a file now — quit cleanly
         send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
 
-        assert exit_code == 0, \
-            f"Expected clean exit after alternation stress test, got {exit_code}"
-
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
         shutil.rmtree(tmpdir)
 
-    def test_browser_remembers_directory_after_file_open(self):
-        """After opening a file from a subdirectory, Ctrl-b returns to that subdir."""
+    def test_select_file_opens_in_editor_browser_stays(self):
+        """Selecting a file opens it in the editor; browser panel stays visible."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_remember_")
-        subdir = os.path.join(tmpdir, "deep")
-        os.mkdir(subdir)
-        target = os.path.join(subdir, "nested.txt")
-        with open(target, "w") as f:
-            f.write("deep file\n")
-        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
-            f.write("top\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Navigate into deep/ subdirectory
-        try:
-            child.expect("deep/", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'deep/'")
-
-        # Enter deep/ (at cursor 0, no ../ at root)
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Inside deep/: ../ (0), nested.txt (1) — navigate to nested.txt
-        send_keys(child, "j")  # past ../
-        time.sleep(0.2)
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Now editing nested.txt — Ctrl-b should return to deep/ directory
-        child.send("\x02")  # Ctrl-b
-        time.sleep(1.0)
-
-        # Browser should show deep/ contents — verify by looking for nested.txt
-        try:
-            child.expect("nested.txt", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail(
-                "Ctrl-b did not return to deep/ directory (nested.txt not found)"
-            )
-
-        # Quit from browser
-        send_keys(child, "q")
-        time.sleep(0.3)
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-
-class TestSidebarBugs:
-    """Regression tests for sidebar-related bugs."""
-
-    def test_sidebar_triple_toggle_no_error(self):
-        """Toggling the sidebar three times after opening a file from browser must not error.
-
-        Reproduces the bug where:
-        1. Open Alfred on a directory (browser mode)
-        2. Select and open a file (Enter) -- switches to editor mode
-        3. Ctrl-e (open sidebar)
-        4. Ctrl-e (close sidebar)
-        5. Ctrl-e (open sidebar again) -- ERROR: "Panel 'filetree' already exists"
-
-        The third Ctrl-e should open the sidebar cleanly without any error.
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_triple_toggle_")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browser_open_")
         target = os.path.join(tmpdir, "hello.txt")
         with open(target, "w") as f:
             f.write("hello world\n")
 
-        # Step 1: Open Alfred on the directory (browser mode)
         child = spawn_alfred(tmpdir)
 
-        # Wait for browser to render the file entry
         try:
             child.expect("hello.txt", timeout=5)
         except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
             shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'hello.txt' within 5s")
+            pytest.fail("Browser did not render 'hello.txt'")
 
-        # Step 2: Select the file and press Enter to open it in editor mode
+        # Select the file with Enter
         child.send("\r")
         time.sleep(1.0)
 
-        # Step 3: Ctrl-e -- open sidebar (first toggle)
-        child.send("\x05")
-        time.sleep(0.5)
-
-        # Step 4: Ctrl-e -- close sidebar (second toggle)
-        child.send("\x05")
-        time.sleep(0.5)
-
-        # Step 5: Ctrl-e -- open sidebar again (third toggle)
-        # This is where the bug triggers: "Panel 'filetree' already exists"
-        child.send("\x05")
-        time.sleep(0.5)
-
-        # Read screen output to check for error messages
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=2)
-        except Exception:
-            screen = ""
-
-        # Clean exit: Escape unfocuses sidebar, Ctrl-e closes it, then :q
-        child.send("\x1b")  # Escape to unfocus if sidebar is focused
+        # Should be in editor mode — edit the file to prove it opened
+        send_keys(child, "A")
+        time.sleep(0.2)
+        send_keys(child, " EDITED")
+        time.sleep(0.2)
+        child.send("\x1b")  # Escape
         time.sleep(0.3)
-        child.send("\x05")  # Ctrl-e to close sidebar
-        time.sleep(0.3)
-        send_colon_command(child, "q")
-        try:
-            exit_code = wait_for_exit(child, timeout=5)
-        except Exception:
-            # Fallback: force quit
-            send_colon_command(child, "q!")
-            exit_code = wait_for_exit(child)
 
-        # Assert no error appeared on screen
-        assert "error" not in screen.lower(), \
-            f"Error detected after triple sidebar toggle: {repr(screen[:500])}"
-        assert "already exists" not in screen.lower(), \
-            f"Panel duplication error after triple toggle: {repr(screen[:500])}"
-        assert exit_code == 0, \
-            f"Expected clean exit after triple sidebar toggle, got {exit_code}"
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(target)
+        assert "EDITED" in saved, \
+            f"Expected 'EDITED' in file after browser select, got: {saved!r}"
 
         shutil.rmtree(tmpdir)
 
-
-# ---------------------------------------------------------------------------
-# Sidebar rendering (3 tests)
-# ---------------------------------------------------------------------------
-
-class TestSidebarRendering:
-    """Tests for sidebar rendering bugs: gutter hiding, stale highlights."""
-
-    def test_no_tilde_after_ctrl_e(self):
-        """Opening the sidebar hides the gutter -- no tilde lines should appear.
-
-        Steps:
-        1. Open a file with content
-        2. Press Ctrl-e to open sidebar
-        3. Read screen -- assert no '~' in the file area (first few lines)
-        4. Press Ctrl-e to close -- verify file renders normally
-        """
+    def test_ctrl_e_toggles_browser_off_and_on(self):
+        """Ctrl-e hides browser, Ctrl-e again shows it preserving directory."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_tilde_")
-        target = os.path.join(tmpdir, "content.txt")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_toggle_")
+        target = os.path.join(tmpdir, "file.txt")
         with open(target, "w") as f:
-            f.write("line one\nline two\nline three\nline four\nline five\n")
+            f.write("content\n")
 
-        # Open Alfred on the directory, then open the file
         child = spawn_alfred(tmpdir)
-        try:
-            child.expect("content.txt", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'content.txt' within 5s")
 
-        # Open the file
+        try:
+            child.expect("file.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Select file to get into editor mode
         child.send("\r")
         time.sleep(1.0)
 
-        # Ctrl-e to open sidebar
+        # Ctrl-e to hide browser
         child.send("\x05")
         time.sleep(0.5)
 
-        # Read screen
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=2)
-        except Exception:
-            screen = ""
+        # Ctrl-e to show browser again
+        child.send("\x05")
+        time.sleep(0.5)
 
-        # The file area should NOT show tilde lines from the gutter
-        # Split screen into lines and check the first several lines
-        screen_lines = screen.split("\n") if screen else []
-        tilde_in_content_area = False
-        for line in screen_lines[:10]:
-            # A tilde at the start of a line (after possible spaces) indicates
-            # gutter bleed -- the gutter is rendering ~ for empty lines
-            stripped = line.strip()
-            if stripped == "~" or stripped.startswith("~ "):
-                tilde_in_content_area = True
-                break
-
-        # Close sidebar: Escape then Ctrl-e
+        # Unfocus and quit
         child.send("\x1b")
         time.sleep(0.3)
-        child.send("\x05")
-        time.sleep(0.3)
-
         send_colon_command(child, "q")
-        try:
-            exit_code = wait_for_exit(child, timeout=5)
-        except Exception:
-            send_colon_command(child, "q!")
-            exit_code = wait_for_exit(child)
+        exit_code = wait_for_exit(child)
 
-        assert not tilde_in_content_area, \
-            f"Tilde '~' found in content area while sidebar open: {repr(screen[:500])}"
         assert exit_code == 0, \
-            f"Expected clean exit, got {exit_code}"
+            f"Expected clean exit after toggle, got {exit_code}"
 
         shutil.rmtree(tmpdir)
 
-    def test_syntax_highlighting_intact_after_sidebar_file_open(self):
-        """Opening a file from the sidebar clears stale styles -- no error on screen.
-
-        Steps:
-        1. Open Alfred on a directory
-        2. Open a .rs file from the browser
-        3. Press Ctrl-e, navigate sidebar to another .rs file, open it with Enter
-        4. Verify the file opens without 'error' on screen
-        5. Save with :wq and verify content
-        """
+    def test_enter_subdirectory_and_navigate_back(self):
+        """Enter a subdirectory, then h goes back to parent."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_highlight_")
-        file_a = os.path.join(tmpdir, "alpha.rs")
-        file_b = os.path.join(tmpdir, "beta.rs")
-        with open(file_a, "w") as f:
-            f.write("fn main() {\n    println!(\"hello\");\n}\n")
-        with open(file_b, "w") as f:
-            f.write("fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n")
-
-        # Open Alfred on the directory
-        child = spawn_alfred(tmpdir)
-        try:
-            child.expect("alpha.rs", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'alpha.rs' within 5s")
-
-        # Open alpha.rs from browser
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Now open sidebar with Ctrl-e
-        child.send("\x05")
-        time.sleep(0.5)
-
-        # Navigate to beta.rs (it should be in the sidebar list)
-        # Press j to move cursor down (beta.rs is after alpha.rs alphabetically)
-        send_keys(child, "j")
-        time.sleep(0.2)
-
-        # Press Enter to open beta.rs from sidebar
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Read screen to check for errors
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=2)
-        except Exception:
-            screen = ""
-
-        # Save and quit -- verifies file was opened correctly
-        send_colon_command(child, "wq")
-        try:
-            exit_code = wait_for_exit(child, timeout=5)
-        except Exception:
-            send_colon_command(child, "q!")
-            exit_code = wait_for_exit(child)
-
-        # Verify no error on screen
-        assert "error" not in screen.lower(), \
-            f"Error detected after sidebar file open: {repr(screen[:500])}"
-
-        # Verify the beta.rs file content is intact (was opened correctly)
-        content = read_file(file_b)
-        assert "fn add" in content, \
-            f"Expected 'fn add' in beta.rs, got: {repr(content)}"
-
-        assert exit_code == 0, \
-            f"Expected clean exit, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_no_stale_highlight_after_sidebar_close(self):
-        """Closing the sidebar restores gutter and clears stale artifacts.
-
-        Steps:
-        1. Open a file
-        2. Press Ctrl-e to open sidebar
-        3. Navigate sidebar (move cursor)
-        4. Press Ctrl-e to close sidebar
-        5. Read screen -- assert no reversed-color artifacts or errors
-        """
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_stale_")
-        target = os.path.join(tmpdir, "clean.txt")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_subdir_")
+        subdir = os.path.join(tmpdir, "src")
+        os.mkdir(subdir)
+        target = os.path.join(subdir, "main.rs")
         with open(target, "w") as f:
-            f.write("first line\nsecond line\nthird line\n")
+            f.write("fn main() {}\n")
 
-        # Open Alfred on the directory
         child = spawn_alfred(tmpdir)
-        try:
-            child.expect("clean.txt", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'clean.txt' within 5s")
 
-        # Open the file from browser
+        try:
+            child.expect("src/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'src/'")
+
+        # Enter src/ directory
         child.send("\r")
         time.sleep(1.0)
 
-        # Ctrl-e to open sidebar
-        child.send("\x05")
-        time.sleep(0.5)
-
-        # Navigate sidebar (move cursor down and back up)
+        # Open main.rs (j past ../)
         send_keys(child, "j")
         time.sleep(0.2)
-        send_keys(child, "k")
-        time.sleep(0.2)
+        child.send("\r")
+        time.sleep(1.0)
 
-        # Ctrl-e to close sidebar
-        child.send("\x05")
-        time.sleep(0.5)
+        # Should be editing main.rs — save
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
 
-        # Read screen
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=2)
-        except Exception:
-            screen = ""
-
-        # Quit cleanly
-        send_colon_command(child, "q")
-        try:
-            exit_code = wait_for_exit(child, timeout=5)
-        except Exception:
-            send_colon_command(child, "q!")
-            exit_code = wait_for_exit(child)
-
-        # Assert no error or reversed-color ANSI artifacts
-        assert "error" not in screen.lower(), \
-            f"Error after sidebar close: {repr(screen[:500])}"
-        assert exit_code == 0, \
-            f"Expected clean exit, got {exit_code}"
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(target)
+        assert "fn main()" in saved, \
+            f"Expected main.rs content, got: {saved!r}"
 
         shutil.rmtree(tmpdir)
 
 
-# ---------------------------------------------------------------------------
-# Browser file search tests
-# ---------------------------------------------------------------------------
-
-class TestBrowserFileSearch:
-    """Verify the / search filter in the full-screen browser."""
+class TestBrowserSearch:
+    """Verify / search in the browser panel."""
 
     def test_search_filters_and_opens_file(self):
-        """Type / then a query, filtered entry opens correctly with Enter."""
+        """/ then typing filters entries; Enter opens the match."""
         import shutil
 
         tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_")
         with open(os.path.join(tmpdir, "alpha.txt"), "w") as f:
             f.write("alpha\n")
         with open(os.path.join(tmpdir, "beta.rs"), "w") as f:
-            f.write("fn main() {}\n")
-        with open(os.path.join(tmpdir, "gamma.py"), "w") as f:
-            f.write("print('hi')\n")
+            f.write("fn beta() {}\n")
 
         child = spawn_alfred(tmpdir)
 
         try:
             child.expect("alpha.txt", timeout=5)
         except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
             shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'alpha.txt'")
+            pytest.fail("Browser did not render")
 
-        # Press / to start search, type 'beta' to filter
+        # / to search, type 'beta'
         send_keys(child, "/")
         time.sleep(0.3)
         for ch in "beta":
@@ -4324,69 +3477,85 @@ class TestBrowserFileSearch:
             time.sleep(0.15)
         time.sleep(0.3)
 
-        # Open the filtered result with Enter
+        # Enter opens the match
         child.send("\r")
         time.sleep(1.0)
 
-        # Should be editing beta.rs — save and verify
+        # Edit to prove correct file opened
+        send_keys(child, "A")
+        time.sleep(0.2)
+        send_keys(child, " // found")
+        time.sleep(0.2)
+        child.send("\x1b")
+        time.sleep(0.3)
+
         send_colon_command(child, "wq")
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
         saved = read_file(os.path.join(tmpdir, "beta.rs"))
-        assert "fn main()" in saved, \
-            f"Expected beta.rs content after search+open, got: {saved!r}"
+        assert "// found" in saved, \
+            f"Expected beta.rs edited after search, got: {saved!r}"
 
         shutil.rmtree(tmpdir)
 
-    def test_search_escape_restores_listing(self):
-        """Pressing Escape after searching restores browse mode."""
+    def test_search_finds_file_in_subfolder(self):
+        """/ search finds files recursively in subfolders."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_esc_")
-        with open(os.path.join(tmpdir, "aaa.txt"), "w") as f:
-            f.write("aaa\n")
-        with open(os.path.join(tmpdir, "bbb.txt"), "w") as f:
-            f.write("bbb\n")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_deep_")
+        os.makedirs(os.path.join(tmpdir, "src", "core"))
+        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
+            f.write("top\n")
+        target = os.path.join(tmpdir, "src", "core", "deep.rs")
+        with open(target, "w") as f:
+            f.write("pub fn deep() {}\n")
 
         child = spawn_alfred(tmpdir)
 
         try:
-            child.expect("aaa.txt", timeout=5)
+            child.expect("src/", timeout=5)
         except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
             shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # Search, then Escape to cancel
+        # / to search, type 'deep'
         send_keys(child, "/")
         time.sleep(0.3)
-        send_keys(child, "z")
-        time.sleep(0.2)
-        child.send("\x1b")  # Escape
+        for ch in "deep":
+            send_keys(child, ch)
+            time.sleep(0.15)
         time.sleep(0.5)
 
-        # Should be back in browse mode — quit cleanly
-        send_keys(child, "q")
+        # Enter opens it
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Edit to verify
+        send_keys(child, "A")
+        time.sleep(0.2)
+        send_keys(child, " // deep-found")
+        time.sleep(0.2)
+        child.send("\x1b")
         time.sleep(0.3)
+
+        send_colon_command(child, "wq")
         exit_code = wait_for_exit(child)
 
-        assert exit_code == 0, \
-            f"Expected clean exit after search cancel, got {exit_code}"
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(target)
+        assert "// deep-found" in saved, \
+            f"Expected deep.rs edited after recursive search, got: {saved!r}"
 
         shutil.rmtree(tmpdir)
 
-    def test_search_backspace_on_empty_cancels(self):
-        """Backspace on empty search query cancels search mode."""
+    def test_search_escape_returns_to_browse(self):
+        """Escape during search returns to browse mode in the panel."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_bs_")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_esc_")
         with open(os.path.join(tmpdir, "file.txt"), "w") as f:
             f.write("content\n")
 
@@ -4395,232 +3564,64 @@ class TestBrowserFileSearch:
         try:
             child.expect("file.txt", timeout=5)
         except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
             shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # / -> type char -> backspace -> backspace on empty = cancel
+        # / then type, then Escape
         send_keys(child, "/")
         time.sleep(0.3)
         send_keys(child, "x")
         time.sleep(0.2)
-        child.send("\x7f")  # Backspace
-        time.sleep(0.2)
-        child.send("\x7f")  # Backspace on empty -> cancel
+        child.send("\x1b")  # Escape -> back to browse
         time.sleep(0.5)
 
-        # Should be back in browse mode
+        # Should be back in browse panel mode — q to unfocus
         send_keys(child, "q")
         time.sleep(0.3)
+        send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, \
-            f"Expected clean exit after backspace cancel, got {exit_code}"
+            f"Expected clean exit after search escape, got {exit_code}"
 
         shutil.rmtree(tmpdir)
 
-    def test_search_navigate_filtered_results(self):
-        """After filtering with /, j/k navigates the filtered subset."""
+    def test_search_skips_target_directory(self):
+        """Search does not find files inside target/ directory."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_nav_")
-        with open(os.path.join(tmpdir, "main.rs"), "w") as f:
-            f.write("fn main() {}\n")
-        with open(os.path.join(tmpdir, "lib.rs"), "w") as f:
-            f.write("pub fn lib() {}\n")
-        with open(os.path.join(tmpdir, "readme.md"), "w") as f:
-            f.write("# Readme\n")
-
-        child = spawn_alfred(tmpdir)
-
-        try:
-            child.expect("main.rs", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render")
-
-        # Search for '.rs' to filter to Rust files, then Enter to accept
-        send_keys(child, "/")
-        time.sleep(0.3)
-        for ch in ".rs":
-            send_keys(child, ch)
-            time.sleep(0.15)
-        time.sleep(0.3)
-
-        # Enter accepts search (returns to browse mode with filtered results)
-        # Then j navigates in the filtered list
-        child.send("\r")
-        time.sleep(0.5)
-
-        # Save and quit — the first filtered result should be opened
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-
-        # One of the .rs files should have been opened
-        main_content = read_file(os.path.join(tmpdir, "main.rs"))
-        lib_content = read_file(os.path.join(tmpdir, "lib.rs"))
-        assert "fn main()" in main_content or "pub fn lib()" in lib_content, \
-            "Expected a .rs file opened after filtered navigation"
-
-        shutil.rmtree(tmpdir)
-
-    def test_search_no_matches_does_not_crash(self):
-        """Searching for a non-existent term does not crash."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_nomatch_")
-        with open(os.path.join(tmpdir, "hello.txt"), "w") as f:
-            f.write("hello\n")
-
-        child = spawn_alfred(tmpdir)
-
-        try:
-            child.expect("hello.txt", timeout=5)
-        except pexpect.TIMEOUT:
-            send_keys(child, "q")
-            time.sleep(0.3)
-            try:
-                wait_for_exit(child, timeout=3)
-            except Exception:
-                send_colon_command(child, "q!")
-                wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render")
-
-        # Search for something nonexistent, then Escape
-        send_keys(child, "/")
-        time.sleep(0.3)
-        for ch in "zzz":
-            send_keys(child, ch)
-            time.sleep(0.15)
-        time.sleep(0.3)
-        child.send("\x1b")  # Escape
-        time.sleep(0.3)
-
-        # Quit cleanly
-        send_keys(child, "q")
-        time.sleep(0.3)
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after no-match search, got {exit_code}"
-
-        shutil.rmtree(tmpdir)
-
-
-class TestProjectFileSearch:
-    """Verify Ctrl-p project-wide recursive file search."""
-
-    def test_ctrl_p_finds_file_in_subfolder(self):
-        """Ctrl-p searches recursively and opens a file nested in subfolders."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_")
-        # Create a nested structure:
-        # tmpdir/
-        #   top.txt
-        #   src/
-        #     main.rs
-        #   src/core/
-        #     deep_target.rs    <-- this is the file we'll search for
-        os.makedirs(os.path.join(tmpdir, "src", "core"))
-        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
-            f.write("top level\n")
-        with open(os.path.join(tmpdir, "src", "main.rs"), "w") as f:
-            f.write("fn main() {}\n")
-        target = os.path.join(tmpdir, "src", "core", "deep_target.rs")
-        with open(target, "w") as f:
-            f.write("pub fn deep() { 42 }\n")
-
-        # Open Alfred on a file (so we're in normal editor mode)
-        top_file = os.path.join(tmpdir, "top.txt")
-        child = spawn_alfred(top_file)
-
-        # Press Ctrl-p to activate project-wide search
-        child.send("\x10")  # Ctrl-p
-        time.sleep(1.0)
-
-        # Type 'deep_target' to search for the nested file
-        for ch in "deep_target":
-            send_keys(child, ch)
-            time.sleep(0.1)
-        time.sleep(0.5)
-
-        # Press Enter to open the found file
-        child.send("\r")
-        time.sleep(1.0)
-
-        # Should now be editing deep_target.rs — edit it to prove it's the right file
-        send_keys(child, "A")  # append at end of line
-        time.sleep(0.2)
-        send_keys(child, " // found-by-ctrlp")
-        time.sleep(0.2)
-        child.send("\x1b")  # Escape
-        time.sleep(0.3)
-
-        send_colon_command(child, "wq")
-        exit_code = wait_for_exit(child)
-
-        assert exit_code == 0, \
-            f"Expected clean exit after Ctrl-p search, got {exit_code}"
-
-        saved = read_file(target)
-        assert "found-by-ctrlp" in saved, \
-            f"Expected 'found-by-ctrlp' in deep_target.rs after Ctrl-p open+edit, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
-
-    def test_ctrl_p_skips_build_directories(self):
-        """Ctrl-p does not search inside target/ or node_modules/ directories."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_skip_")
-        # Create a structure with a skippable directory:
-        # tmpdir/
-        #   real_file.txt
-        #   target/           <-- should be skipped
-        #     debug/
-        #       hidden_in_target.rs
-        #   src/
-        #     visible.rs
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_skip_")
         os.makedirs(os.path.join(tmpdir, "target", "debug"))
         os.makedirs(os.path.join(tmpdir, "src"))
-        with open(os.path.join(tmpdir, "real_file.txt"), "w") as f:
-            f.write("real\n")
-        with open(os.path.join(tmpdir, "target", "debug", "hidden_in_target.rs"), "w") as f:
-            f.write("// should not be found\n")
-        visible = os.path.join(tmpdir, "src", "visible.rs")
-        with open(visible, "w") as f:
+        with open(os.path.join(tmpdir, "src", "visible.rs"), "w") as f:
             f.write("pub fn visible() {}\n")
+        with open(os.path.join(tmpdir, "target", "debug", "hidden.rs"), "w") as f:
+            f.write("// should not be found\n")
 
-        child = spawn_alfred(os.path.join(tmpdir, "real_file.txt"))
+        child = spawn_alfred(tmpdir)
 
-        # Ctrl-p and search for 'visible' — should find src/visible.rs
-        child.send("\x10")  # Ctrl-p
-        time.sleep(1.0)
+        try:
+            child.expect("src/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Search for 'visible' — should find src/visible.rs
+        send_keys(child, "/")
+        time.sleep(0.3)
         for ch in "visible":
             send_keys(child, ch)
             time.sleep(0.1)
         time.sleep(0.5)
 
-        # Enter opens it, edit to prove it's the right file
         child.send("\r")
         time.sleep(1.0)
+
+        # Edit to verify correct file
         send_keys(child, "A")
         time.sleep(0.2)
         send_keys(child, " // verified")
@@ -4632,43 +3633,60 @@ class TestProjectFileSearch:
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        saved = read_file(visible)
-        assert "// verified" in saved, \
-            f"Expected visible.rs opened and edited, got: {saved!r}"
 
-        # Verify the target/ file was NOT modified (search should not find it)
-        hidden = read_file(os.path.join(tmpdir, "target", "debug", "hidden_in_target.rs"))
+        visible = read_file(os.path.join(tmpdir, "src", "visible.rs"))
+        assert "// verified" in visible, \
+            f"Expected visible.rs edited, got: {visible!r}"
+
+        hidden = read_file(os.path.join(tmpdir, "target", "debug", "hidden.rs"))
         assert hidden.strip() == "// should not be found", \
-            f"target/ file should not have been touched, got: {hidden!r}"
+            f"target/ file should be untouched, got: {hidden!r}"
 
         shutil.rmtree(tmpdir)
 
-    def test_ctrl_p_escape_cancels_search(self):
-        """Pressing Escape during Ctrl-p search returns to the editor."""
+    def test_search_returns_to_browse_after_file_open(self):
+        """After opening a file from search, browser returns to browse mode."""
         import shutil
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_esc_")
-        target = os.path.join(tmpdir, "file.txt")
-        with open(target, "w") as f:
-            f.write("original\n")
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_back_")
+        os.mkdir(os.path.join(tmpdir, "lib"))
+        with open(os.path.join(tmpdir, "lib", "utils.rs"), "w") as f:
+            f.write("pub fn util() {}\n")
+        with open(os.path.join(tmpdir, "main.txt"), "w") as f:
+            f.write("main\n")
 
-        child = spawn_alfred(target)
+        child = spawn_alfred(tmpdir)
 
-        # Ctrl-p then Escape
-        child.send("\x10")  # Ctrl-p
-        time.sleep(0.5)
-        for ch in "abc":
+        try:
+            child.expect("lib/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Search and open a file
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "utils":
             send_keys(child, ch)
             time.sleep(0.1)
-        time.sleep(0.3)
-        child.send("\x1b")  # Escape
+        time.sleep(0.5)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Now in editor with utils.rs — Ctrl-e should refocus browser
+        # Browser should be in browse mode (not search mode)
+        child.send("\x05")  # Ctrl-e refocus
         time.sleep(0.5)
 
-        # Should be back in normal mode — quit
+        # q to unfocus, :q to quit
+        send_keys(child, "q")
+        time.sleep(0.3)
         send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, \
-            f"Expected clean exit after Ctrl-p cancel, got {exit_code}"
+            f"Expected clean exit after search->open->refocus, got {exit_code}"
 
         shutil.rmtree(tmpdir)
