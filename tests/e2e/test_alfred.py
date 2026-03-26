@@ -4452,7 +4452,7 @@ class TestBrowserFileSearch:
             shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # Search for '.rs' to filter to Rust files
+        # Search for '.rs' to filter to Rust files, then Enter to accept
         send_keys(child, "/")
         time.sleep(0.3)
         for ch in ".rs":
@@ -4460,13 +4460,12 @@ class TestBrowserFileSearch:
             time.sleep(0.15)
         time.sleep(0.3)
 
-        # Navigate down to second result then open
-        send_keys(child, "j")
-        time.sleep(0.2)
+        # Enter accepts search (returns to browse mode with filtered results)
+        # Then j navigates in the filtered list
         child.send("\r")
-        time.sleep(1.0)
+        time.sleep(0.5)
 
-        # Save and quit
+        # Save and quit — the first filtered result should be opened
         send_colon_command(child, "wq")
         exit_code = wait_for_exit(child)
 
