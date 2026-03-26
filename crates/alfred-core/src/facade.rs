@@ -6,7 +6,6 @@
 //! `buffer::content(&state.buffer)`, reducing structural coupling.
 
 use crate::buffer;
-use crate::cursor::{self, Cursor};
 use crate::editor_state::EditorState;
 use crate::key_event::KeyEvent;
 use crate::viewport;
@@ -25,11 +24,6 @@ pub fn buffer_line_count(state: &EditorState) -> usize {
     buffer::line_count(&state.buffer)
 }
 
-/// Returns the text of a specific line (with trailing newline), or None if out of range.
-pub fn buffer_get_line(state: &EditorState, index: usize) -> Option<&str> {
-    buffer::get_line(&state.buffer, index)
-}
-
 /// Returns the text content of a specific line (trailing newline stripped).
 pub fn buffer_get_line_content(state: &EditorState, index: usize) -> String {
     buffer::get_line_content(&state.buffer, index)
@@ -46,22 +40,12 @@ pub fn buffer_is_modified(state: &EditorState) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Cursor queries and construction
+// Cursor queries
 // ---------------------------------------------------------------------------
 
 /// Returns the current cursor position as (line, column).
 pub fn cursor_position(state: &EditorState) -> (usize, usize) {
     (state.cursor.line, state.cursor.column)
-}
-
-/// Creates a new Cursor at the given line and column.
-pub fn cursor_new(line: usize, column: usize) -> Cursor {
-    cursor::new(line, column)
-}
-
-/// Returns a cursor clamped to the buffer's bounds.
-pub fn cursor_ensure_within_bounds(cur: Cursor, state: &EditorState) -> Cursor {
-    cursor::ensure_within_bounds(cur, &state.buffer)
 }
 
 // ---------------------------------------------------------------------------
@@ -93,35 +77,12 @@ pub fn viewport_adjust(state: &EditorState) -> crate::viewport::Viewport {
 }
 
 // ---------------------------------------------------------------------------
-// Tab width
-// ---------------------------------------------------------------------------
-
-/// Returns the current tab width (number of spaces per Tab).
-pub fn tab_width(state: &EditorState) -> usize {
-    state.tab_width
-}
-
-// ---------------------------------------------------------------------------
 // Cursor shape
 // ---------------------------------------------------------------------------
 
 /// Returns the cursor shape name for a given mode, or None if not configured.
 pub fn cursor_shape<'a>(state: &'a EditorState, mode: &str) -> Option<&'a str> {
     state.cursor_shapes.get(mode).map(|s| s.as_str())
-}
-
-// ---------------------------------------------------------------------------
-// Undo and jump list
-// ---------------------------------------------------------------------------
-
-/// Pushes the current buffer and cursor state onto the undo stack.
-pub fn push_undo(state: &mut EditorState) {
-    crate::editor_state::push_undo(state)
-}
-
-/// Pushes the current cursor position onto the jump list.
-pub fn push_jump(state: &mut EditorState) {
-    crate::editor_state::push_jump(state)
 }
 
 // ---------------------------------------------------------------------------
