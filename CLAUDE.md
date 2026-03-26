@@ -34,6 +34,7 @@ per-feature
 - DO NOT SKIP any tests
 - Add E2E tests to cover ALL implemented scenarios
 - Every new feature must have corresponding E2E test coverage
+- Follow test-driven development even for E2E tests: write the failing test FIRST, then implement the feature to make it pass
 
 ### Plugin Development Rules
 - Everything should be written in Alfred Lisp as much as possible, fully decoupled from Rust code
