@@ -253,891 +253,183 @@ pub fn get_yank_content(state: &EditorState, register: Option<char>) -> Option<(
     get_register(state, register).map(|e| (e.content.clone(), e.linewise))
 }
 
-/// Registers built-in native commands for cursor movement and mode switching.
+/// Type alias for a native command handler function pointer.
+type NativeHandler = fn(&mut EditorState) -> crate::error::Result<()>;
+
+/// Data-driven table of all built-in command handlers.
 ///
-/// These commands are the minimal set needed for keymap-based dispatch:
-/// - "cursor-up", "cursor-down", "cursor-left", "cursor-right"
-/// - "enter-command-mode" is handled specially by the event loop (not a command)
+/// Each entry maps a command name to a handler function pointer.
+/// The table is iterated by `register_builtin_commands` to populate
+/// the command registry. Adding a new command is just adding a row.
+const BUILTIN_COMMANDS: &[(&str, NativeHandler)] = &[
+    // -- Cursor movement --
+    ("cursor-up", crate::handlers::cursor::cursor_up),
+    ("cursor-down", crate::handlers::cursor::cursor_down),
+    ("cursor-left", crate::handlers::cursor::cursor_left),
+    ("cursor-right", crate::handlers::cursor::cursor_right),
+    (
+        "cursor-line-start",
+        crate::handlers::cursor::cursor_line_start,
+    ),
+    ("cursor-line-end", crate::handlers::cursor::cursor_line_end),
+    (
+        "cursor-first-non-blank",
+        crate::handlers::cursor::cursor_first_non_blank,
+    ),
+    (
+        "cursor-document-start",
+        crate::handlers::cursor::cursor_document_start,
+    ),
+    (
+        "cursor-document-end",
+        crate::handlers::cursor::cursor_document_end,
+    ),
+    (
+        "cursor-word-forward",
+        crate::handlers::cursor::cursor_word_forward,
+    ),
+    (
+        "cursor-word-backward",
+        crate::handlers::cursor::cursor_word_backward,
+    ),
+    ("cursor-word-end", crate::handlers::cursor::cursor_word_end),
+    (
+        "cursor-screen-top",
+        crate::handlers::cursor::cursor_screen_top,
+    ),
+    (
+        "cursor-screen-middle",
+        crate::handlers::cursor::cursor_screen_middle,
+    ),
+    (
+        "cursor-screen-bottom",
+        crate::handlers::cursor::cursor_screen_bottom,
+    ),
+    (
+        "scroll-half-page-down",
+        crate::handlers::cursor::scroll_half_page_down,
+    ),
+    (
+        "scroll-half-page-up",
+        crate::handlers::cursor::scroll_half_page_up,
+    ),
+    // -- Insert mode entry --
+    (
+        "insert-at-line-start",
+        crate::handlers::insert_mode::insert_at_line_start,
+    ),
+    (
+        "insert-after-cursor",
+        crate::handlers::insert_mode::insert_after_cursor,
+    ),
+    (
+        "insert-at-line-end",
+        crate::handlers::insert_mode::insert_at_line_end,
+    ),
+    (
+        "open-line-below",
+        crate::handlers::insert_mode::open_line_below,
+    ),
+    (
+        "open-line-above",
+        crate::handlers::insert_mode::open_line_above,
+    ),
+    // -- Basic editing --
+    ("delete-backward", crate::handlers::editing::delete_backward),
+    (
+        "delete-char-at-cursor",
+        crate::handlers::editing::delete_char_at_cursor,
+    ),
+    ("delete-line", crate::handlers::editing::delete_line),
+    ("delete-to-end", crate::handlers::editing::delete_to_end),
+    (
+        "delete-char-before",
+        crate::handlers::editing::delete_char_before,
+    ),
+    ("join-lines", crate::handlers::editing::join_lines),
+    ("indent-line", crate::handlers::editing::indent_line),
+    ("unindent-line", crate::handlers::editing::unindent_line),
+    ("toggle-case", crate::handlers::editing::toggle_case),
+    (
+        "increment-number",
+        crate::handlers::editing::increment_number,
+    ),
+    (
+        "decrement-number",
+        crate::handlers::editing::decrement_number,
+    ),
+    ("substitute-line", crate::handlers::editing::substitute_line),
+    ("substitute-char", crate::handlers::editing::substitute_char),
+    (
+        "replace-char-at-cursor",
+        crate::handlers::editing::replace_char_at_cursor,
+    ),
+    ("change-line", crate::handlers::editing::change_line),
+    ("change-to-end", crate::handlers::editing::change_to_end),
+    // -- Yank and paste --
+    ("yank-line", crate::handlers::yank_paste::yank_line),
+    ("paste-below", crate::handlers::yank_paste::paste_below),
+    ("paste-before", crate::handlers::yank_paste::paste_before),
+    // -- Visual mode --
+    (
+        "enter-visual-mode",
+        crate::handlers::visual::enter_visual_mode,
+    ),
+    (
+        "enter-visual-line-mode",
+        crate::handlers::visual::enter_visual_line_mode,
+    ),
+    (
+        "exit-visual-mode",
+        crate::handlers::visual::exit_visual_mode,
+    ),
+    ("visual-delete", crate::handlers::visual::visual_delete),
+    ("visual-yank", crate::handlers::visual::visual_yank),
+    ("visual-change", crate::handlers::visual::visual_change),
+    // -- Undo / redo --
+    ("undo", crate::handlers::undo_redo::undo),
+    ("redo", crate::handlers::undo_redo::redo),
+    // -- Search and navigation --
+    ("search-next", crate::handlers::search::search_next),
+    ("search-prev", crate::handlers::search::search_prev),
+    (
+        "repeat-char-find",
+        crate::handlers::search::repeat_char_find,
+    ),
+    (
+        "reverse-char-find",
+        crate::handlers::search::reverse_char_find,
+    ),
+    (
+        "repeat-last-change",
+        crate::handlers::search::repeat_last_change,
+    ),
+    ("match-bracket", crate::handlers::search::match_bracket),
+    // -- Jump list / change list --
+    ("jump-back", crate::handlers::navigation::jump_back),
+    ("jump-forward", crate::handlers::navigation::jump_forward),
+    (
+        "change-list-back",
+        crate::handlers::navigation::change_list_back,
+    ),
+    (
+        "change-list-forward",
+        crate::handlers::navigation::change_list_forward,
+    ),
+];
+
+/// Registers all built-in native commands from the BUILTIN_COMMANDS table.
+///
+/// Iterates the data-driven command table and registers each handler
+/// as a Native command in the editor's command registry.
 pub fn register_builtin_commands(state: &mut EditorState) {
-    crate::command::register(
-        &mut state.commands,
-        "cursor-up".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_up(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-down".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_down(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-left".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_left(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-right".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_right(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "delete-backward".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if s.cursor.line == 0 && s.cursor.column == 0 {
-                return Ok(());
-            }
-            push_undo(s);
-            s.cursor = crate::cursor::move_left(s.cursor, &s.buffer);
-            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "delete-char-at-cursor".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "delete-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::delete_line(&s.buffer, s.cursor.line);
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-line-start".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_line_start(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-line-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_line_end(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-first-non-blank".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_first_non_blank(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-document-start".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_document_start(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-document-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_document_end(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-word-forward".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_word_forward(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-word-backward".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_word_backward(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-word-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_word_end(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    // Insert mode variant commands (vim I, a, A, o, O)
-    crate::command::register(
-        &mut state.commands,
-        "insert-at-line-start".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_first_non_blank(s.cursor, &s.buffer);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "insert-after-cursor".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_right_on_line(s.cursor, &s.buffer);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "insert-at-line-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::move_to_line_end_for_insert(s.cursor, &s.buffer);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "open-line-below".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            let current_line = s.cursor.line;
-            let line_len = crate::buffer::get_line(&s.buffer, current_line)
-                .map(|l| l.trim_end_matches('\n').len())
-                .unwrap_or(0);
-            s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
-            s.cursor = crate::cursor::new(current_line + 1, 0);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "open-line-above".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            let current_line = s.cursor.line;
-            s.buffer = crate::buffer::insert_at(&s.buffer, current_line, 0, "\n");
-            s.cursor = crate::cursor::new(current_line, 0);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    // --- 09-03: Join, yank, paste, change, undo, redo commands ---
-    crate::command::register(
-        &mut state.commands,
-        "join-lines".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::join_lines(&s.buffer, s.cursor.line);
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "yank-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
-            let reg = s.pending_register.take();
-            set_register(s, reg, content, true);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "paste-below".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let reg = s.pending_register.take();
-            if let Some((text, linewise)) = get_yank_content(s, reg) {
-                push_undo(s);
-                if linewise {
-                    // Line-wise paste: insert on a new line below
-                    let current_line = s.cursor.line;
-                    let line_len = crate::buffer::get_line(&s.buffer, current_line)
-                        .map(|l| l.trim_end_matches('\n').len())
-                        .unwrap_or(0);
-                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line, line_len, "\n");
-                    s.buffer = crate::buffer::insert_at(&s.buffer, current_line + 1, 0, &text);
-                    s.cursor = crate::cursor::new(current_line + 1, 0);
-                } else {
-                    // Character-wise paste: insert after cursor position
-                    let col = s.cursor.column + 1;
-                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, &text);
-                    // Cursor moves to end of pasted text - 1 (on last pasted char)
-                    let end_col = col + text.len().saturating_sub(1);
-                    s.cursor = crate::cursor::new(s.cursor.line, end_col);
-                }
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "change-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::replace_line(&s.buffer, s.cursor.line, "");
-            s.cursor = crate::cursor::new(s.cursor.line, 0);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "change-to-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::delete_to_line_end(&s.buffer, s.cursor.line, s.cursor.column);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "undo".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            undo(s);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "redo".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            redo(s);
-            Ok(())
-        }),
-    );
-    // --- 09-04: Screen-relative cursor and half-page scroll commands ---
-    crate::command::register(
-        &mut state.commands,
-        "cursor-screen-top".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.cursor = crate::cursor::new(s.viewport.top_line, 0);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-screen-middle".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let middle_line = s.viewport.top_line + (s.viewport.height as usize) / 2;
-            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
-            s.cursor = crate::cursor::new(middle_line.min(last_line), 0);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "cursor-screen-bottom".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let screen_bottom = s.viewport.top_line + s.viewport.height as usize - 1;
-            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
-            s.cursor = crate::cursor::new(screen_bottom.min(last_line), 0);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "scroll-half-page-down".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let half_page = (s.viewport.height as usize) / 2;
-            let last_line = crate::buffer::line_count(&s.buffer).saturating_sub(1);
-            let new_cursor_line = (s.cursor.line + half_page).min(last_line);
-            let new_top_line = (s.viewport.top_line + half_page).min(last_line);
-            s.cursor = crate::cursor::new(new_cursor_line, 0);
-            s.viewport = crate::viewport::Viewport {
-                top_line: new_top_line,
-                ..s.viewport
-            };
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "scroll-half-page-up".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let half_page = (s.viewport.height as usize) / 2;
-            let new_cursor_line = s.cursor.line.saturating_sub(half_page);
-            let new_top_line = s.viewport.top_line.saturating_sub(half_page);
-            s.cursor = crate::cursor::new(new_cursor_line, 0);
-            s.viewport = crate::viewport::Viewport {
-                top_line: new_top_line,
-                ..s.viewport
-            };
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    // --- Search repeat commands: n (next) and N (prev) ---
-    crate::command::register(
-        &mut state.commands,
-        "search-next".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref pattern) = s.search_pattern.clone() {
-                let found = if s.search_forward {
-                    crate::buffer::find_forward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
-                } else {
-                    crate::buffer::find_backward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
-                };
-                match found {
-                    Some((line, col)) => {
-                        s.cursor = crate::cursor::new(line, col);
-                        s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-                        s.message = None;
-                    }
-                    None => {
-                        s.message = Some(format!("Pattern not found: {}", pattern));
-                    }
-                }
-            } else {
-                s.message = Some("No previous search pattern".to_string());
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "search-prev".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(ref pattern) = s.search_pattern.clone() {
-                // search-prev is the opposite direction of the last search
-                let found = if s.search_forward {
-                    crate::buffer::find_backward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
-                } else {
-                    crate::buffer::find_forward(&s.buffer, s.cursor.line, s.cursor.column, pattern)
-                };
-                match found {
-                    Some((line, col)) => {
-                        s.cursor = crate::cursor::new(line, col);
-                        s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-                        s.message = None;
-                    }
-                    None => {
-                        s.message = Some(format!("Pattern not found: {}", pattern));
-                    }
-                }
-            } else {
-                s.message = Some("No previous search pattern".to_string());
-            }
-            Ok(())
-        }),
-    );
-    // --- Character find repeat commands: ; (repeat) and , (reverse) ---
-    crate::command::register(
-        &mut state.commands,
-        "repeat-char-find".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some((kind, ch)) = s.last_char_find {
-                if let Some(new_cursor) = execute_char_find(s.cursor, &s.buffer, kind, ch) {
-                    s.cursor = new_cursor;
-                    s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-                }
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "reverse-char-find".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some((kind, ch)) = s.last_char_find {
-                let reversed_kind = reverse_char_find_kind(kind);
-                if let Some(new_cursor) = execute_char_find(s.cursor, &s.buffer, reversed_kind, ch)
-                {
-                    s.cursor = new_cursor;
-                    s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-                }
-            }
-            Ok(())
-        }),
-    );
-    // --- Dot repeat: repeat last buffer-mutating command ---
-    crate::command::register(
-        &mut state.commands,
-        "repeat-last-change".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(cmd_name) = s.last_edit_command.clone() {
-                crate::command::execute(s, &cmd_name)?;
-            }
-            Ok(())
-        }),
-    );
-    // --- Match bracket: jump to matching bracket (vim %) ---
-    crate::command::register(
-        &mut state.commands,
-        "match-bracket".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(new_cursor) = crate::cursor::find_matching_bracket(s.cursor, &s.buffer) {
-                s.cursor = new_cursor;
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    // --- Indent / Unindent current line ---
-    crate::command::register(
-        &mut state.commands,
-        "indent-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::indent_line(&s.buffer, s.cursor.line, "    ");
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "unindent-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::unindent_line(&s.buffer, s.cursor.line, 4);
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    // --- Toggle case (vim ~): toggle char case and advance cursor ---
-    crate::command::register(
-        &mut state.commands,
-        "toggle-case".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
-            if line_content.is_empty() {
-                return Ok(());
-            }
-            if s.cursor.column >= line_content.len() {
-                return Ok(());
-            }
-            push_undo(s);
-            s.buffer = crate::buffer::toggle_case_at(&s.buffer, s.cursor.line, s.cursor.column);
-            // Advance cursor right (within line, like vim ~)
-            let new_line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
-            let max_col = new_line_content.len().saturating_sub(1);
-            if s.cursor.column < max_col {
-                s.cursor = crate::cursor::new(s.cursor.line, s.cursor.column + 1);
-            }
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    // --- Visual mode commands ---
-    crate::command::register(
-        &mut state.commands,
-        "enter-visual-mode".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.selection_start = Some(s.cursor);
-            s.visual_line_mode = false;
-            s.mode = MODE_VISUAL.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_VISUAL)];
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "enter-visual-line-mode".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.selection_start = Some(s.cursor);
-            s.visual_line_mode = true;
-            s.mode = MODE_VISUAL.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_VISUAL)];
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "exit-visual-mode".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            s.selection_start = None;
-            s.visual_line_mode = false;
-            s.mode = MODE_NORMAL.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "visual-delete".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(anchor) = s.selection_start {
-                let (from, to) = selection_range(anchor, s.cursor);
-                let reg = s.pending_register.take();
-                push_undo(s);
-                if s.visual_line_mode {
-                    // Line-wise: delete entire lines from min_line to max_line
-                    let min_line = from.line;
-                    let max_line = to.line;
-                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    set_register(s, reg, yanked, true);
-                    let mut buf = s.buffer.clone();
-                    for _ in min_line..=max_line {
-                        buf = crate::buffer::delete_line(&buf, min_line);
-                    }
-                    s.buffer = buf;
-                    s.cursor = crate::cursor::ensure_within_bounds(
-                        crate::cursor::new(min_line, 0),
-                        &s.buffer,
-                    );
-                } else {
-                    // Character-wise: inclusive selection, extend to by one char
-                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
-                    let text = crate::buffer::get_text_range(
-                        &s.buffer,
-                        from.line,
-                        from.column,
-                        to_exclusive.line,
-                        to_exclusive.column,
-                    );
-                    set_register(s, reg, text, false);
-                    s.buffer = crate::buffer::delete_char_range(
-                        &s.buffer,
-                        from.line,
-                        from.column,
-                        to_exclusive.line,
-                        to_exclusive.column,
-                    );
-                    s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
-                }
-                s.selection_start = None;
-                s.visual_line_mode = false;
-                s.mode = MODE_NORMAL.to_string();
-                s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "visual-yank".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(anchor) = s.selection_start {
-                let (from, to) = selection_range(anchor, s.cursor);
-                let reg = s.pending_register.take();
-                if s.visual_line_mode {
-                    // Line-wise: yank entire lines
-                    let min_line = from.line;
-                    let max_line = to.line;
-                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    set_register(s, reg, yanked, true);
-                    s.cursor = crate::cursor::new(min_line, 0);
-                } else {
-                    // Character-wise: inclusive selection
-                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
-                    let text = crate::buffer::get_text_range(
-                        &s.buffer,
-                        from.line,
-                        from.column,
-                        to_exclusive.line,
-                        to_exclusive.column,
-                    );
-                    set_register(s, reg, text, false);
-                    s.cursor = from;
-                }
-                s.selection_start = None;
-                s.visual_line_mode = false;
-                s.mode = MODE_NORMAL.to_string();
-                s.active_keymaps = vec![format!("{}-mode", MODE_NORMAL)];
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-                s.message = Some("yanked".to_string());
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "visual-change".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some(anchor) = s.selection_start {
-                let (from, to) = selection_range(anchor, s.cursor);
-                let reg = s.pending_register.take();
-                push_undo(s);
-                if s.visual_line_mode {
-                    // Line-wise: delete line contents but leave an empty line, enter insert
-                    let min_line = from.line;
-                    let max_line = to.line;
-                    let yanked = collect_lines_content(&s.buffer, min_line, max_line);
-                    set_register(s, reg, yanked, true);
-                    // Delete lines from max down to min+1, keeping min_line
-                    let mut buf = s.buffer.clone();
-                    for _ in (min_line + 1)..=max_line {
-                        buf = crate::buffer::delete_line(&buf, min_line + 1);
-                    }
-                    // Clear the remaining line's content (replace with empty)
-                    let line_content = crate::buffer::get_line_content(&buf, min_line);
-                    if !line_content.is_empty() {
-                        buf = crate::buffer::delete_char_range(
-                            &buf,
-                            min_line,
-                            0,
-                            min_line,
-                            line_content.len(),
-                        );
-                    }
-                    s.buffer = buf;
-                    s.cursor = crate::cursor::new(min_line, 0);
-                } else {
-                    // Character-wise: inclusive selection
-                    let to_exclusive = advance_cursor_by_one(to, &s.buffer);
-                    let text = crate::buffer::get_text_range(
-                        &s.buffer,
-                        from.line,
-                        from.column,
-                        to_exclusive.line,
-                        to_exclusive.column,
-                    );
-                    set_register(s, reg, text, false);
-                    s.buffer = crate::buffer::delete_char_range(
-                        &s.buffer,
-                        from.line,
-                        from.column,
-                        to_exclusive.line,
-                        to_exclusive.column,
-                    );
-                    s.cursor = crate::cursor::ensure_within_bounds(from, &s.buffer);
-                }
-                s.selection_start = None;
-                s.visual_line_mode = false;
-                s.mode = MODE_INSERT.to_string();
-                s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    // --- Increment / Decrement number under cursor (vim Ctrl-a / Ctrl-x) ---
-    crate::command::register(
-        &mut state.commands,
-        "increment-number".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some((start, end, value)) =
-                crate::buffer::find_number_at_cursor(&s.buffer, s.cursor.line, s.cursor.column)
-            {
-                push_undo(s);
-                let new_value = value.saturating_add(1);
-                s.buffer = crate::buffer::replace_number_in_line(
-                    &s.buffer,
-                    s.cursor.line,
-                    start,
-                    end,
-                    new_value,
-                );
-                // Position cursor on the last digit of the new number
-                let new_num_str = new_value.to_string();
-                let new_end = start + new_num_str.len();
-                s.cursor = crate::cursor::new(s.cursor.line, new_end.saturating_sub(1));
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "decrement-number".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if let Some((start, end, value)) =
-                crate::buffer::find_number_at_cursor(&s.buffer, s.cursor.line, s.cursor.column)
-            {
-                push_undo(s);
-                let new_value = value.saturating_sub(1);
-                s.buffer = crate::buffer::replace_number_in_line(
-                    &s.buffer,
-                    s.cursor.line,
-                    start,
-                    end,
-                    new_value,
-                );
-                // Position cursor on the last digit of the new number
-                let new_num_str = new_value.to_string();
-                let new_end = start + new_num_str.len();
-                s.cursor = crate::cursor::new(s.cursor.line, new_end.saturating_sub(1));
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    // --- Simple editing commands: D, S, s, P, X, r ---
-    crate::command::register(
-        &mut state.commands,
-        "delete-to-end".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::delete_to_line_end(&s.buffer, s.cursor.line, s.cursor.column);
-            s.cursor = crate::cursor::ensure_within_bounds(s.cursor, &s.buffer);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "substitute-line".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            s.buffer = crate::buffer::replace_line(&s.buffer, s.cursor.line, "");
-            s.cursor = crate::cursor::new(s.cursor.line, 0);
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "substitute-char".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            push_undo(s);
-            let line_content = crate::buffer::get_line_content(&s.buffer, s.cursor.line);
-            if s.cursor.column < line_content.len() {
-                s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, s.cursor.column);
-            }
-            s.mode = MODE_INSERT.to_string();
-            s.active_keymaps = vec![format!("{}-mode", MODE_INSERT)];
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "paste-before".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            let reg = s.pending_register.take();
-            if let Some((text, linewise)) = get_yank_content(s, reg) {
-                push_undo(s);
-                if linewise {
-                    // Line-wise paste: insert on a new line above
-                    let current_line = s.cursor.line;
-                    s.buffer = crate::buffer::insert_at(
-                        &s.buffer,
-                        current_line,
-                        0,
-                        &format!("{}\n", text),
-                    );
-                    s.cursor = crate::cursor::new(current_line, 0);
-                } else {
-                    // Character-wise paste: insert before cursor position
-                    let col = s.cursor.column;
-                    s.buffer = crate::buffer::insert_at(&s.buffer, s.cursor.line, col, &text);
-                    // Cursor moves to end of pasted text - 1 (on last pasted char)
-                    let end_col = col + text.len().saturating_sub(1);
-                    s.cursor = crate::cursor::new(s.cursor.line, end_col);
-                }
-                s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            }
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "delete-char-before".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            if s.cursor.column == 0 {
-                return Ok(());
-            }
-            push_undo(s);
-            let new_col = s.cursor.column - 1;
-            s.buffer = crate::buffer::delete_at(&s.buffer, s.cursor.line, new_col);
-            s.cursor = crate::cursor::new(s.cursor.line, new_col);
-            s.viewport = crate::viewport::adjust(s.viewport, &s.cursor);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "replace-char-at-cursor".to_string(),
-        crate::command::CommandHandler::Native(|_s| {
-            // This is a no-op placeholder -- actual replace is handled by PendingReplace
-            // in the TUI event loop which calls buffer::replace_char_at directly.
-            Ok(())
-        }),
-    );
-    // --- Jump list navigation: Ctrl-o (back) and Ctrl-i (forward) ---
-    crate::command::register(
-        &mut state.commands,
-        "jump-back".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            jump_back(s);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "jump-forward".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            jump_forward(s);
-            Ok(())
-        }),
-    );
-    // --- Change list navigation: g; (back) and g, (forward) ---
-    crate::command::register(
-        &mut state.commands,
-        "change-list-back".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            change_list_back(s);
-            Ok(())
-        }),
-    );
-    crate::command::register(
-        &mut state.commands,
-        "change-list-forward".to_string(),
-        crate::command::CommandHandler::Native(|s| {
-            change_list_forward(s);
-            Ok(())
-        }),
-    );
+    for &(name, handler) in BUILTIN_COMMANDS {
+        crate::command::register(
+            &mut state.commands,
+            name.to_string(),
+            crate::command::CommandHandler::Native(handler),
+        );
+    }
 }
 
 /// Computes the ordered selection range from two cursor positions.
@@ -1161,7 +453,7 @@ pub fn selection_range(
 /// Visual selection is inclusive (the character under the cursor is part of the selection),
 /// but `delete_char_range` and `get_text_range` use exclusive end positions.
 /// This function moves the cursor one character forward to convert inclusive to exclusive.
-fn advance_cursor_by_one(
+pub fn advance_cursor_by_one(
     cursor: crate::cursor::Cursor,
     buffer: &crate::buffer::Buffer,
 ) -> crate::cursor::Cursor {
@@ -1185,7 +477,7 @@ fn advance_cursor_by_one(
 /// joining them with newlines. Each line's trailing newline is stripped.
 ///
 /// Used by line-wise visual operators to build the yank register content.
-fn collect_lines_content(
+pub fn collect_lines_content(
     buffer: &crate::buffer::Buffer,
     min_line: usize,
     max_line: usize,

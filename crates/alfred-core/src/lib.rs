@@ -10,6 +10,7 @@ pub mod cursor;
 pub mod editor_state;
 pub mod error;
 pub mod facade;
+pub mod handlers;
 pub mod hook;
 pub mod key_event;
 pub mod panel;
