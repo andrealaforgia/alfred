@@ -4585,6 +4585,64 @@ class TestProjectFileSearch:
 
         shutil.rmtree(tmpdir)
 
+    def test_ctrl_p_skips_build_directories(self):
+        """Ctrl-p does not search inside target/ or node_modules/ directories."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_skip_")
+        # Create a structure with a skippable directory:
+        # tmpdir/
+        #   real_file.txt
+        #   target/           <-- should be skipped
+        #     debug/
+        #       hidden_in_target.rs
+        #   src/
+        #     visible.rs
+        os.makedirs(os.path.join(tmpdir, "target", "debug"))
+        os.makedirs(os.path.join(tmpdir, "src"))
+        with open(os.path.join(tmpdir, "real_file.txt"), "w") as f:
+            f.write("real\n")
+        with open(os.path.join(tmpdir, "target", "debug", "hidden_in_target.rs"), "w") as f:
+            f.write("// should not be found\n")
+        visible = os.path.join(tmpdir, "src", "visible.rs")
+        with open(visible, "w") as f:
+            f.write("pub fn visible() {}\n")
+
+        child = spawn_alfred(os.path.join(tmpdir, "real_file.txt"))
+
+        # Ctrl-p and search for 'visible' — should find src/visible.rs
+        child.send("\x10")  # Ctrl-p
+        time.sleep(1.0)
+        for ch in "visible":
+            send_keys(child, ch)
+            time.sleep(0.1)
+        time.sleep(0.5)
+
+        # Enter opens it, edit to prove it's the right file
+        child.send("\r")
+        time.sleep(1.0)
+        send_keys(child, "A")
+        time.sleep(0.2)
+        send_keys(child, " // verified")
+        time.sleep(0.2)
+        child.send("\x1b")
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(visible)
+        assert "// verified" in saved, \
+            f"Expected visible.rs opened and edited, got: {saved!r}"
+
+        # Verify the target/ file was NOT modified (search should not find it)
+        hidden = read_file(os.path.join(tmpdir, "target", "debug", "hidden_in_target.rs"))
+        assert hidden.strip() == "// should not be found", \
+            f"target/ file should not have been touched, got: {hidden!r}"
+
+        shutil.rmtree(tmpdir)
+
     def test_ctrl_p_escape_cancels_search(self):
         """Pressing Escape during Ctrl-p search returns to the editor."""
         import shutil
