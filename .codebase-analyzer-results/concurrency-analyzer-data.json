@@ -1,97 +1,109 @@
 {
-  "overall_score": 91,
-  "summary": "Alfred is a deliberately single-threaded, synchronous application (documented in ADR-003). All mutable state is held in a single Rc<RefCell<EditorState>> on the main thread, with no cross-thread sharing. There are no async runtimes, no spawn() calls, and no Arc/Mutex usage in application code. The main concurrency risks are RefCell borrow panics from re-entrant borrows during Lisp hook dispatch (mitigated by the 'deferred action' pattern), the single global AtomicU64 buffer ID counter (correct but uses Relaxed ordering which is sufficient for a single-threaded app), and the unbounded undo_stack which constitutes a memory accumulation risk rather than a race condition. The apply_syntax_highlights function performs a full buffer content read every frame even when the buffer has not changed, which is a minor performance concern.",
+  "overall_score": 85,
+  "summary": "Alfred is a single-threaded, single-process TUI application. There are no threads, no async/await, no Arc/Mutex, and no network I/O. The concurrency surface is entirely confined to: (1) Rc<RefCell<EditorState>> shared between the event loop and Lisp bridge closures -- which is safe within a single thread but susceptible to runtime borrow panics; (2) a single AtomicU64 for buffer ID generation using Ordering::Relaxed; (3) hook dispatch that carefully extracts callback Rc pointers before releasing the borrow to allow callbacks to re-borrow state. No race conditions, no N+1 database patterns, and no async issues were detected. The primary risk is RefCell double-borrow panics at runtime in edge cases.",
   "thread_safety_issues": [
     {
       "type": "non_atomic_compound",
       "file": "crates/alfred-core/src/buffer.rs",
       "line": 19,
       "severity": "low",
-      "description": "NEXT_BUFFER_ID uses Ordering::Relaxed for fetch_add. In the current single-threaded design this is correct. If threading is ever added, Relaxed is insufficient for unique-ID guarantees across threads; Ordering::Relaxed does not establish happens-before relationships.",
-      "evidence": "NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)"
+      "description": "NEXT_BUFFER_ID uses Ordering::Relaxed for the atomic fetch_add. In a single-threaded context this is correct. If Alfred ever becomes multi-threaded (e.g., background syntax highlighting), this should be upgraded to Ordering::SeqCst or AcqRel to ensure visibility ordering.",
+      "evidence": "static NEXT_BUFFER_ID: AtomicU64 = AtomicU64::new(1); ... NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)"
     }
   ],
   "race_conditions": [
     {
       "pattern": "toctou",
-      "file": "crates/alfred-plugin/src/discovery.rs",
-      "line": 36,
-      "risk": "low",
-      "description": "TOCTOU: `if !init_path.exists()` followed by `fs::read_to_string(&init_path)` -- the file could be deleted between the exists check and the read. In practice this is benign for a local editor but is a classic TOCTOU pattern.",
-    },
-    {
-      "pattern": "toctou",
       "file": "crates/alfred-bin/src/main.rs",
-      "line": 161,
+      "line": 162,
       "risk": "low",
-      "description": "TOCTOU: `if !config_path.exists()` followed by `runtime.eval_file(config_path)` -- config file could be replaced between the check and evaluation. Low risk for a local editor.",
+      "description": "load_user_config checks config_path.exists() and then evaluates it. There is a TOCTOU window between the existence check and the file read. In practice this is benign for a local config file, but if the file is deleted between the check and eval_file() the error will be handled by eval_file returning an IoError.",
+      "evidence": "if !config_path.exists() { return None; } match runtime.eval_file(config_path) {"
     }
   ],
   "async_issues": [],
-  "n_plus_one": [
-    {
-      "file": "crates/alfred-tui/src/app.rs",
-      "line": 1338,
-      "entity": "buffer content",
-      "pattern": "unbatched_api_call",
-      "estimated_impact": "medium",
-      "description": "apply_syntax_highlights() calls alfred_core::buffer::content(&state.buffer) every render frame to produce a full String clone of the rope, regardless of whether the buffer has changed (no buffer-version check before re-serializing). For large files this allocates a new String on every render tick (100ms poll interval)."
-    }
-  ],
+  "n_plus_one": [],
   "memory_leak_risks": [
     {
       "pattern": "unbounded_cache",
       "file": "crates/alfred-core/src/editor_state.rs",
-      "line": 1274,
-      "severity": "high",
-      "description": "undo_stack in EditorState is a Vec<UndoSnapshot> with no maximum size. Each snapshot stores a cloned Rope (O(1) clone via structural sharing) plus a Cursor. While individual Rope clones are cheap, after thousands of edits on a large file the accumulated structural sharing tree can grow considerably. The change_list and jump_list both have 100-entry limits but undo_stack has none."
+      "line": 570,
+      "severity": "medium",
+      "description": "The undo_stack Vec<UndoSnapshot> has no size limit. Each push_undo stores a clone of the Buffer (Rope handle + metadata). While Rope cloning is O(1) via structural sharing, the Rope handle itself accumulates references. For large files edited thousands of times in a single session, this grows unboundedly. The change_list and jump_list are capped (CHANGE_LIST_MAX_SIZE=100, JUMP_LIST_MAX_SIZE), but undo_stack is not.",
+      "evidence": "pub undo_stack: Vec<UndoSnapshot>, ... state.undo_stack.push(UndoSnapshot { buffer: state.buffer.clone(), cursor: state.cursor, });"
     },
     {
       "pattern": "unbounded_cache",
       "file": "crates/alfred-core/src/editor_state.rs",
-      "line": 113,
+      "line": 136,
       "severity": "low",
-      "description": "macro_buffer (Vec<KeyEvent>) accumulates all key events during macro recording with no size limit. Pathological recording sessions could grow this buffer arbitrarily."
+      "description": "line_styles (HashMap<usize, Vec<(usize, usize, ThemeColor)>>) and line_backgrounds grow as plugins add styles. While the renderer clears visible-range styles on each frame for syntax highlighting, plugin-generated styles (e.g., rainbow-csv) are not cleared between renders unless the plugin explicitly calls (clear-line-styles). For very large buffers where plugins apply styles to every line, this map can grow large.",
+      "evidence": "pub line_styles: HashMap<usize, Vec<(usize, usize, crate::theme::ThemeColor)>>, pub line_backgrounds: HashMap<usize, (crate::theme::ThemeColor, crate::theme::ThemeColor)>,"
+    },
+    {
+      "pattern": "closure_capture",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 161,
+      "severity": "low",
+      "description": "Each registered Lisp command via define-command captures a clone of the callback Value and the Lisp environment Rc. These closures are stored in the CommandRegistry for the lifetime of the editor session. Plugins that register many commands will accumulate closure captures that are never released during the session.",
+      "evidence": "let handler = command::CommandHandler::Dynamic(Rc::new(move |_editor_state| { let call_list: List = vec![callback_value.clone()].into_iter().collect();"
     }
   ],
   "resource_leaks": [
     {
       "resource_type": "file_handle",
       "file": "crates/alfred-core/src/buffer.rs",
-      "line": 62,
+      "line": 63,
       "severity": "low",
-      "description": "Buffer::from_file uses std::fs::read_to_string which opens and closes the file handle atomically. No manual handle management -- this is safe. Noted for completeness only."
+      "description": "std::fs::read_to_string is used for file loading -- this opens, reads, and closes the file handle atomically, so no handle leak. Similarly std::fs::write at line 251 is atomic. No persistent file handles are kept open.",
+      "evidence": "std::fs::read_to_string(path) ... std::fs::write(path, &text)"
+    }
+  ],
+  "refcell_risks": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 421,
+      "severity": "medium",
+      "description": "The event loop carefully drops the RefCell borrow before executing deferred actions (DeferredAction). The comment '// borrow dropped here' marks the scope exit. This pattern is correct but brittle: any refactoring that moves code inside the borrow scope would cause a runtime borrow panic. The deferred action pattern was specifically introduced to avoid double-borrows, which implies they have been hit in the past.",
+      "evidence": "let (deferred, repeat) = { let mut state = state_rc.borrow_mut(); ... }; // borrow dropped here"
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 306,
+      "severity": "low",
+      "description": "Hook dispatch in register_dispatch_hook carefully extracts callback Rc pointers, drops the borrow, then calls callbacks. This is the correct pattern. However, it relies on all callbacks being well-behaved and not themselves triggering a re-entrant dispatch-hook call that re-borrows state.",
+      "evidence": "let callbacks: Vec<Rc<hook::HookCallbackFn>> = { let editor = state.borrow(); hook::get_callbacks(&editor.hooks, &hook_name) }; let results: Vec<Vec<String>> = callbacks.iter().map(|cb| cb(&string_args)).collect();"
     }
   ],
   "risk_distribution": {
     "critical": 0,
-    "high": 1,
-    "medium": 1,
-    "low": 4
+    "high": 0,
+    "medium": 2,
+    "low": 5
   },
   "recommendations": [
     {
       "priority": 1,
-      "title": "Cap undo_stack at a configurable maximum (e.g., 1000 entries)",
-      "description": "Add an UNDO_MAX_SIZE constant to push_undo() and drain the oldest entries when the limit is exceeded. This mirrors the existing pattern used for jump_list and change_list. The existing Rope structural sharing makes individual snapshot cost minimal, but accumulated tree nodes across thousands of snapshots can still be non-trivial.",
+      "title": "Cap undo_stack to prevent unbounded memory growth",
+      "description": "Add a MAX_UNDO_STACK_SIZE constant (suggested: 1000) to editor_state.rs and enforce it in push_undo, using the same drain pattern as change_list: if state.undo_stack.len() > MAX_UNDO_STACK_SIZE { state.undo_stack.drain(0..1); }. This matches the already-established pattern for change_list and jump_list.",
       "effort": "low"
     },
     {
       "priority": 2,
-      "title": "Skip full buffer serialization in apply_syntax_highlights when buffer version is unchanged",
-      "description": "Store the last-highlighted buffer version in SyntaxHighlighter. In apply_syntax_highlights, compare state.buffer.version() against the stored version before calling buffer::content(). This avoids an O(n) string allocation every 100ms render tick when the user is not typing.",
-      "effort": "low"
+      "title": "Add tests for RefCell double-borrow scenarios",
+      "description": "The deferred action pattern exists because double-borrows have been encountered. Add integration tests that exercise the paths most likely to cause double borrows: hook callbacks that call (dispatch-hook ...) recursively, and Lisp commands that evaluate further Lisp expressions. This guards against regressions if the borrow scope is accidentally widened.",
+      "effort": "medium"
     },
     {
       "priority": 3,
-      "title": "Upgrade NEXT_BUFFER_ID to Ordering::SeqCst if threading is ever introduced",
-      "description": "The current Relaxed ordering for the buffer ID counter is correct in the single-threaded model. Add a comment documenting this assumption, and upgrade to SeqCst if worker threads are ever added for background syntax parsing.",
+      "title": "Document the single-threaded execution model explicitly",
+      "description": "The use of Rc<RefCell<>> (rather than Arc<Mutex<>>) is a deliberate design choice for a single-threaded application. Add a doc comment in main.rs or lib.rs noting that the application is single-threaded by design and that Rc<RefCell<EditorState>> is intentionally used for performance without synchronization overhead.",
       "effort": "low"
     },
     {
       "priority": 4,
-      "title": "Add a size limit to macro_buffer",
-      "description": "Cap macro recording at a reasonable size (e.g., 10,000 key events) to prevent pathological memory consumption from very long recording sessions.",
+      "title": "Consider upgrading AtomicU64 ordering for future-proofing",
+      "description": "NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed) is correct for the current single-threaded model but will become incorrect if background threads are ever added (e.g., async syntax highlighting). Upgrade to Ordering::SeqCst proactively, or add a comment documenting the assumption.",
       "effort": "low"
     }
   ]

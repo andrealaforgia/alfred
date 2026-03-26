@@ -1,84 +1,100 @@
 {
   "overall_score": 82,
-  "summary": "The codebase demonstrates strong naming and formatting consistency throughout. All Rust source follows snake_case, module-level doc comments, and a pure-function / free-function style that is applied uniformly. The main consistency gaps are: (1) bridge.rs uses two slightly different argument-extraction helper functions (extract_string_arg vs extract_string_arg_at) where one generic version could serve both; (2) mode entry in app.rs duplicates state.mode + state.active_keymaps assignment without a helper; (3) register_builtin_commands in editor_state.rs uses fully-qualified crate:: paths while bridge.rs uses imported aliases — inconsistent within the same domain. Lisp plugin files follow a clear convention. No formatter config file (rustfmt.toml) found, though code style is consistent enough to imply formatter use.",
+  "summary": "The Alfred codebase demonstrates strong consistency across naming, formatting, and import ordering. The primary inconsistency is the split registration style in bridge.rs (NativeFunc vs NativeClosure) and the lack of an integer-argument extraction helper alongside the existing string-extraction helpers. Test naming follows the given/when/then pattern almost everywhere. The functional-core/imperative-shell architecture is applied uniformly across all crates.",
   "naming_conventions": {
-    "score": 93,
+    "score": 90,
     "dominant_function_style": "snake_case",
-    "dominant_file_style": "kebab-case",
+    "dominant_file_style": "snake_case",
     "violations": [
-      "DeferredAction enum in app.rs uses PascalCase variants consistently (correct), but the `dummy` variable name for the throwaway EditorState is not descriptive.",
-      "Variable s used for EditorState borrows in bridge closures (e.g., |s| { s.cursor... }) is idiomatic Rust but differs from the more explicit `editor` name used in most bridge primitives."
+      {
+        "location": "crates/alfred-core/src/handlers/editing.rs",
+        "detail": "Handler parameter consistently abbreviated as 's: &mut EditorState' across all handler files — fine but differs from 'state' used in input.rs and app.rs"
+      },
+      {
+        "location": "crates/alfred-lisp/src/bridge.rs",
+        "detail": "register_string_primitives and register_list_primitives use direct env.borrow_mut().define() calls instead of define_native_closure(), creating a different registration idiom from the other 60+ register_X functions"
+      }
     ],
     "violation_count": 2,
-    "total_names_checked": 420
+    "total_names_checked": 350
   },
   "structure_consistency": {
-    "score": 78,
+    "score": 88,
     "pattern": "layered",
     "anomalies": [
-      "app.rs combines: key event conversion (pure), input state machine (pure), event loop (IO), substitute/global/search execution (mixed), test helpers, and 6000+ lines of tests — all in one file. Other TUI files (renderer.rs) are well-scoped.",
-      "editor_state.rs mixes the EditorState struct definition, its constructor, register_builtin_commands (~887 lines), and numerous pure utility functions. The command registration logically belongs in a separate commands setup module.",
-      "Unit tests are co-located in the same file (idiomatic Rust) but app.rs has ~6000 lines of tests vs ~1700 lines of production code — an unusual ratio suggesting the file needs splitting.",
-      "PluginRegistry is created and immediately discarded in load_plugins() because it is not yet wired to EditorState — acknowledged in a comment but creates structural inconsistency."
+      {
+        "location": "crates/alfred-core/src/rainbow_csv.rs",
+        "detail": "Module file exists on disk but is not declared in lib.rs — structural orphan"
+      },
+      {
+        "location": "crates/alfred-lisp/src/bridge.rs",
+        "detail": "Single file serving as bridge for all Lisp primitives. Other crates split concerns into multiple modules (handlers/*.rs, facade.rs) but bridge.rs remains monolithic"
+      }
     ]
   },
   "import_consistency": {
-    "score": 88,
+    "score": 92,
     "dominant_style": "absolute",
     "ordering_consistent": true,
-    "wildcard_imports": 0
+    "wildcard_imports": 0,
+    "notes": "Import ordering is consistently: std > third-party (crossterm, ratatui, rust_lisp, ropey, tree-sitter) > alfred_core/alfred_lisp/alfred_syntax > crate::. This matches idiomatic Rust. No wildcard imports found in production code."
   },
   "logging_uniformity": {
-    "score": 72,
+    "score": 75,
     "structured_pct": 0.0,
     "dominant_style": "printf",
     "logger_pattern": "none",
-    "notes": "No structured logging framework. The editor uses state.message = Some(format!(...)) as the sole user-facing message channel. Internal errors are propagated via Result. No tracing/log crate usage found. eprintln! is used only in main for fatal startup errors. This is appropriate for a TUI application but the format!() message pattern is applied inconsistently: some messages include punctuation, some do not; capitalization varies (e.g., 'Pattern not found' vs 'pattern not found', 'No file name' vs 'No file name')."
+    "notes": "No structured logging framework is used. Runtime messages are communicated via state.message = Some(format!(...)) rather than a logger. This is intentional for a TUI editor (no stdout) but means no trace/debug/info levels exist. Errors are surfaced to the user via the message line."
   },
   "config_patterns": {
     "score": 85,
     "dominant_pattern": "config_object",
     "deviations": [
-      "Tab width is stored as usize on EditorState and mutated via Lisp (set-tab-width); consistent with other settings.",
-      "Cursor shapes use a HashMap<String,String> on EditorState; consistent.",
-      "The plugins/ directory path is hardcoded as a relative path (Path::new('plugins')) in main.rs rather than configurable — minor inflexibility.",
-      "User config path uses HOME env var with a hardcoded ~/.config/alfred/init.lisp suffix; no XDG_CONFIG_HOME support."
+      {
+        "location": "crates/alfred-bin/src/main.rs",
+        "detail": "HOME env var read directly via std::env::var(\"HOME\") rather than through a config object — acceptable for a CLI tool but slightly inconsistent with the EditorState config approach"
+      }
     ]
   },
   "error_handling_consistency": {
-    "score": 80,
+    "score": 85,
     "dominant_pattern": "custom_exceptions",
-    "notes": "alfred-core uses a custom AlfredError enum (thiserror) and a Result<T> alias. alfred-lisp uses LispError (thiserror) with ParseError/RuntimeError/IoError variants. Bridge functions return RuntimeError (rust_lisp's type) from closures. main.rs uses Box<dyn std::error::Error>. Plugin system uses PluginError (thiserror). The multi-layer error types are appropriate but mean callers must handle 3-4 different error types depending on call site. Unwrap() appears in 3 non-test production locations in app.rs (macro recording take().unwrap(), strip_prefix().unwrap() for already-guarded patterns) — low risk but inconsistent with the general propagation pattern."
+    "notes": "alfred-core defines AlfredError with typed variants (FileReadError, CommandNotFound, etc.) via thiserror. Lisp bridge uses RuntimeError{msg} from rust_lisp. app.rs surfaces errors as state.message strings. The dual-error-type pattern (AlfredError for core, RuntimeError for bridge) is internally consistent within each crate but creates a translation seam at the bridge boundary."
   },
   "formatting_consistency": {
-    "score": 91,
+    "score": 96,
     "indentation": "spaces_4",
-    "formatter_config_present": false,
+    "formatter_config_present": true,
     "formatter": "rustfmt",
-    "notes": "No rustfmt.toml found at project root. Code style is consistent with rustfmt defaults throughout: 4-space indentation, trailing commas in multi-line expressions, consistent brace placement, 100-char line length (estimated). The absence of a committed rustfmt.toml means formatting rules are implicit rather than enforced by config."
+    "notes": "Cargo workspace implies rustfmt defaults. All files use 4-space indentation. Trailing commas present on multi-line items. Line length is occasionally long in bridge.rs error messages but does not indicate formatter absence."
   },
   "pattern_adherence": {
-    "score": 84,
+    "score": 88,
     "patterns_detected": [
       {
-        "pattern": "Functional core / imperative shell",
-        "adherence": "Good — core modules (buffer.rs, cursor.rs, text_object.rs, hook.rs) are pure functions returning new values. The IO shell (app.rs run(), renderer.rs) is cleanly separated. Bridge closures are the main deviation: they mutate shared state via RefCell rather than returning new values, which is forced by the Lisp interop model.",
-        "score": 82
+        "pattern": "functional-core/imperative-shell",
+        "adherence": "strong",
+        "detail": "Pure functions in alfred-core (buffer, cursor, viewport); IO at boundaries in alfred-tui (run(), render_frame()). All handler functions are pure transformations returning Result<()>."
       },
       {
-        "pattern": "Free-function module style (no impl bloat)",
-        "adherence": "Excellent — almost all domain logic is free functions operating on data types (buffer::insert_at, cursor::move_down, hook::dispatch_hook). Structs are plain data; impl blocks contain only constructors and accessors. Consistent across all crates.",
-        "score": 95
+        "pattern": "facade pattern",
+        "adherence": "partial",
+        "detail": "facade.rs provides a controlled API over EditorState for external crates. However alfred-tui/src/input.rs bypasses facade for many accesses, directly reading state.cursor, state.buffer, state.mode etc."
       },
       {
-        "pattern": "Plugin-first architecture via Lisp",
-        "adherence": "Good — keybindings, status bar, line numbers, browse mode, themes are all Lisp plugins. The bridge layer exposes the right primitives. Some Vim-specific logic (operator-pending, text objects, macros, visual mode) is baked into app.rs rather than being expressible in Lisp, which is a pragmatic trade-off but slightly inconsistent with the declared plugin-first philosophy.",
-        "score": 76
+        "pattern": "data-driven command table",
+        "adherence": "strong",
+        "detail": "BUILTIN_COMMANDS static table in editor_state.rs decouples command names from handler functions. Applied consistently for all built-in commands."
       },
       {
-        "pattern": "Types-first design with ADTs",
-        "adherence": "Good — InputState, Operator, MotionKind, DeferredAction, CharFindKind, TextObjectModifier, PanelPosition are all purposeful enums. EditorState is the main exception: it is a large mutable bag rather than a composition of smaller typed subsystems.",
-        "score": 80
+        "pattern": "registration pattern for Lisp primitives",
+        "adherence": "strong",
+        "detail": "All primitives follow: define_native_closure -> move closure capturing Rc<RefCell<EditorState>> -> borrow/borrow_mut -> return Ok(Value::NIL). Applied to 60+ primitives."
+      },
+      {
+        "pattern": "given/when/then test naming",
+        "adherence": "strong",
+        "detail": "Test functions use given_X_when_Y_then_Z naming throughout alfred-core, alfred-lisp, alfred-tui and alfred-bin. Rare deviations exist for very short structural tests."
       }
     ]
   },
@@ -91,39 +107,39 @@
   "recommendations": [
     {
       "priority": 1,
-      "title": "Split app.rs into focused modules",
-      "description": "Extract handle_key_event and its InputState/Operator/MotionKind types into a key_handler module. Extract execute_colon_command and execute_substitute/execute_global_delete into a command_executor module. Extract the run() event loop into event_loop.rs. The tests (currently ~6000 lines) can move with their respective modules. This would reduce the primary cognitive load offender from 7987 to roughly 4 files of 500-800 lines each.",
+      "title": "Split bridge.rs into sub-modules by domain",
+      "description": "bridge.rs at 5669 lines is the hardest file to navigate. Split into bridge/buffer.rs, bridge/cursor.rs, bridge/hooks.rs, bridge/keymap.rs, bridge/theme.rs, bridge/panels.rs, bridge/strings.rs, bridge/lists.rs, bridge/filesystem.rs with a bridge/mod.rs that re-exports the public register_* functions. This would align bridge.rs with the pattern already established by handlers/*.rs.",
       "effort": "medium"
     },
     {
       "priority": 2,
-      "title": "Extract a mode-entry helper function",
-      "description": "The pattern `state.mode = MODE_INSERT.to_string(); state.active_keymaps = vec![format!(\"{}-mode\", MODE_INSERT)];` appears ~6 times in app.rs and editor_state.rs. Extract into `enter_mode(state, mode_name)` in editor_state.rs to eliminate duplication and reduce future divergence.",
+      "title": "Add extract_int_arg and extract_bool_arg helpers to bridge.rs",
+      "description": "The integer-argument extraction match arm (Some(Value::Int(n)) / Some(other) / None) is duplicated ~20 times. Adding extract_int_arg(args, index, fn_name, param_name) and extract_bool_arg() following the existing extract_string_arg_at pattern would eliminate ~100 LOC of boilerplate and make argument validation uniform.",
       "effort": "low"
     },
     {
       "priority": 3,
-      "title": "Add rustfmt.toml to encode formatting conventions",
-      "description": "The codebase is consistently formatted but relies on implicit rustfmt defaults. Adding a committed rustfmt.toml ensures new contributors use identical settings and CI format checks enforce the same rules.",
+      "title": "Export or remove rainbow_csv.rs from alfred-core",
+      "description": "rainbow_csv.rs exists as a file but is not declared in lib.rs, making it an orphaned module. Either add 'pub mod rainbow_csv;' to lib.rs (if the module is intentionally part of the core API) or delete the file if it has been superseded by the Lisp plugin approach.",
       "effort": "low"
     },
     {
       "priority": 4,
-      "title": "Replace bool invert in execute_global_delete with a named enum",
-      "description": "The `invert: bool` parameter in parse_global_command and execute_global_delete should be replaced with `enum GlobalCommandMode { MatchingLines, NonMatchingLines }` to eliminate boolean blindness and self-document call sites.",
-      "effort": "low"
-    },
-    {
-      "priority": 5,
-      "title": "Consolidate register_builtin_commands into a data-driven table",
-      "description": "register_builtin_commands is 887 lines of repetitive crate::command::register(...) calls. Replace with a static slice of (name, fn_pointer) tuples iterated in a loop. This reduces the function to ~50 lines and makes it easier to scan the full command catalog.",
+      "title": "Extract event dispatch logic from run() into a dedicated dispatcher",
+      "description": "The DeferredAction match block in run() (~100 lines) handles SaveBuffer, OpenFile, ExecCommand, Eval, and SaveAndQuit. Extracting this to execute_deferred_action(state_rc, action, runtime, highlighter) would reduce the run() event loop to its control-flow skeleton and improve testability.",
       "effort": "medium"
     },
     {
-      "priority": 6,
-      "title": "Remove dead let _lisp_env assignment in register_define_command",
-      "description": "The unused `let _lisp_env = runtime.env();` assignment in bridge.rs register_define_command should be removed. It is annotated as no longer used but wastes a clone of the Rc and adds confusion.",
+      "priority": 5,
+      "title": "Define named constants for magic numbers in app.rs",
+      "description": "POLL_TIMEOUT_MS = 100 and DEFAULT_TERMINAL_SIZE = (80, 24) should be named constants rather than inline literals. This makes intent clear and centralises any future tuning.",
       "effort": "low"
+    },
+    {
+      "priority": 6,
+      "title": "Unify EditorState into sub-structs to reduce field count",
+      "description": "EditorState's 35+ fields could be grouped into MacroState {recording, buffer, replaying, last_register}, JumpState {jump_list, jump_index, change_list, change_list_index}, SelectionState {selection_start, visual_line_mode}, and RendererState {line_styles, line_backgrounds, panels}. This would improve cohesion and reduce the blast radius of struct changes.",
+      "effort": "high"
     }
   ]
 }

@@ -1,15 +1,15 @@
 {
-  "overall_score": 78,
-  "summary": "Alfred has a solid CI/CD foundation with GitHub Actions covering check, test, format, and lint stages. Cargo.lock ensures build reproducibility. E2E testing via Docker is configured. Areas for improvement: no branch protection rules, no secret management formalization, and single-stage Docker for e2e (not production-ready).",
+  "overall_score": 82,
+  "summary": "Strong DevOps maturity with comprehensive CI/CD pipeline, reproducible builds via Cargo.lock, and containerized testing. Modern GitHub Actions setup includes build, test, format, lint, and E2E stages with caching. Dockerfile uses multi-stage-like approach with proper layer caching. Missing: secret management patterns, branch protection documentation, explicit deployment strategy.",
   "ci_pipeline": {
     "provider": "github_actions",
     "pipelines_count": 1,
     "stages": [
-      "check",
-      "test",
-      "format",
-      "lint",
-      "e2e"
+      "check (cargo check)",
+      "test (cargo test)",
+      "format (cargo fmt)",
+      "lint (cargo clippy)",
+      "e2e (Docker-based pytest)"
     ],
     "has_caching": true,
     "has_parallelism": true,
@@ -19,89 +19,83 @@
   "build_reproducibility": {
     "lock_files_present": true,
     "lock_files_fresh": true,
-    "pinned_tool_versions": true,
+    "pinned_tool_versions": false,
     "build_matrix": false,
-    "score": 90
+    "score": 85,
+    "notes": "Cargo.lock ensures reproducible builds. Uses dtolnay/rust-toolchain@stable (latest stable) rather than pinned MSRV. Good for most projects; could pin MSRV for stronger reproducibility."
   },
   "containerization": {
     "uses_docker": true,
     "multi_stage_builds": false,
     "non_root_user": false,
-    "dockerignore_present": true,
+    "dockerignore_present": false,
     "base_image_quality": "official",
-    "score": 65
+    "score": 65,
+    "notes": "Uses official rust:latest base image with proper layer caching strategy (copy Cargo.toml first, then build). Single-stage by design. Missing: non-root user, .dockerignore file, explicit version pin on base image."
   },
   "secret_management": {
     "method": "none",
     "rotation_signals": false,
     "hardcoded_risks": [],
-    "score": 50
+    "score": 50,
+    "notes": "No explicit secret management observed. Project is editor-source, not a service, so limited secret needs. Should document this for future integrations."
   },
   "deployment": {
     "strategy": "none",
     "rollback_capable": false,
     "zero_downtime": false,
     "health_checks": false,
-    "score": 0
+    "score": 0,
+    "notes": "Not applicable - Alfred is a local editor binary, not a deployed service. Distributed via cargo install."
   },
   "iac": {
     "tool": "none",
     "coverage": "none",
-    "score": 0
+    "score": 0,
+    "notes": "Not applicable - no infrastructure deployment. Development/CI defined in GitHub Actions and Makefile."
   },
   "branch_protection": {
     "protected_branches": false,
     "required_reviews": false,
     "required_ci_checks": false,
-    "score": 0
+    "score": 40,
+    "notes": "No branch protection rules configured on GitHub. All CI checks pass but not required before merge. Recommend protecting main with required CI checks for a published project."
   },
   "risk_distribution": {
     "critical": 0,
-    "high": 2,
-    "medium": 3,
+    "high": 0,
+    "medium": 2,
     "low": 2
   },
   "recommendations": [
     {
       "priority": 1,
       "title": "Enable branch protection on main",
-      "description": "Configure GitHub branch protection to require CI checks (check, test, format, lint, e2e) before merge. Optionally require 1-2 reviews for production readiness.",
+      "description": "Require all CI checks (check, test, format, lint, e2e) to pass before merge. Optionally require reviews. This prevents accidental regressions.",
       "effort": "low"
     },
     {
       "priority": 2,
-      "title": "Add Docker multi-stage build for e2e tests",
-      "description": "Split e2e Dockerfile into builder and runtime stages to reduce image size and surface area. Remove Rust toolchain and build tools from runtime stage.",
+      "title": "Pin Rust toolchain MSRV in CI",
+      "description": "Replace dtolnay/rust-toolchain@stable with explicit MSRV (e.g., 1.70). Document MSRV in Cargo.toml [package] section for crates that support it. Improves reproducibility.",
       "effort": "low"
     },
     {
       "priority": 3,
-      "title": "Add secret scanning and rotation policy",
-      "description": "Enable GitHub secret scanning to detect hardcoded secrets. Document policy for handling any discovered credentials. Consider using GitHub Secrets for sensitive values.",
-      "effort": "low"
+      "title": "Add .dockerignore and improve E2E Dockerfile",
+      "description": "Create .dockerignore to exclude unnecessary files (target/, .git/, etc.). Consider multi-stage build: builder stage compiles binary, runtime stage is smaller. Add non-root user.",
+      "effort": "medium"
     },
     {
       "priority": 4,
-      "title": "Add failure notifications to CI",
-      "description": "Configure email or webhook notifications for CI failures to ensure timely response. Consider Slack or similar for team-wide alerts.",
+      "title": "Add build matrix for multiple Rust versions",
+      "description": "Test against MSRV and latest stable in CI to catch compatibility issues early. Adds minimal overhead with GitHub Actions parallelism.",
       "effort": "medium"
     },
     {
       "priority": 5,
-      "title": "Create production deployment pipeline",
-      "description": "Once Alfred reaches v1.0, add deployment stage with canary or blue-green strategy. Consider using act or similar for local CI testing.",
-      "effort": "high"
-    },
-    {
-      "priority": 6,
-      "title": "Add build matrix for multi-platform testing",
-      "description": "Extend CI to test on macOS (apple-silicon) and Windows runners in addition to ubuntu-latest. Ensures cross-platform compatibility.",
-      "effort": "medium"
-    },
-    {
-      "priority": 7,
-      "title": "Run pre-commit hook checks in CI",
-      "description": "CI currently duplicates pre-commit hook logic (format, lint, test). Consider extracting shared logic or ensuring CI mirrors local hook behavior exactly.",
+      "title": "Document deployment and versioning strategy",
+      "description": "Create docs/RELEASE.md explaining how releases are cut, versioned (semver?), and distributed. Add GitHub release workflow if publishing to crates.io.",
       "effort": "medium"
     }
   ]

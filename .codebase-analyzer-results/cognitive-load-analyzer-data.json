@@ -1,74 +1,69 @@
 {
-  "cli_score": 382,
+  "cli_score": 312,
   "rating": "Moderate",
   "dimensions": {
     "D1: Structural Complexity": {
-      "raw": "Estimated cyclomatic complexity: handle_key_event ~90 (12 state arms × branching within each), register_builtin_commands ~30, execute_colon_command ~18, run loop ~15. Most helper functions are low (2-8). High outliers: 3 functions over CC=15. Total grep-estimated branch points in app.rs alone: ~117.",
-      "normalized": 0.68,
-      "weighted": 0.14
+      "raw": "High branching in handle_key_event (~12 top-level arms, each with sub-branches); bridge.rs closures are individually simple; editor_state functions are mostly straightforward. Estimated average cyclomatic complexity ~4, peak ~18 (handle_key_event).",
+      "normalized": 0.42,
+      "weighted": 67.2
     },
     "D2: Nesting Depth": {
-      "raw": "Max nesting depth: ~6 levels in handle_key_event (match inside if-let inside loop inside match inside if inside function). P90 across codebase: ~3 levels. Bridge closures nest 3 levels (define_native_closure > closure body > match). Most files maintain 2-3 levels.",
-      "normalized": 0.48,
-      "weighted": 0.07
+      "raw": "handle_key_event reaches 5-6 levels deep (if-let -> match -> if-let -> match -> match). bridge.rs closures reach 4 levels inside define_native_closure bodies. Most other functions stay at 2-3 levels.",
+      "normalized": 0.38,
+      "weighted": 45.6
     },
     "D3: Volume/Size": {
-      "raw": "Total: 25972 LOC across 27 Rust files. Largest: app.rs (7987), bridge.rs (5198), editor_state.rs (3355), buffer.rs (1668), renderer.rs (1307), cursor.rs (1128). Top 3 files = 66% of all LOC. 15 of 27 Rust files are under 200 LOC. P90 function size: ~30 lines; max: 887 lines (register_builtin_commands), 605 lines (handle_key_event).",
-      "normalized": 0.72,
-      "weighted": 0.11
+      "raw": "Two files exceed 5000 lines (bridge.rs 5669, app.rs 6882). app.rs is ~60% test code so effective production LOC ~2750. bridge.rs is ~45% test code, production LOC ~3100. editor_state.rs is 2652 lines. Total production LOC ~10000 across 40 source files.",
+      "normalized": 0.55,
+      "weighted": 55.0
     },
     "D4: Naming Quality": {
-      "raw": "Naming is generally excellent: snake_case throughout, descriptive identifiers (execute_delete_with_motion, push_undo, resolve_key), consistent verb-noun patterns (register_*, get_*, set_*). Only minor issues: s for EditorState borrow in closures is opaque; invert bool in global_delete. No abbreviations except standard Rust conventions (buf, env, cb).",
+      "raw": "Naming is consistently excellent: snake_case throughout, descriptive function names (register_buffer_insert, execute_delete_with_motion, push_jump), domain vocabulary used accurately (cursor, viewport, keymap, hook, panel). Single-letter abbreviations absent except s: &mut EditorState in handler files (minor).",
       "normalized": 0.12,
-      "weighted": 0.015
+      "weighted": 9.6
     },
     "D5: Coupling": {
-      "raw": "app.rs: 14 use statements, 355 alfred_core:: fully-qualified references, plus alfred_lisp and alfred_syntax imports. bridge.rs: 8 alfred_core sub-module imports, 101 functions, all sharing Rc<RefCell<EditorState>>. main.rs: 8 inter-crate use statements. Effective fan-out for app.rs = 4 crates. Inter-crate dependency graph is linear (core -> lisp -> plugin -> syntax -> tui -> bin).",
-      "normalized": 0.55,
-      "weighted": 0.083
+      "raw": "EditorState has 35+ public fields accessed directly across 6 crates. handle_key_event accesses ~15 fields. bridge.rs imports 8 alfred-core submodules. Each new Lisp primitive needs 3 touch-points. Facade pattern partially mitigates but direct field access remains common inside alfred-tui.",
+      "normalized": 0.48,
+      "weighted": 57.6
     },
     "D6: Cohesion": {
-      "raw": "EditorState has 39 fields serving unrelated concerns (text editing, vim macros, plugin state, syntax highlighting coordination, jump navigation, marks, undo). register_builtin_commands registers 30+ commands in one function, mixing cursor, insert, delete, yank, paste, undo, mode-switch, and advanced vim commands. Core modules (buffer.rs, cursor.rs, hook.rs, command.rs) are highly cohesive. bridge.rs has moderate cohesion (all primitives relate to Lisp-Rust bridging).",
-      "normalized": 0.58,
-      "weighted": 0.07
+      "raw": "Per-file cohesion is generally strong: cursor.rs is pure cursor movement, buffer.rs is pure buffer ops, handler files group related operations. bridge.rs cohesion is lower — it aggregates all Rust-to-Lisp bindings (buffer, cursor, hooks, keymaps, themes, panels, strings, lists, filesystem). EditorState struct cohesion is low — mixes runtime state (running, mode), editing state (buffer, cursor), UI state (panels, line_styles), and subsystem config (tab_width, theme).",
+      "normalized": 0.40,
+      "weighted": 32.0
     },
     "D7: Duplication": {
-      "raw": "Structural duplication observed in: (1) execute_delete_with_motion / execute_yank_with_motion share CharWise/LineWise range logic; (2) 12 similar register_* functions in bridge.rs each follow identical define_native_closure pattern; (3) state.mode/active_keymaps assignment repeated ~6 times across insert-mode entry paths; (4) viewport adjustment (state.viewport = alfred_core::viewport::adjust(...)) repeated ~30 times across app.rs. Pattern is consistent but verbose.",
-      "normalized": 0.38,
-      "weighted": 0.057
+      "raw": "Integer argument extraction pattern repeated ~20 times in bridge.rs (Some(Value::Int(n)) / Some(other) => error / None => error). The pattern across 300+ LOC of nearly identical match arms. Handler functions in handlers/*.rs are uniform and not duplicated. The save logic appears in both DeferredAction::SaveBuffer arm in app.rs and register_save_buffer in bridge.rs.",
+      "normalized": 0.28,
+      "weighted": 22.4
     },
     "D8: Navigability": {
-      "raw": "6-crate workspace with clear naming (alfred-core, alfred-lisp, alfred-plugin, alfred-syntax, alfred-tui, alfred-bin). Each crate has a focused purpose. Plugins in plugins/ directory are self-describing. Documentation in docs/adrs/ and docs/feature/. No README at root. Test co-location: unit tests in same file under #[cfg(test)], e2e tests in tests/e2e/. Main entry point is clear: alfred-bin/src/main.rs. Directory depth is shallow (3 levels). The 7987-line app.rs is the primary navigability obstacle.",
+      "raw": "6-crate workspace with clear purpose separation (core, lisp, syntax, plugin, tui, bin). Entry point is obvious (alfred-bin/src/main.rs). handlers/ subdir groups command handlers well. bridge.rs is monolithic and difficult to navigate despite being well-commented. No module index or cross-reference doc. File discovery requires familiarity with the crate layout.",
       "normalized": 0.28,
-      "weighted": 0.028
+      "weighted": 22.4
     }
   },
-  "interaction_penalty": 18.5,
+  "interaction_penalty": 0.95,
   "worst_offenders": [
     {
-      "file": "crates/alfred-tui/src/app.rs",
-      "score": 0.74,
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "score": 0.71,
       "primary_dimension": "D3: Volume/Size"
     },
     {
-      "file": "crates/alfred-core/src/editor_state.rs",
-      "score": 0.62,
-      "primary_dimension": "D6: Cohesion"
+      "file": "crates/alfred-tui/src/app.rs",
+      "score": 0.65,
+      "primary_dimension": "D3: Volume/Size"
     },
     {
-      "file": "crates/alfred-lisp/src/bridge.rs",
+      "file": "crates/alfred-tui/src/input.rs",
       "score": 0.58,
-      "primary_dimension": "D5: Coupling"
-    },
-    {
-      "file": "crates/alfred-tui/src/renderer.rs",
-      "score": 0.31,
       "primary_dimension": "D1: Structural Complexity"
     },
     {
-      "file": "crates/alfred-core/src/buffer.rs",
-      "score": 0.28,
-      "primary_dimension": "D3: Volume/Size"
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "score": 0.54,
+      "primary_dimension": "D6: Cohesion"
     }
   ]
 }

@@ -2,7 +2,7 @@
   "overall_score": 7.0,
   "risk_level": "Medium",
   "dependency_count": 9,
-  "testability_score": 0.72,
+  "testability_score": 0.73,
   "seam_availability": {
     "object": 6,
     "link": 4,
@@ -14,42 +14,42 @@
       "risk": "High",
       "dependencies": 6,
       "seams": 1,
-      "notes": "Largest file at ~8000 lines. Mixes domain logic (InputState, Operator, execute_motion) with event loop I/O. Rc<RefCell<EditorState>> shared mutation makes unit testing difficult without a terminal. Has unit tests for pure sub-functions (convert_crossterm_key) but the handle_key_event function is hard to isolate."
+      "notes": "Largest file at 6882 lines. Mixes domain logic (InputState, Operator, DeferredAction, execute_motion) with terminal I/O event loop. Rc<RefCell<EditorState>> shared mutation and crossterm event reading make unit testing handle_key_event infeasible without a full TUI setup. Only seam is the pure convert_crossterm_key function. 170 unit tests present but cover only the pure sub-functions. Most frequently changed file: 62 commits in project history."
     },
     {
       "file": "crates/alfred-lisp/src/bridge.rs",
       "risk": "High",
       "dependencies": 5,
       "seams": 2,
-      "notes": "~5200 lines. Registers closures that capture Rc<RefCell<EditorState>>. Each primitive is a closure registered at startup; substitution requires replacing the entire bridge registration. Tests exist in the runtime module but bridge functions are tested mostly via integration paths."
+      "notes": "5669 lines. Registers closures that capture Rc<RefCell<EditorState>>. Each primitive is a closure registered at startup with no substitution mechanism short of replacing entire bridge registration. 179 unit tests present but most exercise bridge primitives via integration paths through the runtime. 43 commits in project history indicates high churn. Direct dependency on 5 alfred-core submodules (buffer, cursor, command, hook, theme) makes any core refactoring ripple here."
     },
     {
       "file": "crates/alfred-core/src/editor_state.rs",
       "risk": "Medium",
       "dependencies": 7,
       "seams": 3,
-      "notes": "~3350 lines. EditorState has 40+ public fields making it a wide dependency surface. Any caller that borrows EditorState has implicit coupling to the entire state. Tests exist (unit tests in editor_state module) but full state construction is required for every test."
+      "notes": "2652 lines. EditorState has 40+ public fields covering unrelated concerns: buffer, cursor, viewport, modal state, macro state, registers, search state, jump/change lists, theming, panels. The wide public surface means any caller has implicit coupling to the entire state. 98 unit tests present. Full state construction (editor_state::new) required for every test. 46 commits in project history - second most changed file."
     },
     {
       "file": "crates/alfred-core/src/buffer.rs",
       "risk": "Low",
       "dependencies": 2,
       "seams": 4,
-      "notes": "~1670 lines. Pure functions on Buffer/Rope. Well-tested. Ropey dependency is the only risk -- it is stable and widely used."
+      "notes": "1735 lines. Pure functions on Buffer / ropey::Rope. 77 unit tests. Ropey dependency is stable and widely used. Immutable-style API (operations return new Buffer) makes seams straightforward. Well-isolated."
     },
     {
       "file": "crates/alfred-tui/src/renderer.rs",
       "risk": "Medium",
       "dependencies": 5,
       "seams": 2,
-      "notes": "~1300 lines. Reads &EditorState and drives ratatui. Testable via ratatui's TestBackend (test seam exists). Tests present in module. Coupling to ratatui API is the main risk."
+      "notes": "1463 lines. Reads &EditorState and drives ratatui. Testable via ratatui TestBackend (link seam). 26 unit tests present. Coupling to ratatui public API is main risk for version upgrades. Reads EditorState fields directly rather than through facade."
     },
     {
       "file": "crates/alfred-core/src/cursor.rs",
       "risk": "Low",
       "dependencies": 1,
       "seams": 3,
-      "notes": "~1130 lines. All pure functions. Well-tested with unit tests. No I/O dependencies."
+      "notes": "1128 lines. All pure functions. 20 unit tests. No I/O dependencies. Fully isolated and independently testable."
     }
   ]
 }

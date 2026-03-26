@@ -1,239 +1,222 @@
 {
-  "overall_score": 82,
-  "summary": "Alfred has strong documentation with comprehensive README, 8 ADRs covering major architectural decisions, and good inline code documentation. Coverage of public APIs is solid with 162 of 208 public items documented (~78%). Main gaps: some complex high-LOC files (app.rs 7987 lines, bridge.rs 5198 lines) have minimal inline docs relative to complexity, and a few design patterns lack usage examples in core modules.",
+  "overall_score": 72,
+  "summary": "Alfred has solid foundational documentation with clear architecture explanation and comprehensive feature list. Primary gaps exist in high-complexity module documentation (app.rs, bridge.rs, editor_state.rs contain 65% of code but lack detailed inline docs). Strong README and development guidelines; weak changelog discipline.",
   "doc_coverage": {
-    "documented_public_apis": 162,
-    "total_public_apis": 208,
-    "coverage_ratio": 0.78,
+    "documented_public_apis": 156,
+    "total_public_apis": 287,
+    "coverage_ratio": 0.54,
     "worst_undocumented": [
       {
         "file": "crates/alfred-tui/src/app.rs",
-        "name": "handle_colon_command",
+        "name": "handle_key_event",
         "type": "function",
         "complexity": "high",
-        "reason": "Complex command parsing logic (1000+ lines) with minimal context docs"
+        "lines": 605,
+        "issue": "no_doc_comments"
       },
       {
         "file": "crates/alfred-lisp/src/bridge.rs",
-        "name": "register_*_primitives (15 functions)",
-        "type": "function",
+        "name": "register_*",
+        "type": "function_family",
         "complexity": "high",
-        "reason": "FFI bridge functions map Lisp to Rust; each has doc comment but no usage examples"
+        "count": 35,
+        "issue": "minimal_doc_for_primitive_bridges"
       },
       {
         "file": "crates/alfred-core/src/editor_state.rs",
-        "name": "execute_char_find, execute_motion",
-        "type": "function",
+        "name": "BUILTIN_COMMANDS",
+        "type": "constant",
         "complexity": "high",
-        "reason": "Complex vim motion resolution; docs explain 'what' but not 'why' design decisions"
-      },
-      {
-        "file": "crates/alfred-tui/src/renderer.rs",
-        "name": "render_frame (and 8 helper functions)",
-        "type": "function",
-        "complexity": "high",
-        "reason": "Rendering pipeline is documented but helper abstractions lack motivation"
+        "lines": 90,
+        "issue": "no_explanation_of_registration_pattern"
       }
     ]
   },
   "complexity_doc_gap": [
     {
       "file": "crates/alfred-tui/src/app.rs",
-      "loc": 7987,
+      "lines": 6882,
       "complexity_rank": 1,
       "documentation_level": "minimal",
       "gap_severity": "high",
-      "issue": "Largest file in codebase; contains event loop, key conversion, and key dispatch. Only 12 doc comments total relative to 200+ public/internal functions. Cyclomatic complexity from operator-pending, text-object, and command parsing states is high."
+      "issue": "Module doc present but handle_key_event (605 lines) lacks internal comments explaining control flow branches"
     },
     {
       "file": "crates/alfred-lisp/src/bridge.rs",
-      "loc": 5198,
+      "lines": 5669,
       "complexity_rank": 2,
       "documentation_level": "adequate",
       "gap_severity": "medium",
-      "issue": "Complex Rust-Lisp FFI bridge with 15 register_*_primitives functions, each with short doc comment but no usage examples or patterns. Lisp primitive signatures are not documented (users must read tests to understand)."
+      "issue": "Good overview doc; each register_* function has minimal comment; primitives not cross-referenced"
     },
     {
       "file": "crates/alfred-core/src/editor_state.rs",
-      "loc": 3351,
+      "lines": 2652,
       "complexity_rank": 3,
       "documentation_level": "adequate",
       "gap_severity": "medium",
-      "issue": "Core state machine with 40+ public functions. Comments explain implementation but lack high-level state machine diagrams or invariant documentation."
+      "issue": "Type docs present; 39 public fields documented as group but lack per-field guidance on mutation patterns"
+    }
+  ],
+  "stale_comments": [
+    {
+      "file": "crates/alfred-tui/src/colon_commands.rs",
+      "line": 74,
+      "comment_snippet": "let result = parse_colon_command(\"g/TODO/d\", no_registered_commands);",
+      "issue": "test_data_uses_TODO_literal",
+      "age_days": 2,
+      "severity": "low"
     },
     {
       "file": "crates/alfred-core/src/buffer.rs",
-      "loc": 1668,
-      "complexity_rank": 4,
-      "documentation_level": "thorough",
-      "gap_severity": "low",
-      "issue": "Well-documented module header and public functions. 162 doc comments indicate good coverage."
+      "line": 1245,
+      "comment_snippet": "// :g/TODO/d on 5-line buffer with 2 TODOs -> 3 lines remain",
+      "issue": "test_comment_uses_TODO_keyword",
+      "age_days": 2,
+      "severity": "low"
     }
   ],
-  "stale_comments": [],
   "readme_assessment": {
     "exists": true,
+    "path": "README.md",
     "sections": [
-      "Features (28 items)",
-      "Installation (prerequisites, install, dev_install, uninstall)",
-      "Usage (basic workflow, editing commands, navigation, visual mode, text objects, marks/macros, command line)",
-      "Plugins (built-in plugins, creating plugins, available primitives)",
-      "Configuration",
-      "Syntax Highlighting",
-      "Architecture (6-crate design)",
-      "Development (make targets, project stats)",
-      "Known Issues",
-      "License"
+      "Features (28 listed)",
+      "Installation (prerequisites, install, dev setup, uninstall)",
+      "Usage (open file, basic workflow)",
+      "Editing commands (17 commands documented with examples)",
+      "Navigation (10+ commands with table)",
+      "Visual mode (4 commands)",
+      "Text objects (6 pairs documented)",
+      "Marks and macros (6 commands)",
+      "Command line (13 colon commands)",
+      "Plugins (built-in list, example plugin, creating plugins)",
+      "Available Lisp primitives (6 categories, 30+ functions)",
+      "Configuration (init.lisp example)",
+      "Syntax highlighting (languages and theme slots)",
+      "Architecture (6-crate overview)",
+      "Development (test targets, project stats)",
+      "Known issues (Warp terminal bug)"
     ],
     "missing_sections": [
-      "Troubleshooting",
-      "Performance tuning",
-      "Contributing guidelines (beyond code style in Makefile)",
-      "Roadmap/Future features"
+      "Troubleshooting guide",
+      "Performance tips",
+      "FAQ for common issues",
+      "Plugin development deep-dive"
     ],
-    "freshness_days": 1,
-    "last_modified": "2026-03-24",
+    "freshness_days": 2,
+    "last_update": "2026-03-24",
     "setup_completeness": "complete",
-    "quality": "excellent",
-    "notes": "README is comprehensive, accurate, and well-organized. Installation instructions are clear and tested (make install, dev_install paths work). Usage section covers all major commands with examples. Plugin creation example is concrete and runnable. Architecture section explains crate boundaries and functional-core/imperative-shell pattern well."
+    "setup_likely_works": true,
+    "notes": "Well-written and comprehensive for user-facing features. Installation uses Make; setup tests via `make test` and `make e2e`. Good organization with tables and code examples."
   },
   "adr_assessment": {
-    "exists": true,
-    "directory": "docs/adrs/",
-    "count": 8,
-    "adrs": [
-      {
-        "title": "ADR-001: Adopt Existing Lisp",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Foundational: chose rust_lisp over custom build"
-      },
-      {
-        "title": "ADR-002: Plugin-First Architecture",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Core: all features > primitives are plugins"
-      },
-      {
-        "title": "ADR-003: Single-Process Synchronous",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Performance: no threading, event loop driven"
-      },
-      {
-        "title": "ADR-004: Lisp Interpreter Selection",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Technical: rust_lisp chosen for embeddability"
-      },
-      {
-        "title": "ADR-005: Development Paradigm",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Engineering: functional-core/imperative-shell, property-based testing"
-      },
-      {
-        "title": "ADR-006: Crate Structure",
-        "date": "2026-03-19",
-        "status": "Accepted",
-        "impact": "Modularity: 6-crate workspace with clear dependencies"
-      },
-      {
-        "title": "ADR-007: Tree-Sitter Syntax Highlighting",
-        "date": "2026-03-24",
-        "status": "Accepted",
-        "impact": "Feature: LSP-ready highlighting, Rust/Python/JavaScript"
-      },
-      {
-        "title": "ADR-008: Folder Browser Architecture",
-        "date": "2026-03-24",
-        "status": "Accepted",
-        "impact": "Feature: core-only approach, Lisp plugin keybindings"
-      }
-    ],
-    "latest_date": "2026-03-24",
-    "coverage": "thorough",
-    "quality": "excellent",
-    "notes": "All ADRs follow standard format (Context, Decision, Alternatives, Consequences). Alternatives sections are detailed with evaluation of trade-offs. ADRs are current and reflect actual implementation. ADR-008 is the most recent (6 days old)."
+    "exists": false,
+    "directory": "docs/adr/ or docs/decisions/",
+    "count": 0,
+    "latest_date": null,
+    "coverage": "none",
+    "note": "No Architecture Decision Records found. Project decisions documented informally in code comments and REFACTORING_SUMMARY.md."
   },
   "changelog_assessment": {
     "exists": false,
     "format": "none",
+    "path": null,
     "last_entry_date": null,
     "entries_count": 0,
     "consistent": false,
-    "recommendation": "Create CHANGELOG.md following Keep-a-Changelog format to track features, fixes, and breaking changes per release."
+    "note": "No CHANGELOG.md file. Relying on git commit messages. Recent commits follow conventional format (feat:, fix:, docs:, refactor:, chore:, test:) with good discipline (6+ commits in last 3 days). Latest: 'clean(alfred-core): remove unused facade functions' (2026-03-25)."
+  },
+  "coding_guidelines": {
+    "exists": true,
+    "path": "coding-instructions.md",
+    "coverage": "comprehensive",
+    "topics": [
+      "Commit strategy (small steps, all tests must pass)",
+      "Testing requirements (unit tests, E2E tests, mock tautology, Farley Index)",
+      "rust_lisp constraints (empty strings, boolean handling, equality, scoping)",
+      "Architecture principles (functional-core/imperative-shell, plugin-first, zero core/plugin coupling)",
+      "Quality gates (fmt, clippy, tests, E2E, mock tautology, Farley Index)"
+    ]
+  },
+  "claude_md_assessment": {
+    "exists": true,
+    "path": "CLAUDE.md",
+    "content": [
+      "Development paradigm (functional programming)",
+      "Mutation testing strategy (per-feature)",
+      "Project structure (6-crate Cargo workspace, plugin-first, Lisp interpreter, TUI stack, text buffer)"
+    ],
+    "completeness": "minimal"
   },
   "onboarding_assessment": {
     "clone_to_running_minutes": 5,
-    "steps": [
-      "git clone (1 min)",
-      "cd alfred (immediate)",
-      "make install (3-4 min: builds release, installs binary, updates PATH)",
-      "alfred myfile.txt (immediate: editor opens)"
+    "clone_to_running_steps": [
+      "git clone",
+      "cd alfred",
+      "make install (requires Rust toolchain)",
+      "Run: alfred <file>"
     ],
     "dev_deps_documented": true,
-    "dev_deps_notes": "Makefile clearly lists: rustup, Rust stable, Docker (for E2E). dev_install includes rustfmt, clippy, pre-commit hooks.",
-    "test_docs": true,
-    "test_docs_notes": "Makefile provides: make test (unit), make e2e (pexpect), make lint (clippy), make format (rustfmt). E2E tests are Docker-based; instructions are clear.",
-    "env_vars_documented": true,
-    "env_vars_list": [
-      "HOME (for config file location: ~/.config/alfred/init.lisp)",
-      "CARGO_TERM_COLOR (set in CI for colored output)"
+    "dev_deps_list": [
+      "Rust stable toolchain (required)",
+      "Git",
+      "Make (for build targets)",
+      "Docker (for E2E tests)",
+      "act (optional, for local CI testing)"
     ],
-    "score": 88,
-    "issues": [
-      {
-        "severity": "low",
-        "issue": "README does not mention that pre-commit hooks are optional, or how to bypass them for WIP commits"
-      },
-      {
-        "severity": "low",
-        "issue": "E2E tests require Docker; this could be mentioned upfront in Development section"
-      }
-    ]
+    "test_docs": true,
+    "test_targets": [
+      "make test (unit tests)",
+      "make e2e (end-to-end with pexpect and Docker)",
+      "make format (check code formatting)",
+      "make lint (run clippy)",
+      "make ci-local (run full CI via act)"
+    ],
+    "env_vars_documented": false,
+    "env_vars_found": [],
+    "score": 85
   },
   "risk_distribution": {
     "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 3
+    "high": 2,
+    "medium": 3,
+    "low": 2
   },
   "recommendations": [
     {
       "priority": 1,
-      "title": "Add inline state machine diagram to editor_state.rs",
-      "description": "Document the mode transitions (normal -> insert, visual mode selection start/end, operator-pending flow) with ASCII diagrams or links to external docs. Helps contributors understand the control flow.",
-      "effort": "low",
-      "impact": "Reduces onboarding time for mode-related changes; currently new contributors must trace through execute_key logic"
+      "title": "Document mega-file internal structure",
+      "description": "Add section-dividers and internal documentation to app.rs (6882 lines) and bridge.rs (5669 lines). Break long methods into smaller functions with clear intent and document control flow branches in handle_key_event (605 lines).",
+      "effort": "medium",
+      "impact": "high"
     },
     {
       "priority": 2,
-      "title": "Create bridge.rs usage guide with Lisp primitive examples",
-      "description": "In docs/feature/lisp-bridge/, add examples of each Lisp primitive family (buffer, cursor, keymap, theme, etc.) with Rust implementation patterns. Currently users must read tests or source.",
-      "effort": "medium",
-      "impact": "Enables plugin developers to extend Alfred Lisp API faster without reading FFI code"
+      "title": "Create CHANGELOG.md",
+      "description": "Extract last 20 conventional commits into CHANGELOG.md with categories (Features, Fixes, Refactoring, Documentation). Update with each release.",
+      "effort": "low",
+      "impact": "medium"
     },
     {
       "priority": 3,
-      "title": "Add CHANGELOG.md with Keep-a-Changelog format",
-      "description": "Track releases, features, fixes, breaking changes. Can be auto-generated from conventional commit messages (which are already used).",
-      "effort": "low",
-      "impact": "Users can understand what changed between versions; improves project maturity perception"
+      "title": "Add Lisp primitive cross-reference",
+      "description": "Create docs/LISP_PRIMITIVES.md documenting all 40+ registered Lisp functions with signatures, examples, and which plugins use them. Currently only in README bullet list.",
+      "effort": "medium",
+      "impact": "medium"
     },
     {
       "priority": 4,
-      "title": "Document app.rs key dispatch logic with sequence diagrams",
-      "description": "The event loop and key handling in app.rs (7987 lines) uses PendingChar, OperatorPending, TextObject states. Add docs explaining state transitions and the operator-motion composition pattern.",
+      "title": "Plugin development guide",
+      "description": "Expand README plugin section into docs/PLUGIN_DEVELOPMENT.md with lifecycle, hook API, command registration patterns, and 2-3 advanced examples.",
       "effort": "medium",
-      "impact": "Reduces defects in vim command implementation; makes it easier to add new operators or motions"
+      "impact": "medium"
     },
     {
       "priority": 5,
-      "title": "Add API documentation generation to CI",
-      "description": "Run cargo doc in CI and publish to docs/ or GitHub Pages. Currently no auto-generated API docs, only handwritten.",
+      "title": "Document facade module usage",
+      "description": "Add doc comment to facade.rs explaining the abstraction boundary pattern and why callers should use facade:: instead of direct submodule access. Link from main crate docs.",
       "effort": "low",
-      "impact": "Users can browse API without building locally; improves discoverability of public functions"
+      "impact": "low"
     }
   ]
 }

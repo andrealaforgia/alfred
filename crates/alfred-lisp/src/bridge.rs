@@ -1520,7 +1520,8 @@ pub fn register_panel_focus_primitives(runtime: &LispRuntime, state: Rc<RefCell<
     register_panel_cursor_up(env.clone(), state.clone());
     register_panel_entry_count(env.clone(), state.clone());
     register_clear_panel_lines(env.clone(), state.clone());
-    register_panel_set_cursor(env, state);
+    register_panel_set_cursor(env.clone(), state.clone());
+    register_focused_panel_query(env, state);
 }
 
 /// Registers `focus-panel`: gives keyboard focus to a named panel.
@@ -1555,6 +1556,17 @@ fn register_unfocus_panel(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>
         let mut editor = state.borrow_mut();
         editor.focused_panel = None;
         Ok(Value::NIL)
+    });
+}
+
+/// Registers `focused-panel`: returns the name of the focused panel, or nil.
+fn register_focused_panel_query(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "focused-panel", move |_env, _args| {
+        let editor = state.borrow();
+        match &editor.focused_panel {
+            Some(name) => Ok(Value::String(name.clone())),
+            None => Ok(Value::NIL),
+        }
     });
 }
 

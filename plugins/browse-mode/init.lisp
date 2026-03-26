@@ -342,35 +342,50 @@
 ;; Toggle sidebar visibility + focus
 (define sidebar-created nil)
 
+;; Helper: focus the sidebar (shared by toggle and re-focus paths)
+(define sidebar-do-focus
+  (lambda ()
+    (set sidebar-saved-mode (current-mode))
+    (focus-panel "filetree")
+    (set-mode "panel-filetree")
+    (set-active-keymap "filetree-mode")))
+
+;; Helper: open the sidebar from scratch
+(define sidebar-do-open
+  (lambda ()
+    (set sidebar-visible 1)
+    (if sidebar-created
+      nil
+      (begin
+        (define-panel "filetree" "left" sidebar-width)
+        (set-panel-priority "filetree" 10)
+        (set sidebar-created 1)))
+    (set-panel-style "filetree" "#6c7086" "#1e1e2e")
+    (set-panel-size "filetree" sidebar-width)
+    (sidebar-load
+      (if (= sidebar-current-dir browser-empty-str)
+        browser-root-dir
+        sidebar-current-dir))
+    (sidebar-do-focus)))
+
 (define-command "toggle-sidebar"
   (lambda ()
     (if (= browser-root-dir browser-empty-str)
       (message "No browse directory set")
       (if sidebar-visible
-        (begin
-          (set sidebar-visible nil)
-          (set-panel-size "filetree" 0)
-          (unfocus-panel)
-          (set-mode "normal")
-          (set-active-keymap "normal-mode"))
-        (begin
-          (set sidebar-visible 1)
-          (if sidebar-created
-            nil
-            (begin
-              (define-panel "filetree" "left" sidebar-width)
-              (set-panel-priority "filetree" 10)
-              (set sidebar-created 1)))
-          (set-panel-style "filetree" "#6c7086" "#1e1e2e")
-          (set-panel-size "filetree" sidebar-width)
-          (sidebar-load
-            (if (= sidebar-current-dir browser-empty-str)
-              browser-root-dir
-              sidebar-current-dir))
-          (set sidebar-saved-mode (current-mode))
-          (focus-panel "filetree")
-          (set-mode "panel-filetree")
-          (set-active-keymap "filetree-mode"))))))
+        ;; Sidebar is visible — check if focused
+        (if (= (focused-panel) "filetree")
+          ;; Focused: close it
+          (begin
+            (set sidebar-visible nil)
+            (set-panel-size "filetree" 0)
+            (unfocus-panel)
+            (set-mode "normal")
+            (set-active-keymap "normal-mode"))
+          ;; Visible but unfocused: re-focus it
+          (sidebar-do-focus))
+        ;; Not visible: open + focus
+        (sidebar-do-open)))))
 
 ;; Sidebar commands — re-populate lines after cursor move to update ">" indicator
 (define sidebar-refresh

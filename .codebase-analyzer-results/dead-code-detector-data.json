@@ -1,16 +1,17 @@
 {
-  "overall_score": 88,
-  "summary": "Alfred codebase is very clean with minimal dead code. All major modules are actively used (panel system, rainbow_csv, etc.). No orphaned files detected. No zombie dependencies found. Test code is properly contained in mod test blocks. Code after returns is rare and intentional. Zero permanent commented-out code blocks found. Only minor issues: one possible unused import path in tests, and some verbose test helper code.",
+  "overall_score": 85,
+  "summary": "Alfred codebase is well-maintained with minimal dead code. All Rust source files are imported and actively used. No orphaned files, no zombie dependencies, and no feature flags detected. Recent cleanup (6207007: 'clean(alfred-core): remove unused facade functions') demonstrates active maintenance. Only minor dead code patterns detected: one test-only import and some unused match arms.",
   "unreachable_code": [],
   "unused_exports": [
     {
       "file": "crates/alfred-core/src/panel.rs",
-      "name": "Right (PanelPosition variant)",
-      "type": "enum_variant",
-      "line": 17,
-      "confidence": "high",
-      "reason": "Defined in PanelPosition enum but never constructed or pattern-matched in any crate. Left/Bottom/Top are used in renderer.rs; Right is not.",
-      "action": "Safe to remove; architectural decision to omit right-side panels"
+      "name": "clear_panel_cache",
+      "type": "function",
+      "line": 89,
+      "visibility": "pub",
+      "confidence": "low",
+      "used_in": "tests_only",
+      "reason": "Function defined and exported but only used in #[cfg(test)] module"
     }
   ],
   "orphaned_files": [],
@@ -18,131 +19,168 @@
   "zombie_dependencies": [],
   "commented_code_blocks": [],
   "dead_routes": [],
-  "suspicious_patterns": [
-    {
-      "file": "crates/alfred-core/src/rainbow_csv.rs",
-      "pattern": "Module imported in lib.rs but only called from Lisp bridge",
-      "severity": "low",
-      "status": "not_dead",
-      "notes": "rainbow_csv module is accessed only via Lisp bridge (colorize_buffer is registered as a primitive). Direct Rust usage is via tests. This is intentional plugin-driven architecture."
-    },
-    {
-      "file": "crates/alfred-lisp/src/bridge.rs",
-      "pattern": "Many register_*_primitives functions",
-      "severity": "low",
-      "status": "not_dead",
-      "notes": "All 15 register_*_primitives functions are called from alfred-bin main.rs. Each registers a group of Lisp primitives. Some primitives may be unused by plugins, but the registration functions themselves are all used."
-    },
-    {
-      "file": "crates/alfred-tui/src/renderer.rs",
-      "pattern": "Helper functions: split_gutter_and_text, render_message_line, etc.",
-      "severity": "low",
-      "status": "not_dead",
-      "notes": "All 12 helper functions are called from render_frame. No dead helpers detected."
-    }
-  ],
   "dead_code_summary": {
     "total_dead_lines": 0,
-    "total_source_lines": 25972,
+    "total_source_lines": 27548,
     "dead_ratio": 0.0,
     "total_orphaned_files": 0,
     "total_zombie_deps": 0,
-    "total_unused_exports": 1,
-    "assessment": "Excellent code hygiene"
+    "assessment": "Clean codebase with active imports and minimal cruft. No unused Cargo dependencies. No commented-out production code blocks (test code appropriately marked with #[cfg(test)])."
   },
-  "test_code_assessment": {
-    "total_test_modules": 19,
-    "unit_tests_count": 739,
-    "e2e_tests_count": 66,
-    "test_dead_code": "None detected",
-    "test_hygiene": "Excellent",
-    "notes": "All tests are in mod test blocks (not at file scope). No test-only functions left in public API. E2E tests use pexpect for deterministic terminal interactions. Test code is well-contained and removable."
-  },
-  "import_analysis": {
-    "unused_imports": [
+  "module_import_analysis": {
+    "well_imported_modules": [
       {
-        "file": "crates/alfred-core/src/editor_state.rs",
-        "imports": "None detected in main code",
-        "status": "clean",
-        "confidence": "high"
+        "module": "alfred_core",
+        "importers": 4,
+        "used_by": [
+          "alfred-tui (editor loop)",
+          "alfred-lisp (bridge)",
+          "alfred-plugin (discovery)",
+          "alfred-bin (composition root)"
+        ]
+      },
+      {
+        "module": "alfred_lisp",
+        "importers": 2,
+        "used_by": [
+          "alfred-tui (eval display)",
+          "alfred-bin (registration)"
+        ]
+      },
+      {
+        "module": "alfred_syntax",
+        "importers": 2,
+        "used_by": [
+          "alfred-tui (renderer)",
+          "alfred-bin (initialization)"
+        ]
+      },
+      {
+        "module": "alfred_plugin",
+        "importers": 1,
+        "used_by": [
+          "alfred-bin (plugin loading)"
+        ]
       }
     ],
-    "circular_dependencies": "None detected in workspace",
-    "module_isolation": "Excellent: clear dependency graph with no cycles"
+    "potential_circular_dependencies": []
   },
-  "dead_code_by_crate": [
-    {
-      "crate": "alfred-core",
-      "dead_items": 0,
-      "unused_exports": 1,
-      "assessment": "Very clean"
+  "public_api_usage": {
+    "facade_functions": {
+      "defined": 12,
+      "usage_frequency": "high",
+      "imported_by": [
+        "alfred_lisp/bridge (viewport, cursor, buffer facades)",
+        "alfred_tui/app (state queries)"
+      ],
+      "confidence": "high"
     },
-    {
-      "crate": "alfred-lisp",
-      "dead_items": 0,
-      "unused_exports": 0,
-      "assessment": "Clean"
+    "handler_functions": {
+      "defined": 50,
+      "pattern": "Registered via BUILTIN_COMMANDS constant table",
+      "imported_by": "editor_state module (data-driven dispatch)",
+      "confidence": "high"
     },
-    {
-      "crate": "alfred-plugin",
-      "dead_items": 0,
-      "unused_exports": 0,
-      "assessment": "Clean"
-    },
-    {
-      "crate": "alfred-syntax",
-      "dead_items": 0,
-      "unused_exports": 0,
-      "assessment": "Clean"
-    },
-    {
-      "crate": "alfred-tui",
-      "dead_items": 0,
-      "unused_exports": 0,
-      "assessment": "Clean"
-    },
-    {
-      "crate": "alfred-bin",
-      "dead_items": 0,
-      "unused_exports": 0,
-      "assessment": "Clean (entry point; all imports used)"
+    "bridge_primitives": {
+      "registered": 35,
+      "pattern": "register_* functions called from main.rs composition root",
+      "imported_by": "main.rs and runtime initialization",
+      "confidence": "high"
     }
-  ],
-  "plugin_code_assessment": {
-    "total_plugins": 8,
-    "total_lines": 577,
-    "dead_code_found": false,
-    "unused_plugins": [],
-    "stale_plugins": [],
-    "notes": "All 8 plugins are loaded at startup: vim-keybindings (128 LOC), browse-mode (281 LOC), rainbow-csv (51 LOC), status-bar (33 LOC), line-numbers (30 LOC), default-theme (28 LOC), word-count (21 LOC), test-plugin (5 LOC). test-plugin is intentional example; no stale plugins."
+  },
+  "cargo_analysis": {
+    "workspace_structure": "6-crate workspace (alfred-core, alfred-syntax, alfred-lisp, alfred-plugin, alfred-tui, alfred-bin)",
+    "dependencies_status": "clean",
+    "declared_vs_used": {
+      "alfred-core": "all submodules imported (buffer, cursor, viewport, editor_state, facade, handlers, hook, key_event, panel, text_object, theme, command, error)",
+      "alfred-tui": "imports alfred-core, alfred-lisp, alfred-syntax (all used)",
+      "alfred-lisp": "imports alfred-core, rust_lisp (all used)",
+      "alfred-plugin": "imports alfred-core, alfred-lisp (all used)",
+      "alfred-syntax": "imports alfred-core, tree-sitter (all used)",
+      "external_deps": "All production deps used: ropey, crossterm, ratatui, rust_lisp, tree-sitter-*, streaming-iterator, thiserror"
+    },
+    "dev_only_dependencies": [
+      {
+        "name": "tempfile",
+        "used_in": "unit test fixtures across all crates",
+        "confidence": "high"
+      }
+    ]
+  },
+  "test_code_assessment": {
+    "test_modules": 23,
+    "test_functions": 150,
+    "patterns": [
+      "Tests properly gated with #[cfg(test)]",
+      "Test utilities co-located with source (fixtures in same file)",
+      "No dead test code detected"
+    ]
+  },
+  "plugin_system_analysis": {
+    "plugin_files": 8,
+    "plugins": [
+      "vim-keybindings (6255 lines, active)",
+      "browse-mode (15842 lines, active)",
+      "default-theme (1112 lines, active)",
+      "line-numbers (937 lines, active)",
+      "rainbow-csv (1410 lines, active, uses rainbow_csv core module)",
+      "status-bar (907 lines, active)",
+      "test-plugin (177 lines, simple example)",
+      "word-count (629 lines, example)"
+    ],
+    "dead_plugins": [],
+    "plugin_loading": "Discovery via directory scan in plugin discovery module (active)"
+  },
+  "refactoring_debt": {
+    "known_issues": [
+      {
+        "file": "crates/alfred-tui/src/app.rs",
+        "type": "god_object",
+        "severity": "medium",
+        "note": "6882 lines; large but not dead — actively used in event loop. Candidate for future refactoring (input state machine already extracted to input.rs)"
+      },
+      {
+        "file": "crates/alfred-lisp/src/bridge.rs",
+        "type": "procedural_registration",
+        "severity": "low",
+        "note": "5669 lines; all functions called from main.rs composition root. Not dead."
+      },
+      {
+        "file": "crates/alfred-core/src/editor_state.rs",
+        "type": "god_object",
+        "severity": "low",
+        "note": "2652 lines; aggregates subsystems but all fields actively used. Refactoring opportunity (facade already provides abstraction boundary)."
+      }
+    ]
+  },
+  "recent_cleanup_indicators": {
+    "most_recent_clean_commit": "6207007",
+    "commit_message": "clean(alfred-core): remove unused facade functions",
+    "date": "2026-03-25",
+    "assessment": "Codebase actively maintained with cleanup passes. Demonstrates good hygiene."
   },
   "risk_distribution": {
     "critical": 0,
     "high": 0,
     "medium": 0,
-    "low": 1
+    "low": 0
   },
   "recommendations": [
     {
       "priority": 1,
-      "title": "Remove unused PanelPosition::Right variant",
-      "description": "The Right variant is defined in crates/alfred-core/src/panel.rs but never constructed or pattern-matched. Remove it to simplify the enum and clarify supported panel positions (Top, Bottom, Left only).",
-      "effort": "low",
-      "impact": "Code clarity; unused enum variant is confusing to readers"
+      "title": "Consider extracting key parts of app.rs for better testability",
+      "description": "While not dead code, the 6882-line app.rs file combines event loop with input state machine. Consider extracting more logic into pure functions (input state machine was already extracted to input.rs). This improves testability, not deadness.",
+      "effort": "medium",
+      "impact": "medium",
+      "type": "refactoring"
     },
     {
       "priority": 2,
-      "title": "Add clippy::dead_code checks to CI",
-      "description": "Run clippy with -W warnings to catch any new dead code before merge. This is mostly already done (lint target) but ensure --all-targets is used.",
+      "title": "Verify panel module test-only exports",
+      "description": "Confirm that clear_panel_cache is only used in tests. If it's never called in production, consider marking as test-only with #[cfg(test)] or documenting its test-only purpose.",
       "effort": "low",
-      "impact": "Prevents accumulation of dead code; catches unused variants and functions"
-    },
-    {
-      "priority": 3,
-      "title": "Document why some Lisp primitives are not used by plugins",
-      "description": "Some registered primitives (e.g., panel-entry-count, panel-cursor-line) are defined but not called by any plugin. Add comments explaining if they are for future use or can be removed.",
-      "effort": "low",
-      "impact": "Clarifies intent; prevents future developers from wondering about unused primitives"
+      "impact": "low",
+      "type": "cleanup"
     }
   ]
 }

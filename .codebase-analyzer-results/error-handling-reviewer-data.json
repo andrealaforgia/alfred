@@ -1,53 +1,65 @@
 {
-  "overall_score": 84,
-  "summary": "Alfred demonstrates strong error handling discipline throughout its production code. A typed AlfredError enum with thiserror is used for file I/O, a LispError enum covers parse and runtime failures, and PluginError covers plugin lifecycle failures. All fallible I/O operations at module boundaries return Result<T, E>. Command and hook failures are surfaced to the user as status messages rather than crashes. The main gaps are: the undo_stack has no size cap (unbounded memory accumulation on long editing sessions), a number of .unwrap() calls exist in production paths that are logically safe but not proven safe to the compiler, and syntax highlighting query compilation silently discards errors via .ok().",
+  "overall_score": 78,
+  "summary": "Alfred has a well-structured error handling foundation: a unified AlfredError type in alfred-core, a LispError type in alfred-lisp, and consistent use of Result<T> at domain boundaries. IO errors (file read/write) are propagated cleanly via thiserror. The main weaknesses are an unbounded undo stack (no size cap), hook callback errors that are silently stored in a side-channel buffer rather than propagated, and several unwrap() calls inside production-path code (not just tests) that could panic on unexpected terminal states. No empty catch blocks or swallowed exceptions were found in Rust terms -- errors are generally surfaced to the user via the editor message line.",
   "exception_patterns": {
-    "catch_all_count": 2,
+    "catch_all_count": 0,
     "empty_catch_count": 0,
-    "specific_catch_count": 18,
+    "specific_catch_count": 24,
     "swallowed_count": 3,
-    "custom_exception_types": 3
+    "custom_exception_types": 2
   },
   "swallowed_exceptions": [
     {
-      "file": "crates/alfred-syntax/src/highlighter.rs",
-      "line": 78,
-      "context": "Query::new(&config.grammar, config.highlight_query).ok() -- query compilation errors are silently dropped, resulting in no syntax highlighting with no diagnostic",
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 594,
+      "context": "let _ = runtime.eval(\"(dispatch-hook \\\"cursor-moved\\\")\"); -- hook dispatch result is discarded via let _",
       "severity": "medium"
     },
     {
-      "file": "crates/alfred-plugin/src/discovery.rs",
-      "line": 16,
-      "context": "fs::read_dir error on the plugins directory returns (vec![], vec![]) with no error -- callers cannot distinguish 'no plugins' from 'directory unreadable'",
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 597,
+      "context": "let _ = runtime.eval(\"(dispatch-hook \\\"buffer-changed\\\")\"); -- hook dispatch result is discarded",
+      "severity": "medium"
+    },
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 610,
+      "context": "let _ = runtime.eval(\"(dispatch-hook \\\"mode-changed\\\")\"); -- hook dispatch result is discarded",
       "severity": "low"
     },
     {
-      "file": "crates/alfred-lisp/src/bridge.rs",
-      "line": 2069,
-      "context": "Individual DirEntry errors during list-dir iteration are silently skipped with `Err(_) => continue` -- no logging or partial error reporting",
+      "file": "crates/alfred-plugin/src/discovery.rs",
+      "line": 14,
+      "context": "Err(_) => return (vec![], vec![]); -- I/O error on missing plugins directory is silently ignored",
       "severity": "low"
+    },
+    {
+      "file": "crates/alfred-tui/src/input.rs",
+      "line": 593,
+      "context": "let _ = alfred_core::command::execute(state, cmd_name); -- command execution during macro replay, error discarded",
+      "severity": "medium"
     }
   ],
   "missing_error_handling": [
     {
       "file": "crates/alfred-core/src/editor_state.rs",
-      "line": 1274,
+      "line": 570,
       "operation": "memory",
-      "description": "push_undo() pushes to undo_stack without any size limit. On a long editing session with large files, this will cause unbounded memory growth. The change_list and jump_list have MAX_SIZE limits but undo_stack does not.",
-      "severity": "high"
-    },
-    {
-      "file": "crates/alfred-syntax/src/highlighter.rs",
-      "line": 74,
-      "operation": "parsing",
-      "description": "parser.set_language() error is caught (returns false) but the callers in the event loop do not check the return value; highlighting silently degrades without a user-visible message.",
+      "description": "The undo_stack has no size cap. Editing a large file for an extended session will cause unbounded memory growth. Unlike the change_list (capped at 100 entries) and jump_list (capped at JUMP_LIST_MAX_SIZE), the undo_stack grows without limit.",
       "severity": "medium"
     },
     {
-      "file": "crates/alfred-bin/src/main.rs",
-      "line": 79,
-      "operation": "file_io",
-      "description": "Plugin discovery errors are collected and displayed as a single joined string. If many plugins fail, the full error list is concatenated and may exceed the visible message area; individual plugin errors are not individually actionable.",
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 2007,
+      "operation": "parsing",
+      "description": "In test setup code, runtime.eval(...).unwrap_or_else(|e| panic!(...)) is used. While this is test-only code, it indicates a pattern of panic-on-error in setup helpers.",
+      "severity": "low"
+    },
+    {
+      "file": "crates/alfred-syntax/src/highlighter.rs",
+      "line": 741,
+      "operation": "parsing",
+      "description": "compute_edit_notification(...).unwrap() is called in test code -- if the function returns None in a test this will panic rather than fail gracefully.",
       "severity": "low"
     }
   ],
@@ -63,84 +75,89 @@
     "timeouts": {
       "count": 1,
       "locations": [
-        "crates/alfred-tui/src/app.rs:1505 -- ct_event::poll(Duration::from_millis(100)) prevents indefinite terminal event blocking"
+        "crates/alfred-tui/src/app.rs:400 -- ct_event::poll(Duration::from_millis(100)) prevents blocking forever on terminal events"
       ]
     },
     "fallbacks": {
       "count": 3,
       "locations": [
-        "crates/alfred-tui/src/app.rs:1449 -- crossterm::terminal::size() falls back to (80, 24) via unwrap_or",
-        "crates/alfred-plugin/src/discovery.rs:16 -- missing plugins dir returns empty results instead of crashing",
-        "crates/alfred-tui/src/app.rs:1581 -- unknown commands display a message rather than panicking"
+        "crates/alfred-tui/src/app.rs:344 -- crossterm::terminal::size().unwrap_or((80, 24)) falls back to 80x24 on terminal size failure",
+        "crates/alfred-bin/src/main.rs:83 -- plugin load errors are collected and shown as a message rather than crashing",
+        "crates/alfred-lisp/src/bridge.rs:2380 -- list-dir returns empty list on any IO error rather than propagating"
       ]
     }
   },
   "error_propagation": {
-    "consistency_score": 88,
+    "consistency_score": 82,
     "layer_analysis": [
       {
-        "layer": "alfred-core (domain)",
-        "pattern": "Result<T, AlfredError> for all fallible I/O; pure functions return values directly",
-        "quality": "good"
+        "layer": "alfred-core domain",
+        "pattern": "Result<T, AlfredError> via thiserror -- clean and consistent",
+        "score": 95
       },
       {
-        "layer": "alfred-lisp (bridge)",
-        "pattern": "RuntimeError returned from all native closures; LispError wraps parse/runtime/io failures",
-        "quality": "good"
+        "layer": "alfred-lisp runtime",
+        "pattern": "LispError wrapping ParseError and RuntimeError -- clean boundary",
+        "score": 90
       },
       {
-        "layer": "alfred-plugin (discovery/registry)",
-        "pattern": "PluginError with named variants; errors collected rather than short-circuited during scan",
-        "quality": "good"
+        "layer": "alfred-lisp bridge primitives",
+        "pattern": "Errors returned as RuntimeError to Lisp, surfaced as editor messages -- reasonable",
+        "score": 80
       },
       {
-        "layer": "alfred-tui (event loop)",
-        "pattern": "io::Result<()> at the top level; Lisp/command errors become editor messages instead of propagating",
-        "quality": "good"
+        "layer": "alfred-tui event loop",
+        "pattern": "io::Result<()> at top level; deferred action errors shown as messages. Hook dispatch errors silently discarded via let _",
+        "score": 65
       },
       {
-        "layer": "alfred-bin (composition root)",
-        "pattern": "Box<dyn Error> at main boundary; plugin errors downgraded to message strings",
-        "quality": "acceptable"
+        "layer": "alfred-plugin registry",
+        "pattern": "Errors collected into Vec<String> and returned to caller -- reasonable for batch operations",
+        "score": 85
       }
     ],
     "cross_boundary_leaks": [
       {
-        "file": "crates/alfred-tui/src/app.rs",
-        "line": 1217,
-        "description": "Internal Lisp RuntimeError messages (potentially containing symbol names and expression trees) are exposed verbatim in the editor status line"
+        "description": "Hook errors are stored in a shared HookErrorBuffer (Rc<RefCell<Vec<String>>>) rather than propagated up. They are only surfaced if the dispatch-hook call checks the buffer after callbacks run. The cursor-moved/buffer-changed/mode-changed dispatch calls (app.rs:594-610) use let _ to discard the return value entirely, meaning hook errors from those dispatches are silently lost.",
+        "severity": "medium"
       }
     ]
   },
   "logging_assessment": {
-    "errors_with_context_ratio": 0.4,
+    "errors_with_context_ratio": 0.7,
     "sensitive_data_in_logs": [],
-    "level_appropriateness_score": 60,
-    "notes": "No structured logging framework is used. Errors are surfaced to the user via the editor message line rather than log files. There is no eprintln/log crate usage in production paths except for the fatal error path in main.rs. This is acceptable for a local editor but makes debugging plugin issues difficult."
+    "level_appropriateness_score": 75,
+    "notes": "Alfred uses editor message line (state.message) as the primary error display mechanism rather than a logging framework. This is appropriate for a TUI application. There is no structured logging (log crate, tracing crate) -- errors visible to the user are in the message bar. Fatal startup errors use eprintln! (main.rs:28). Performance test output uses println! in test-only code. No sensitive data was found in error messages."
   },
   "risk_distribution": {
     "critical": 0,
-    "high": 1,
-    "medium": 2,
-    "low": 3
+    "high": 0,
+    "medium": 4,
+    "low": 4
   },
   "recommendations": [
     {
       "priority": 1,
       "title": "Cap the undo_stack size to prevent unbounded memory growth",
-      "description": "Add a UNDO_MAX_SIZE constant (e.g., 1000) to push_undo() and drain oldest entries when the limit is exceeded, mirroring the existing pattern used for jump_list and change_list. Since Rope clones are O(1) via structural sharing, individual snapshots are cheap but the stack is unbounded.",
+      "description": "The undo_stack in EditorState grows without limit. Each snapshot clones the entire ropey::Rope (O(1) due to structural sharing, but still allocates a new Rope handle and metadata). For very long editing sessions this will accumulate. Add a MAX_UNDO_DEPTH constant (e.g., 1000) matching the pattern already used for change_list (CHANGE_LIST_MAX_SIZE=100) and jump_list.",
       "effort": "low"
     },
     {
       "priority": 2,
-      "title": "Propagate query compilation errors as editor messages",
-      "description": "In SyntaxHighlighter::set_language_for_file(), replace `.ok()` on Query::new() with explicit error handling that sets a diagnostic on the highlighter, and surface the message in the event loop so the user can see when highlighting fails to initialize.",
+      "title": "Surface hook dispatch errors from cursor-moved, buffer-changed, mode-changed",
+      "description": "The three primary event hook dispatches in the event loop (app.rs:594-610) use 'let _ =' to discard the Result. These should at minimum be pattern-matched to detect LispError variants and display them as editor messages, consistent with how eval_and_display handles errors.",
       "effort": "low"
     },
     {
       "priority": 3,
-      "title": "Add structured logging for plugin and Lisp errors",
-      "description": "Introduce the `log` crate (with `env_logger` or `tracing`) to write plugin load failures and hook errors to a log file (e.g., ~/.local/share/alfred/alfred.log). This would allow post-hoc debugging of plugin issues without requiring the user to reproduce interactively.",
+      "title": "Handle macro replay command errors explicitly",
+      "description": "During macro replay in input.rs:593, 'let _ = alfred_core::command::execute(state, cmd_name)' silently discards command errors. If a command in a macro fails, the macro continues silently. Consider breaking the replay loop on error and showing the error as a message.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Add structured logging for diagnostic purposes",
+      "description": "The codebase has no logging framework (tracing/log). For debugging plugin load failures and hook errors in production, add optional structured logging (e.g., tracing with an env-filter) directed to a log file rather than stdout, to avoid interfering with the TUI.",
       "effort": "medium"
     }
   ]

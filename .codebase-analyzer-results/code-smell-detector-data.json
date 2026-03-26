@@ -2,107 +2,106 @@
   "grade": "B",
   "total_issues": 14,
   "severity_distribution": {
-    "high": 2,
+    "high": 1,
     "medium": 8,
-    "low": 4
+    "low": 5
   },
   "category_distribution": {
     "Bloaters": 5,
     "Couplers": 3,
     "Change Preventers": 2,
     "Dispensables": 2,
-    "Naming": 1,
-    "Control Flow": 1
+    "Naming": 2
   },
   "solid_compliance": {
-    "SRP": 4,
-    "OCP": 7,
-    "LSP": 9,
-    "ISP": 8,
-    "DIP": 6
+    "SRP": 6,
+    "OCP": 8,
+    "LSP": 10,
+    "ISP": 9,
+    "DIP": 7
   },
   "top_issues": [
     {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "issue": "Large Module / God File: 5669 lines covering 70+ distinct register_* functions spanning buffer, cursor, theme, hooks, keymaps, panels, strings, lists, filesystem and focus primitives. All Lisp–Rust bridging lives in one file.",
+      "severity": "high",
+      "category": "Bloaters"
+    },
+    {
       "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Large File / God Module: 7987 lines combining event loop, input state machine, all command dispatch, substitute/global/search execution, gutter rendering, and test suite. Exceeds any reasonable single-responsibility boundary.",
-      "severity": "high",
-      "category": "Bloaters"
-    },
-    {
-      "file": "crates/alfred-core/src/editor_state.rs",
-      "issue": "Large Class / God Object: EditorState has 39 public fields covering buffer, cursor, viewport, keymaps, registers, undo/redo, macros, marks, jump list, change list, search, theme, panels, and focus. Single mutable container aggregates all editor subsystems.",
-      "severity": "high",
-      "category": "Bloaters"
-    },
-    {
-      "file": "crates/alfred-core/src/editor_state.rs",
-      "issue": "Long Method: register_builtin_commands is ~887 lines, registering ~30+ command handlers inline using repeated crate:: path prefixes rather than a data-driven table.",
+      "issue": "Large Module: 6882 lines. Though 60% is test code, the production run() function contains a long event loop with SaveBuffer, OpenFile, ExecCommand, Eval, and SaveAndQuit arms that could be extracted to a dispatcher module.",
       "severity": "medium",
       "category": "Bloaters"
     },
     {
-      "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Long Method: handle_key_event is ~605 lines, handling 12+ distinct InputState variants, count accumulation, self-insert, and all motion/operator dispatch in a single function body.",
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "issue": "Large Struct (God Object tendency): EditorState carries 35+ public fields covering buffer, cursor, viewport, registers, undo/redo stacks, macro system, jump list, change list, theme, named_themes, panels, line styles, line backgrounds, keymaps, hooks, and focus state. Single Responsibility is strained.",
+      "severity": "medium",
+      "category": "Bloaters"
+    },
+    {
+      "file": "crates/alfred-tui/src/input.rs",
+      "issue": "Long Method: handle_key_event() spans ~400 lines with 12 distinct if-let / match branches (one per InputState variant), each containing non-trivial logic. The function handles macro recording, command mode, search mode, PendingChar, PendingReplace, PendingMark, PendingJumpMark, PendingRegister, PendingMacroRecord, PendingMacroPlay, OperatorPending, and TextObject states.",
       "severity": "medium",
       "category": "Bloaters"
     },
     {
       "file": "crates/alfred-lisp/src/bridge.rs",
-      "issue": "Feature Envy / Insider Trading: 5198-line bridge module directly accesses 8+ alfred_core sub-modules (buffer, cursor, viewport, hook, command, theme, panel, editor_state) via repeated Rc<RefCell<EditorState>> borrows, creating intense structural coupling.",
+      "issue": "Duplicated Code: argument-extraction pattern (match args.get(N) / Some(Value::Int(n)) / Some(other) / None returning RuntimeError) is repeated ~20 times across register_set_line_style, register_set_line_background, register_define_panel, register_set_panel_line, etc. extract_string_arg and extract_string_arg_at helpers exist but integer/bool extraction is not abstracted.",
+      "severity": "medium",
+      "category": "Dispensables"
+    },
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "issue": "Feature Envy / Insider Trading: the run() event loop directly accesses state_rc.borrow().buffer.version(), state_rc.borrow().cursor, state_rc.borrow().mode, and state_rc.borrow().message across multiple borrows for change-detection, rather than a single snapshot or dedicated change-set return value from handle_key_event.",
       "severity": "medium",
       "category": "Couplers"
     },
     {
       "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Message Chain / Insider Trading: 355 occurrences of alfred_core:: fully-qualified path in app.rs, indicating the TUI layer reaches deeply into core internals rather than going through a facade.",
+      "issue": "Tramp Data / Workaround: Dynamic Lisp command handlers receive a dummy EditorState (alfred_core::editor_state::new(1,1)) because the real state is captured by the Rc<RefCell> closure. This is a workaround for the architectural tension between the CommandHandler trait expecting &mut EditorState and Lisp closures needing Rc<RefCell>.",
       "severity": "medium",
       "category": "Couplers"
-    },
-    {
-      "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Conditional Complexity: execute_colon_command uses multi-arm string matching (q, q!, wq, w, w <path>, e <path>, eval, g/, g!/, v/, s/, %s/) all as one match; brittle against extension.",
-      "severity": "medium",
-      "category": "Control Flow"
-    },
-    {
-      "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Divergent Change: app.rs must be modified when adding any of: new InputState variant, new colon command, new deferred action type, new Vim motion, or new rendering hook. Multiple reasons to change in one file.",
-      "severity": "medium",
-      "category": "Change Preventers"
     },
     {
       "file": "crates/alfred-core/src/editor_state.rs",
-      "issue": "Shotgun Surgery: adding a new editor subsystem (e.g., tabs or split panes) requires adding field(s) to EditorState, updating new(), and updating any snapshot/undo types — scattered across the file.",
+      "issue": "Divergent Change: EditorState must be modified when adding new editor features (macro system, jump list, change list, panels, line styles) AND when adding new Lisp primitives, AND when the rendering pipeline needs new state. Any one domain concern forces changes to this single struct.",
+      "severity": "medium",
+      "category": "Change Preventers"
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "issue": "Shotgun Surgery: adding a new Lisp primitive requires (1) a new register_X function in bridge.rs, (2) a call added to the appropriate register_X_primitives() grouper, and (3) the grouper called in main.rs. The registration-call chain is spread across three locations.",
       "severity": "medium",
       "category": "Change Preventers"
     },
     {
       "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Tramp Data: dummy EditorState created and discarded when calling Dynamic (Lisp) command handlers so the closure can use its own captured Rc<RefCell<EditorState>> — a workaround for the borrow-checker.",
-      "severity": "medium",
+      "issue": "Dead Code (unused variable): let _lisp_env = runtime.env() on line 134 of bridge.rs (register_define_command) is assigned but never used — comment says 'no longer used'.",
+      "severity": "low",
+      "category": "Dispensables"
+    },
+    {
+      "file": "crates/alfred-core/src/rainbow_csv.rs",
+      "issue": "Dead Module: rainbow_csv.rs exists as a file in alfred-core/src but is not exported from lib.rs (not listed in pub mod declarations). The module is orphaned from the crate's public API.",
+      "severity": "low",
+      "category": "Dispensables"
+    },
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "issue": "Magic Numbers: hardcoded poll timeout of 100ms (Duration::from_millis(100)) and fallback terminal size (80, 24) are inline literals with no named constant.",
+      "severity": "low",
+      "category": "Bloaters"
+    },
+    {
+      "file": "crates/alfred-tui/src/input.rs",
+      "issue": "Coupling via Direct Field Access: handle_key_event accesses 15+ distinct EditorState fields directly (macro_recording, macro_replaying, macro_buffer, pending_register, last_char_find, search_pattern, search_forward, etc.) creating wide structural coupling between the input module and the state model.",
+      "severity": "low",
       "category": "Couplers"
     },
     {
-      "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Duplicated Code: execute_delete_with_motion and execute_yank_with_motion share the same CharWise/LineWise pattern but with different operations; the range-computation logic is repeated.",
-      "severity": "low",
-      "category": "Dispensables"
-    },
-    {
-      "file": "crates/alfred-bin/src/main.rs",
-      "issue": "Dead Variable: PluginRegistry built during load_plugins() is immediately dropped (let _ = reg) rather than stored on EditorState. Noted as future work but creates confusion now.",
-      "severity": "low",
-      "category": "Dispensables"
-    },
-    {
       "file": "crates/alfred-lisp/src/bridge.rs",
-      "issue": "Dead Assignment: let _lisp_env = runtime.env() in register_define_command is assigned but immediately annotated as no longer used. Should be removed.",
-      "severity": "low",
-      "category": "Dispensables"
-    },
-    {
-      "file": "crates/alfred-tui/src/app.rs",
-      "issue": "Boolean Blindness: execute_global_delete uses a plain bool invert parameter. A small enum (MatchingLines / NonMatchingLines) would be clearer.",
+      "issue": "Inconsistent Naming: register_string_primitives and register_list_primitives use NativeFunc (plain fn pointers registered directly on env) while all other register_X functions use define_native_closure with closures. This stylistic inconsistency makes the bridge harder to navigate.",
       "severity": "low",
       "category": "Naming"
     }
