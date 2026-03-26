@@ -23,6 +23,7 @@
 (define-key "browse-mode" "Char:/" "browser-start-search")
 (define-key "browse-mode" "Ctrl:e" "toggle-sidebar")
 (define-key "browse-mode" "Ctrl:b" "browse")
+(define-key "browse-mode" "Ctrl:p" "project-search-start")
 
 (set-cursor-shape "browse" "block")
 
@@ -837,6 +838,7 @@
 (define-key "filetree-mode" "Char:q" "sidebar-unfocus")
 (define-key "filetree-mode" "Escape" "sidebar-unfocus")
 (define-key "filetree-mode" "Ctrl:e" "toggle-sidebar")
+(define-key "filetree-mode" "Ctrl:p" "project-search-start")
 
 ;; Prepend ".." entry for parent navigation unless at root
 (define sidebar-add-parent-entry
