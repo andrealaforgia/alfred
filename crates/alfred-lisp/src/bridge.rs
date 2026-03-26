@@ -105,7 +105,9 @@ pub fn register_rendering_primitives(runtime: &LispRuntime, state: Rc<RefCell<Ed
 fn register_viewport_top_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "viewport-top-line", move |_env, _args| {
         let editor = state.borrow();
-        Ok(Value::Int(editor.viewport.top_line as i32))
+        Ok(Value::Int(
+            alfred_core::facade::viewport_top_line(&editor) as i32
+        ))
     });
 }
 
@@ -115,7 +117,9 @@ fn register_viewport_top_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorSta
 fn register_viewport_height(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "viewport-height", move |_env, _args| {
         let editor = state.borrow();
-        Ok(Value::Int(editor.viewport.height as i32))
+        Ok(Value::Int(
+            alfred_core::facade::viewport_height(&editor) as i32
+        ))
     });
 }
 
@@ -560,9 +564,8 @@ fn register_quit(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
 fn register_cursor_position(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "cursor-position", move |_env, _args| {
         let editor = state.borrow();
-        let line = editor.cursor.line as i32;
-        let column = editor.cursor.column as i32;
-        let list: List = vec![Value::Int(line), Value::Int(column)]
+        let (line, column) = alfred_core::facade::cursor_position(&editor);
+        let list: List = vec![Value::Int(line as i32), Value::Int(column as i32)]
             .into_iter()
             .collect();
         Ok(Value::List(list))
@@ -728,7 +731,9 @@ fn register_save_buffer(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) 
 fn register_current_mode(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "current-mode", move |_env, _args| {
         let editor = state.borrow();
-        Ok(Value::String(editor.mode.clone()))
+        Ok(Value::String(
+            alfred_core::facade::current_mode(&editor).to_string(),
+        ))
     });
 }
 
@@ -775,8 +780,8 @@ fn register_get_cursor_shape(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorStat
         let mode_name = extract_string_arg(&args, "get-cursor-shape")?;
 
         let editor = state.borrow();
-        match editor.cursor_shapes.get(&mode_name) {
-            Some(shape) => Ok(Value::String(shape.clone())),
+        match alfred_core::facade::cursor_shape(&editor, &mode_name) {
+            Some(shape) => Ok(Value::String(shape.to_string())),
             None => Ok(Value::NIL),
         }
     });
