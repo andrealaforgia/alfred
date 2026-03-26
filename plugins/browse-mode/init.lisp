@@ -46,6 +46,18 @@
 ;; Helpers — no local (define) inside lambdas, use args or inline
 ;; ---------------------------------------------------------------------------
 
+;; Check if entry name contains query (case-insensitive substring match)
+(define browser-entry-matches
+  (lambda (entry query)
+    (str-contains (str-lower (first entry)) (str-lower query))))
+
+;; Filter entries by query — returns only entries whose name contains query
+(define browser-filter-entries
+  (lambda (entries query)
+    (if (= (str-length query) 0)
+      entries
+      (filter (lambda (e) (browser-entry-matches e query)) entries))))
+
 ;; Format entry: prefix + name + suffix
 (define browser-format-entry
   (lambda (entry idx)
