@@ -1022,6 +1022,8 @@ pub fn register_buffer_style_primitives(runtime: &LispRuntime, state: Rc<RefCell
 
     register_clear_line_styles(env.clone(), state.clone());
     register_set_line_style(env.clone(), state.clone());
+    register_set_line_background(env.clone(), state.clone());
+    register_clear_line_backgrounds(env.clone(), state.clone());
     register_buffer_line_count(env.clone(), state.clone());
     register_buffer_get_line(env, state);
 }
@@ -1031,6 +1033,54 @@ fn register_clear_line_styles(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorSta
     define_native_closure(&env, "clear-line-styles", move |_env, _args| {
         let mut editor = state.borrow_mut();
         alfred_core::editor_state::clear_line_styles(&mut editor);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `set-line-background`: sets a full-line background color.
+///
+/// Usage: `(set-line-background line fg-color bg-color)`
+fn register_set_line_background(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "set-line-background", move |_env, args| {
+        let line = match args.first() {
+            Some(Value::Int(n)) => *n as usize,
+            _ => {
+                return Err(RuntimeError {
+                    msg: "set-line-background: expected integer for line".to_string(),
+                })
+            }
+        };
+        let fg_str = match args.get(1) {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(RuntimeError {
+                    msg: "set-line-background: expected fg color string".to_string(),
+                })
+            }
+        };
+        let bg_str = match args.get(2) {
+            Some(Value::String(s)) => s.clone(),
+            _ => {
+                return Err(RuntimeError {
+                    msg: "set-line-background: expected bg color string".to_string(),
+                })
+            }
+        };
+        let fg = alfred_core::theme::parse_color(&fg_str).ok_or_else(|| RuntimeError {
+            msg: format!("set-line-background: invalid fg color '{}'", fg_str),
+        })?;
+        let bg = alfred_core::theme::parse_color(&bg_str).ok_or_else(|| RuntimeError {
+            msg: format!("set-line-background: invalid bg color '{}'", bg_str),
+        })?;
+        state.borrow_mut().line_backgrounds.insert(line, (fg, bg));
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `clear-line-backgrounds`: clears all per-line background colors.
+fn register_clear_line_backgrounds(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "clear-line-backgrounds", move |_env, _args| {
+        state.borrow_mut().line_backgrounds.clear();
         Ok(Value::NIL)
     });
 }
@@ -2436,7 +2486,8 @@ fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
                 let filename = new_buffer.filename().unwrap_or(&path_str).to_string();
                 let mut editor = state.borrow_mut();
                 editor.buffer = new_buffer;
-                editor.line_styles.clear(); // Clear stale styles from previous file/browser
+                editor.line_styles.clear();
+                editor.line_backgrounds.clear();
                 editor.cursor = cursor::new(0, 0);
                 editor.viewport.top_line = 0;
                 editor.mode = "normal".to_string();

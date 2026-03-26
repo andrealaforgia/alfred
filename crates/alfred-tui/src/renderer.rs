@@ -284,7 +284,15 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
                 let line_content = buffer::get_line_string(&state.buffer, buffer_line_index)
                     .trim_end_matches('\n')
                     .to_string();
-                build_styled_line(&line_content, state.line_styles.get(&buffer_line_index))
+                // Check for full-line background color (e.g., browser cursor highlight)
+                if let Some(&(fg, bg)) = state.line_backgrounds.get(&buffer_line_index) {
+                    let fg_color = theme_color_to_ratatui(fg);
+                    let bg_color = theme_color_to_ratatui(bg);
+                    let style = Style::default().fg(fg_color).bg(bg_color);
+                    Line::from(Span::styled(line_content, style))
+                } else {
+                    build_styled_line(&line_content, state.line_styles.get(&buffer_line_index))
+                }
             } else {
                 Line::raw("")
             }

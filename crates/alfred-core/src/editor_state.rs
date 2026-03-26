@@ -134,6 +134,9 @@ pub struct EditorState {
     /// Maps line number -> Vec of (start_col, end_col, ThemeColor) segments.
     /// Used by the renderer to apply per-character colors within a line.
     pub line_styles: HashMap<usize, Vec<(usize, usize, crate::theme::ThemeColor)>>,
+    /// Per-line background colors for full-line highlighting (e.g., cursor bar).
+    /// Maps line number -> (fg_color, bg_color).
+    pub line_backgrounds: HashMap<usize, (crate::theme::ThemeColor, crate::theme::ThemeColor)>,
     /// Generic panel registry for named screen regions managed by plugins.
     /// Panels are positioned at screen edges (top, bottom, left, right).
     pub panels: PanelRegistry,
@@ -1496,15 +1499,17 @@ pub fn new(width: u16, height: u16) -> EditorState {
         change_list_index: 0,
         tab_width: 4,
         line_styles: HashMap::new(),
+        line_backgrounds: HashMap::new(),
         panels: crate::panel::new(),
         cli_argument: None,
         focused_panel: None,
     }
 }
 
-/// Clears all per-line style segments.
+/// Clears all per-line style segments and line backgrounds.
 pub fn clear_line_styles(state: &mut EditorState) {
     state.line_styles.clear();
+    state.line_backgrounds.clear();
 }
 
 /// Adds a style segment for a specific line.

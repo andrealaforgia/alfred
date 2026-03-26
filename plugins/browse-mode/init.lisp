@@ -75,10 +75,13 @@
 ;; ---------------------------------------------------------------------------
 
 ;; Style a single entry line (line-num is the buffer line, idx is the entry index)
+(define browser-color-cursor-fg "#1e1e2e")
+(define browser-color-cursor-bg "#cdd6f4")
+
 (define browser-style-entry
   (lambda (entry idx line-num)
     (if (= idx browser-cursor)
-      (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-pink)
+      (set-line-background line-num browser-color-cursor-fg browser-color-cursor-bg)
       (if (= (nth 1 entry) "dir")
         (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-blue)
         (set-line-style line-num 0 (str-length (buffer-get-line line-num)) browser-color-gray)))))
@@ -98,6 +101,7 @@
 (define browser-apply-styles
   (lambda ()
     (clear-line-styles)
+    (clear-line-backgrounds)
     (set-line-style 0 0 (str-length (buffer-get-line 0)) browser-color-blue)
     (if (> (length browser-entries) 0)
       (browser-style-entries browser-entries 0)
