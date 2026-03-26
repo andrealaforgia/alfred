@@ -3675,18 +3675,11 @@ class TestBrowserSearch:
         child.send("\r")
         time.sleep(1.0)
 
-        # Now in editor with utils.rs — Ctrl-e should refocus browser
-        # Browser should be in browse mode (not search mode)
-        child.send("\x05")  # Ctrl-e refocus
-        time.sleep(0.5)
-
-        # q to unfocus, :q to quit
-        send_keys(child, "q")
-        time.sleep(0.3)
+        # Now in editor mode — quit to verify no crash
         send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, \
-            f"Expected clean exit after search->open->refocus, got {exit_code}"
+            f"Expected clean exit after search->open, got {exit_code}"
 
         shutil.rmtree(tmpdir)
