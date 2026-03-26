@@ -115,30 +115,47 @@
           (browser-style-entries (rest entries) (+ idx 1))
           nil)))))
 
+;; Return the entries currently being displayed (filtered or full)
+(define browser-display-entries
+  (lambda ()
+    (if browser-search-active
+      browser-filtered-entries
+      browser-entries)))
+
 ;; Apply all line styles for the browser view
 (define browser-apply-styles
   (lambda ()
     (clear-line-styles)
     (clear-line-backgrounds)
-    (set-line-style 0 0 (str-length (buffer-get-line 0)) browser-color-blue)
-    (if (> (length browser-entries) 0)
-      (browser-style-entries browser-entries 0)
+    (set-line-style 0 0 (str-length (buffer-get-line 0))
+      (if browser-search-active browser-color-pink browser-color-blue))
+    (if (> (length (browser-display-entries)) 0)
+      (browser-style-entries (browser-display-entries) 0)
       nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Render: rebuild buffer text from current state
 ;; ---------------------------------------------------------------------------
 
+;; Header line: shows search prompt when filtering, directory path otherwise
+(define browser-header-line
+  (lambda ()
+    (if browser-search-active
+      (str-concat (list " / " browser-search-query))
+      (str-concat (list " " browser-current-dir)))))
+
 (define browser-render
   (lambda ()
     (buffer-set-content
       (str-concat
         (list
-          " " browser-current-dir newline
+          (browser-header-line) newline
           newline
-          (if (= (length browser-entries) 0)
-            "   (empty directory)"
-            (browser-build-lines browser-entries 0)))))
+          (if (= (length (browser-display-entries)) 0)
+            (if browser-search-active
+              "   (no matches)"
+              "   (empty directory)")
+            (browser-build-lines (browser-display-entries) 0)))))
     (browser-apply-styles)))
 
 ;; ---------------------------------------------------------------------------
@@ -166,7 +183,7 @@
 
 (define-command "browser-cursor-down"
   (lambda ()
-    (if (< browser-cursor (- (length browser-entries) 1))
+    (if (< browser-cursor (- (length (browser-display-entries)) 1))
       (set browser-cursor (+ browser-cursor 1))
       nil)
     (browser-render)))
@@ -185,22 +202,33 @@
 
 (define-command "browser-jump-last"
   (lambda ()
-    (if (> (length browser-entries) 0)
-      (set browser-cursor (- (length browser-entries) 1))
+    (if (> (length (browser-display-entries)) 0)
+      (set browser-cursor (- (length (browser-display-entries)) 1))
       nil)
     (browser-render)))
 
+;; Helper to get the currently selected entry (works in both normal and search mode)
+(define browser-selected-entry
+  (lambda ()
+    (nth browser-cursor (browser-display-entries))))
+
 (define-command "browser-enter"
   (lambda ()
-    (if (= (length browser-entries) 0)
+    (if (= (length (browser-display-entries)) 0)
       nil
-      (if (= (nth 1 (nth browser-cursor browser-entries)) "dir")
-        (if (= (first (nth browser-cursor browser-entries)) "..")
-          (browser-do-parent)
-          (browser-do-enter-dir (first (nth browser-cursor browser-entries))))
-        (open-file
-          (path-join browser-current-dir
-            (first (nth browser-cursor browser-entries))))))))
+      (if (= (nth 1 (browser-selected-entry)) "dir")
+        (if (= (first (browser-selected-entry)) "..")
+          (begin
+            (if browser-search-active (browser-search-dismiss) nil)
+            (browser-do-parent))
+          (begin
+            (if browser-search-active (browser-search-dismiss) nil)
+            (browser-do-enter-dir (first (browser-selected-entry)))))
+        (begin
+          (if browser-search-active (browser-search-dismiss) nil)
+          (open-file
+            (path-join browser-current-dir
+              (first (browser-selected-entry)))))))))
 
 (define browser-do-enter-dir
   (lambda (name)
@@ -238,6 +266,101 @@
 
 (define-command "browser-quit"
   (lambda () (quit)))
+
+;; ---------------------------------------------------------------------------
+;; Browser search/filter commands
+;; ---------------------------------------------------------------------------
+
+;; Dismiss search: clear search state, stay on current entries
+(define browser-search-dismiss
+  (lambda ()
+    (set browser-search-active nil)
+    (set browser-search-query (str-concat (list)))
+    (set browser-filtered-entries (list))))
+
+;; Start search: save cursor, activate search mode, switch keymap
+(define-command "browser-start-search"
+  (lambda ()
+    (set browser-pre-search-cursor browser-cursor)
+    (set browser-search-active 1)
+    (set browser-search-query (str-concat (list)))
+    (set browser-filtered-entries browser-entries)
+    (set browser-cursor 0)
+    (set-active-keymap "browser-search-mode")
+    (browser-render)))
+
+;; Apply filter: update filtered entries and reset cursor
+(define browser-search-apply-filter
+  (lambda ()
+    (set browser-filtered-entries
+      (browser-filter-entries browser-entries browser-search-query))
+    (set browser-cursor 0)
+    (browser-render)))
+
+;; Append a character to the search query and re-filter
+(define browser-search-append-char
+  (lambda (ch)
+    (set browser-search-query (str-concat (list browser-search-query ch)))
+    (browser-search-apply-filter)))
+
+;; Backspace: remove last character or cancel if query is empty
+(define-command "browser-search-backspace"
+  (lambda ()
+    (if (= (str-length browser-search-query) 0)
+      (browser-search-do-cancel)
+      (begin
+        (set browser-search-query
+          (str-substring browser-search-query 0
+            (- (str-length browser-search-query) 1)))
+        (browser-search-apply-filter)))))
+
+;; Cancel search: restore pre-search cursor and return to browse keymap
+(define browser-search-do-cancel
+  (lambda ()
+    (set browser-cursor browser-pre-search-cursor)
+    (browser-search-dismiss)
+    (set-active-keymap "browse-mode")
+    (browser-render)))
+
+(define-command "browser-search-cancel"
+  (lambda () (browser-search-do-cancel)))
+
+;; Enter from search: open selected entry (browser-enter handles search dismiss)
+(define-command "browser-search-enter"
+  (lambda ()
+    (if (= (length (browser-display-entries)) 0)
+      nil
+      (if (= (nth 1 (browser-selected-entry)) "dir")
+        (if (= (first (browser-selected-entry)) "..")
+          (begin
+            (browser-search-dismiss)
+            (set-active-keymap "browse-mode")
+            (browser-do-parent))
+          (begin
+            (browser-search-dismiss)
+            (set-active-keymap "browse-mode")
+            (browser-do-enter-dir (first (browser-selected-entry)))))
+        (begin
+          (browser-search-dismiss)
+          (set-active-keymap "browse-mode")
+          (open-file
+            (path-join browser-current-dir
+              (first (browser-selected-entry)))))))))
+
+;; Cursor navigation within search results
+(define-command "browser-search-cursor-down"
+  (lambda ()
+    (if (< browser-cursor (- (length (browser-display-entries)) 1))
+      (set browser-cursor (+ browser-cursor 1))
+      nil)
+    (browser-render)))
+
+(define-command "browser-search-cursor-up"
+  (lambda ()
+    (if (> browser-cursor 0)
+      (set browser-cursor (- browser-cursor 1))
+      nil)
+    (browser-render)))
 
 ;; Return to browser from normal mode via :browse or Ctrl-b
 (define-command "browse"
