@@ -80,10 +80,10 @@ fn convert_modifiers(ct_mods: CtKeyModifiers) -> Modifiers {
 // Re-export input state machine types from dedicated module
 // ---------------------------------------------------------------------------
 
-#[allow(unused_imports)]
-pub(crate) use crate::input::{
-    execute_colon_command, handle_key_event, DeferredAction, InputState, Operator,
-};
+pub(crate) use crate::input::{handle_key_event, DeferredAction, InputState};
+
+#[cfg(test)]
+pub(crate) use crate::input::{execute_colon_command, Operator};
 
 /// Evaluates a Lisp expression and sets the result (or error) as the editor message.
 ///
