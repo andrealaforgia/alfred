@@ -273,7 +273,7 @@ fn execute_delete_with_motion(
         }
     }
 
-    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+    state.viewport = alfred_core::facade::viewport_adjust(state);
 }
 
 /// Executes a delete operator over an explicit character range (for text objects).
@@ -294,7 +294,7 @@ fn execute_delete_range(
         to.column,
     );
     state.cursor = alfred_core::cursor::ensure_within_bounds(from, &state.buffer);
-    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+    state.viewport = alfred_core::facade::viewport_adjust(state);
 }
 
 /// Executes a yank operator over an explicit character range (for text objects).
@@ -450,8 +450,7 @@ pub(crate) fn handle_key_event(
                     match found {
                         Some((line, col)) => {
                             state.cursor = alfred_core::cursor::new(line, col);
-                            state.viewport =
-                                alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                            state.viewport = alfred_core::facade::viewport_adjust(state);
                             state.message = None;
                         }
                         None => {
@@ -495,7 +494,7 @@ pub(crate) fn handle_key_event(
                 alfred_core::editor_state::execute_char_find(state.cursor, &state.buffer, kind, ch)
             {
                 state.cursor = new_cursor;
-                state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                state.viewport = alfred_core::facade::viewport_adjust(state);
             }
             state.last_char_find = Some((kind, ch));
         }
@@ -649,7 +648,7 @@ pub(crate) fn handle_key_event(
                         alfred_core::buffer::delete_line(&state.buffer, state.cursor.line);
                     state.cursor =
                         alfred_core::cursor::ensure_within_bounds(state.cursor, &state.buffer);
-                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    state.viewport = alfred_core::facade::viewport_adjust(state);
                 }
                 Operator::Change => {
                     // cc = clear current line content, enter insert mode
@@ -660,7 +659,7 @@ pub(crate) fn handle_key_event(
                     state.mode = alfred_core::editor_state::MODE_INSERT.to_string();
                     state.active_keymaps =
                         vec![format!("{}-mode", alfred_core::editor_state::MODE_INSERT)];
-                    state.viewport = alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                    state.viewport = alfred_core::facade::viewport_adjust(state);
                 }
                 Operator::Yank => {
                     // yy = yank entire line
@@ -697,7 +696,7 @@ pub(crate) fn handle_key_event(
         }
 
         // Look up the key in the keymap to get a command name
-        if let Some(cmd_name) = alfred_core::editor_state::resolve_key(state, key) {
+        if let Some(cmd_name) = alfred_core::facade::resolve_key(state, key) {
             if let Some((motion_cursor, motion_kind)) = execute_motion(state, &cmd_name) {
                 match operator {
                     Operator::Delete => {
@@ -825,7 +824,7 @@ pub(crate) fn handle_key_event(
     // Non-digit key in normal mode: resolve through active keymaps.
     // The accumulated count (if any) is returned for the caller to repeat the command.
     let repeat_count = pending_count;
-    match alfred_core::editor_state::resolve_key(state, key) {
+    match alfred_core::facade::resolve_key(state, key) {
         Some(ref cmd) if cmd == "enter-command-mode" => {
             state.message = Some(":".to_string());
             // Discard count when entering command mode
@@ -923,8 +922,7 @@ pub(crate) fn handle_key_event(
                             &c.to_string(),
                         );
                         state.cursor = alfred_core::cursor::move_right(state.cursor, &state.buffer);
-                        state.viewport =
-                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                        state.viewport = alfred_core::facade::viewport_adjust(state);
                     }
                     KeyCode::Enter => {
                         alfred_core::editor_state::push_undo(state);
@@ -934,8 +932,7 @@ pub(crate) fn handle_key_event(
                             alfred_core::buffer::insert_at(&state.buffer, line, col, "\n");
                         // Move cursor to beginning of new line
                         state.cursor = alfred_core::cursor::new(line + 1, 0);
-                        state.viewport =
-                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                        state.viewport = alfred_core::facade::viewport_adjust(state);
                     }
                     KeyCode::Tab => {
                         alfred_core::editor_state::push_undo(state);
@@ -948,8 +945,7 @@ pub(crate) fn handle_key_event(
                             state.cursor =
                                 alfred_core::cursor::move_right(state.cursor, &state.buffer);
                         }
-                        state.viewport =
-                            alfred_core::viewport::adjust(state.viewport, &state.cursor);
+                        state.viewport = alfred_core::facade::viewport_adjust(state);
                     }
                     _ => {}
                 }
@@ -1106,7 +1102,7 @@ fn execute_substitute(
         }
     } else {
         let cursor_line = state.cursor.line;
-        let old_content = alfred_core::buffer::content(&state.buffer);
+        let old_content = alfred_core::facade::buffer_content(state);
         let new_buffer = alfred_core::buffer::substitute_in_line(
             &state.buffer,
             cursor_line,
@@ -1234,7 +1230,7 @@ pub(crate) fn eval_and_display(
 pub(crate) fn compute_gutter_content(state: &EditorState) -> (u16, Vec<String>) {
     let top_line = state.viewport.top_line;
     let height = state.viewport.height as usize;
-    let line_count = alfred_core::buffer::line_count(&state.buffer);
+    let line_count = alfred_core::facade::buffer_line_count(state);
 
     // Check if any hooks are registered for "render-gutter"
     let start_line_1indexed = top_line + 1;
@@ -1336,10 +1332,10 @@ fn apply_syntax_highlights(state_rc: &Rc<RefCell<EditorState>>, highlighter: &Sy
     }
 
     let state = state_rc.borrow();
-    let source = alfred_core::buffer::content(&state.buffer);
+    let source = alfred_core::facade::buffer_content(&state);
     let top_line = state.viewport.top_line;
     let visible_height = state.viewport.height as usize;
-    let total_lines = alfred_core::buffer::line_count(&state.buffer);
+    let total_lines = alfred_core::facade::buffer_line_count(&state);
     let end_line = (top_line + visible_height).min(total_lines);
 
     let ranges = highlighter.highlight_lines(&source, top_line, end_line);
@@ -1431,7 +1427,7 @@ pub fn run(
         let state = state_rc.borrow();
         if let Some(filename) = state.buffer.filename() {
             highlighter.set_language_for_file(filename);
-            let source = alfred_core::buffer::content(&state.buffer);
+            let source = alfred_core::facade::buffer_content(&state);
             drop(state);
             highlighter.parse(&source);
         }
@@ -1485,7 +1481,7 @@ pub fn run(
                 let state = state_rc.borrow();
                 if let Some(filename) = state.buffer.filename() {
                     let fname = filename.to_string();
-                    let source = alfred_core::buffer::content(&state.buffer);
+                    let source = alfred_core::facade::buffer_content(&state);
                     drop(state);
                     highlighter.set_language_for_file(&fname);
                     highlighter.parse(&source);
@@ -1517,7 +1513,7 @@ pub fn run(
                 let prev_mode = state_rc.borrow().mode.clone();
                 // Capture old source for incremental syntax re-parsing
                 let old_source = if highlighter.has_language() {
-                    Some(alfred_core::buffer::content(&state_rc.borrow().buffer))
+                    Some(alfred_core::facade::buffer_content(&state_rc.borrow()))
                 } else {
                     None
                 };
@@ -1644,7 +1640,7 @@ pub fn run(
                                 // Re-initialize syntax highlighting for the new file
                                 highlighter.set_language_for_file(&filename);
                                 let source =
-                                    alfred_core::buffer::content(&state_rc.borrow().buffer);
+                                    alfred_core::facade::buffer_content(&state_rc.borrow());
                                 highlighter.parse(&source);
                             }
                             Err(e) => {
@@ -1703,7 +1699,7 @@ pub fn run(
 
                     // Incremental re-parse for syntax highlighting after edits
                     if highlighter.has_language() {
-                        let new_source = alfred_core::buffer::content(&state_rc.borrow().buffer);
+                        let new_source = alfred_core::facade::buffer_content(&state_rc.borrow());
                         if let Some(ref old_src) = old_source {
                             highlighter.incremental_update(old_src, &new_source);
                         } else {
