@@ -4521,3 +4521,96 @@ class TestBrowserFileSearch:
             f"Expected clean exit after no-match search, got {exit_code}"
 
         shutil.rmtree(tmpdir)
+
+
+class TestProjectFileSearch:
+    """Verify Ctrl-p project-wide recursive file search."""
+
+    def test_ctrl_p_finds_file_in_subfolder(self):
+        """Ctrl-p searches recursively and opens a file nested in subfolders."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_")
+        # Create a nested structure:
+        # tmpdir/
+        #   top.txt
+        #   src/
+        #     main.rs
+        #   src/core/
+        #     deep_target.rs    <-- this is the file we'll search for
+        os.makedirs(os.path.join(tmpdir, "src", "core"))
+        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
+            f.write("top level\n")
+        with open(os.path.join(tmpdir, "src", "main.rs"), "w") as f:
+            f.write("fn main() {}\n")
+        target = os.path.join(tmpdir, "src", "core", "deep_target.rs")
+        with open(target, "w") as f:
+            f.write("pub fn deep() { 42 }\n")
+
+        # Open Alfred on a file (so we're in normal editor mode)
+        top_file = os.path.join(tmpdir, "top.txt")
+        child = spawn_alfred(top_file)
+
+        # Press Ctrl-p to activate project-wide search
+        child.send("\x10")  # Ctrl-p
+        time.sleep(1.0)
+
+        # Type 'deep_target' to search for the nested file
+        for ch in "deep_target":
+            send_keys(child, ch)
+            time.sleep(0.1)
+        time.sleep(0.5)
+
+        # Press Enter to open the found file
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Should now be editing deep_target.rs — edit it to prove it's the right file
+        send_keys(child, "A")  # append at end of line
+        time.sleep(0.2)
+        send_keys(child, " // found-by-ctrlp")
+        time.sleep(0.2)
+        child.send("\x1b")  # Escape
+        time.sleep(0.3)
+
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after Ctrl-p search, got {exit_code}"
+
+        saved = read_file(target)
+        assert "found-by-ctrlp" in saved, \
+            f"Expected 'found-by-ctrlp' in deep_target.rs after Ctrl-p open+edit, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_ctrl_p_escape_cancels_search(self):
+        """Pressing Escape during Ctrl-p search returns to the editor."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_ctrlp_esc_")
+        target = os.path.join(tmpdir, "file.txt")
+        with open(target, "w") as f:
+            f.write("original\n")
+
+        child = spawn_alfred(target)
+
+        # Ctrl-p then Escape
+        child.send("\x10")  # Ctrl-p
+        time.sleep(0.5)
+        for ch in "abc":
+            send_keys(child, ch)
+            time.sleep(0.1)
+        time.sleep(0.3)
+        child.send("\x1b")  # Escape
+        time.sleep(0.5)
+
+        # Should be back in normal mode — quit
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after Ctrl-p cancel, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
