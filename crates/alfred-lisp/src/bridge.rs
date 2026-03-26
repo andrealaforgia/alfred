@@ -2451,10 +2451,29 @@ fn walk_directory_recursive(
 
     let mut result: Vec<(String, String)> = Vec::new();
 
+    // Directories to always skip (build artifacts, dependencies, VCS)
+    const SKIP_DIRS: &[&str] = &[
+        "target",
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "dist",
+        "build",
+        ".cache",
+    ];
+
     for entry in entries {
         let name = entry.file_name().to_string_lossy().to_string();
         // Skip hidden files/directories
         if name.starts_with('.') {
+            continue;
+        }
+        // Skip known build/artifact directories
+        let file_type = entry.file_type().ok();
+        let is_dir = file_type.as_ref().is_some_and(|ft| ft.is_dir());
+        if is_dir && SKIP_DIRS.contains(&name.as_str()) {
             continue;
         }
 
@@ -2465,8 +2484,6 @@ fn walk_directory_recursive(
             .to_string_lossy()
             .to_string();
 
-        let file_type = entry.file_type().ok();
-        let is_dir = file_type.as_ref().is_some_and(|ft| ft.is_dir());
         let type_label = if is_dir { "dir" } else { "file" };
 
         result.push((relative.clone(), type_label.to_string()));
