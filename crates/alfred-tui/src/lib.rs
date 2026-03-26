@@ -5,6 +5,7 @@
 //! to alfred-core.
 
 pub mod app;
+pub(crate) mod colon_commands;
 pub mod renderer;
 
 /// Returns the crate version string.
