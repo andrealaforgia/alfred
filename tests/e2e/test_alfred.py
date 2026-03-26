@@ -4280,3 +4280,245 @@ class TestSidebarRendering:
             f"Expected clean exit, got {exit_code}"
 
         shutil.rmtree(tmpdir)
+
+
+# ---------------------------------------------------------------------------
+# Browser file search tests
+# ---------------------------------------------------------------------------
+
+class TestBrowserFileSearch:
+    """Verify the / search filter in the full-screen browser."""
+
+    def test_search_filters_and_opens_file(self):
+        """Type / then a query, filtered entry opens correctly with Enter."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_")
+        with open(os.path.join(tmpdir, "alpha.txt"), "w") as f:
+            f.write("alpha\n")
+        with open(os.path.join(tmpdir, "beta.rs"), "w") as f:
+            f.write("fn main() {}\n")
+        with open(os.path.join(tmpdir, "gamma.py"), "w") as f:
+            f.write("print('hi')\n")
+
+        child = spawn_alfred(tmpdir)
+
+        try:
+            child.expect("alpha.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render 'alpha.txt'")
+
+        # Press / to start search, type 'beta' to filter
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "beta":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.3)
+
+        # Open the filtered result with Enter
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Should be editing beta.rs — save and verify
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(os.path.join(tmpdir, "beta.rs"))
+        assert "fn main()" in saved, \
+            f"Expected beta.rs content after search+open, got: {saved!r}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_search_escape_restores_listing(self):
+        """Pressing Escape after searching restores browse mode."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_esc_")
+        with open(os.path.join(tmpdir, "aaa.txt"), "w") as f:
+            f.write("aaa\n")
+        with open(os.path.join(tmpdir, "bbb.txt"), "w") as f:
+            f.write("bbb\n")
+
+        child = spawn_alfred(tmpdir)
+
+        try:
+            child.expect("aaa.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Search, then Escape to cancel
+        send_keys(child, "/")
+        time.sleep(0.3)
+        send_keys(child, "z")
+        time.sleep(0.2)
+        child.send("\x1b")  # Escape
+        time.sleep(0.5)
+
+        # Should be back in browse mode — quit cleanly
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after search cancel, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_search_backspace_on_empty_cancels(self):
+        """Backspace on empty search query cancels search mode."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_bs_")
+        with open(os.path.join(tmpdir, "file.txt"), "w") as f:
+            f.write("content\n")
+
+        child = spawn_alfred(tmpdir)
+
+        try:
+            child.expect("file.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # / -> type char -> backspace -> backspace on empty = cancel
+        send_keys(child, "/")
+        time.sleep(0.3)
+        send_keys(child, "x")
+        time.sleep(0.2)
+        child.send("\x7f")  # Backspace
+        time.sleep(0.2)
+        child.send("\x7f")  # Backspace on empty -> cancel
+        time.sleep(0.5)
+
+        # Should be back in browse mode
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after backspace cancel, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
+
+    def test_search_navigate_filtered_results(self):
+        """After filtering with /, j/k navigates the filtered subset."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_nav_")
+        with open(os.path.join(tmpdir, "main.rs"), "w") as f:
+            f.write("fn main() {}\n")
+        with open(os.path.join(tmpdir, "lib.rs"), "w") as f:
+            f.write("pub fn lib() {}\n")
+        with open(os.path.join(tmpdir, "readme.md"), "w") as f:
+            f.write("# Readme\n")
+
+        child = spawn_alfred(tmpdir)
+
+        try:
+            child.expect("main.rs", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Search for '.rs' to filter to Rust files
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in ".rs":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.3)
+
+        # Navigate down to second result then open
+        send_keys(child, "j")
+        time.sleep(0.2)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Save and quit
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+        # One of the .rs files should have been opened
+        main_content = read_file(os.path.join(tmpdir, "main.rs"))
+        lib_content = read_file(os.path.join(tmpdir, "lib.rs"))
+        assert "fn main()" in main_content or "pub fn lib()" in lib_content, \
+            "Expected a .rs file opened after filtered navigation"
+
+        shutil.rmtree(tmpdir)
+
+    def test_search_no_matches_does_not_crash(self):
+        """Searching for a non-existent term does not crash."""
+        import shutil
+
+        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_nomatch_")
+        with open(os.path.join(tmpdir, "hello.txt"), "w") as f:
+            f.write("hello\n")
+
+        child = spawn_alfred(tmpdir)
+
+        try:
+            child.expect("hello.txt", timeout=5)
+        except pexpect.TIMEOUT:
+            send_keys(child, "q")
+            time.sleep(0.3)
+            try:
+                wait_for_exit(child, timeout=3)
+            except Exception:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+            shutil.rmtree(tmpdir)
+            pytest.fail("Browser did not render")
+
+        # Search for something nonexistent, then Escape
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "zzz":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.3)
+        child.send("\x1b")  # Escape
+        time.sleep(0.3)
+
+        # Quit cleanly
+        send_keys(child, "q")
+        time.sleep(0.3)
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, \
+            f"Expected clean exit after no-match search, got {exit_code}"
+
+        shutil.rmtree(tmpdir)
