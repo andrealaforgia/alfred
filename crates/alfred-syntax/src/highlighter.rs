@@ -66,8 +66,12 @@ impl SyntaxHighlighter {
                 let config = &self.language_configs[idx];
                 let language_id = config.id.to_string();
 
-                // Only re-configure if language changed
+                // Same language but potentially new file: reset tree so
+                // parse() does a fresh parse instead of incremental against
+                // a stale tree from the previous file.
                 if self.current_language_id.as_deref() == Some(config.id) {
+                    self.current_tree = None;
+                    self.buffer_version = 0;
                     return true;
                 }
 
@@ -462,15 +466,19 @@ mod tests {
     }
 
     #[test]
-    fn given_same_language_when_set_twice_then_does_not_reset_tree() {
+    fn given_same_language_when_set_for_new_file_then_resets_tree() {
         let mut highlighter = SyntaxHighlighter::new();
         highlighter.set_language_for_file("main.rs");
         highlighter.parse("fn main() {}");
         assert!(highlighter.has_tree());
 
-        // Setting same language should not reset tree
+        // New file with same language: tree must be reset so next parse
+        // does a fresh parse instead of incremental against stale tree
         highlighter.set_language_for_file("lib.rs");
-        assert!(highlighter.has_tree());
+        assert!(
+            !highlighter.has_tree(),
+            "Tree should be cleared when switching to a new file with the same language"
+        );
     }
 
     // -----------------------------------------------------------------------
