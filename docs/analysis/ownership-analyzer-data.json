@@ -1,0 +1,258 @@
+{
+  "analysis_date": "2026-03-25",
+  "git_history_analysis": {
+    "contributor_analysis": {
+      "single_contributor": true,
+      "author": "Andrea Laforgia",
+      "commit_count": 176,
+      "contribution_percentage": 100,
+      "implication": "Codebase is authored by single developer; refactoring decisions can be made swiftly without coordination overhead. Risk: single viewpoint may have blind spots; recommend peer review for architectural changes."
+    }
+  },
+  "file_ownership_by_change_frequency": {
+    "hottest_files": [
+      {
+        "rank": 1,
+        "path": "crates/alfred-tui/src/app.rs",
+        "recent_commits": 20,
+        "commit_frequency": "every 1.2 weeks on average",
+        "primary_reasons": [
+          "New InputState variant additions (visual mode, command mode)",
+          "Colon command implementations",
+          "Browser feature integration",
+          "Bug fixes in key event handling"
+        ],
+        "smell_connection": "Divergent Change - high frequency indicates multiple responsibilities triggering edits"
+      },
+      {
+        "rank": 2,
+        "path": "crates/alfred-core/src/editor_state.rs",
+        "recent_commits": 18,
+        "commit_frequency": "every 1.4 weeks on average",
+        "primary_reasons": [
+          "New field additions (panels, cursor_shapes, search_pattern, selection_start, change_list, etc.)",
+          "New command handler registrations (30+ builtin commands)",
+          "Snapshot/undo logic updates",
+          "Mode system evolution"
+        ],
+        "smell_connection": "Shotgun Surgery - each subsystem addition requires touching EditorState new(), snapshots, and register_builtin_commands"
+      },
+      {
+        "rank": 3,
+        "path": "crates/alfred-lisp/src/bridge.rs",
+        "recent_commits": 14,
+        "commit_frequency": "every 1.8 weeks on average",
+        "primary_reasons": [
+          "New primitive registrations (filesystem, list/string ops, panel API)",
+          "Bug fixes in Lisp-to-Rust boundary",
+          "Primitives for new editor features (browser, rainbow CSV, etc.)",
+          "Coupling to core submodule API changes"
+        ],
+        "smell_connection": "Feature Envy - bridge reacts to every core submodule change, indicating tight coupling"
+      }
+    ]
+  },
+  "subsystem_ownership_map": {
+    "buffer_subsystem": {
+      "owners": ["crates/alfred-core/src/buffer.rs", "crates/alfred-core/src/editor_state.rs"],
+      "lisp_interface": "crates/alfred-lisp/src/bridge.rs (buffer-insert, buffer-delete, buffer-content, buffer-set-content)",
+      "tui_interface": "crates/alfred-tui/src/app.rs (direct field access via editor_state)",
+      "change_risk": "MEDIUM - buffer is relatively stable; mutations come via well-defined commands"
+    },
+    "cursor_subsystem": {
+      "owners": ["crates/alfred-core/src/cursor.rs", "crates/alfred-core/src/editor_state.rs", "crates/alfred-tui/src/app.rs"],
+      "lisp_interface": "crates/alfred-lisp/src/bridge.rs (cursor-position, cursor-move)",
+      "tui_interface": "crates/alfred-tui/src/app.rs (handle_key_event dispatch for all motions)",
+      "change_risk": "HIGH - cursor state is tightly coupled to motion handlers (h/j/k/l/w/b/e/f/F/t/T/0/$", "gg/G/n/N/;/,) across app.rs"
+    },
+    "command_system": {
+      "owners": ["crates/alfred-core/src/command.rs", "crates/alfred-core/src/editor_state.rs (register_builtin_commands)", "crates/alfred-tui/src/app.rs (execute_deferred_action)"],
+      "registration_points": [
+        "editor_state::register_builtin_commands (887 lines, 30+ commands)",
+        "app.rs execute_deferred_action (100+ lines dispatch)",
+        "lisp bridge.rs register_define_command (Lisp commands)"
+      ],
+      "change_risk": "CRITICAL - adding new command requires edits to 3+ files: command.rs (enum), editor_state.rs (handler), app.rs (dispatch), bridge.rs (Lisp interface)"
+    },
+    "input_handling_subsystem": {
+      "owners": ["crates/alfred-tui/src/app.rs"],
+      "responsibilities": [
+        "Key event conversion (crossterm -> alfred-core)",
+        "InputState machine (Normal, Insert, Visual, Command modes)",
+        "Count accumulation and operator composition",
+        "Motion dispatch",
+        "Colon command parsing"
+      ],
+      "change_risk": "CRITICAL - all input state transitions centralized in handle_key_event (605 lines)"
+    },
+    "rendering_subsystem": {
+      "owners": ["crates/alfred-tui/src/renderer.rs", "crates/alfred-tui/src/app.rs (integration)"],
+      "dependencies": [
+        "crates/alfred-syntax (syntax highlighting)",
+        "crates/alfred-lisp (plugin rendering hooks)",
+        "ratatui framework",
+        "tree-sitter"
+      ],
+      "change_risk": "MEDIUM - renderer is well-isolated but app.rs reaches into internals"
+    },
+    "lisp_runtime_subsystem": {
+      "owners": ["crates/alfred-lisp/src/runtime.rs", "crates/alfred-lisp/src/bridge.rs"],
+      "extension_points": [
+        "Core primitives (buffer, cursor, mode, etc.)",
+        "Rendering hooks (panel rendering)",
+        "Plugin loader (loads *.lisp from plugins/ directory)"
+      ],
+      "change_risk": "MEDIUM - runtime is stable; coupling to EditorState through bridge is the risk"
+    },
+    "editor_state_root": {
+      "owners": ["crates/alfred-core/src/editor_state.rs"],
+      "dependents": [
+        "crates/alfred-tui/src/app.rs (355+ direct field accesses)",
+        "crates/alfred-lisp/src/bridge.rs (8+ submodule accesses via state)",
+        "crates/alfred-core/src/command.rs (reads/writes state)"
+      ],
+      "change_risk": "CRITICAL - central aggregator touched by every subsystem; single point of coupling"
+    }
+  },
+  "code_smell_by_subsystem": {
+    "high_risk_subsystems": [
+      {
+        "subsystem": "Input Handling (app.rs handle_key_event)",
+        "smells": [
+          "Long Method (605 lines)",
+          "Message Chain (355+ alfred_core:: references)",
+          "Divergent Change (modified for every new InputState variant, motion, or operator)"
+        ],
+        "author": "Andrea Laforgia",
+        "commits_touching": 20,
+        "urgency": "CRITICAL - core event loop, affects every user input"
+      },
+      {
+        "subsystem": "EditorState (God Object)",
+        "smells": [
+          "Large Class (39 public fields)",
+          "Shotgun Surgery (adding subsystem requires touching new(), snapshots, register_builtin_commands)",
+          "Long Method (register_builtin_commands 887 lines)"
+        ],
+        "author": "Andrea Laforgia",
+        "commits_touching": 18,
+        "urgency": "CRITICAL - architectural foundation, all commands depend on it"
+      },
+      {
+        "subsystem": "Lisp-Rust Bridge",
+        "smells": [
+          "Feature Envy (5198 lines, 8 submodule accesses per primitive)",
+          "Message Chain (100+ direct field accesses into EditorState)",
+          "Tight Coupling (reacts to every core API change)"
+        ],
+        "author": "Andrea Laforgia",
+        "commits_touching": 14,
+        "urgency": "HIGH - extension boundary, must be maintainable for plugin authors"
+      }
+    ],
+    "medium_risk_subsystems": [
+      {
+        "subsystem": "Colon Commands (app.rs execute_colon_command)",
+        "smells": [
+          "Conditional Complexity (10+ command match arms)",
+          "Control Flow Complexity (each branch reaches into 5-8 core modules)"
+        ],
+        "author": "Andrea Laforgia",
+        "urgency": "MEDIUM - users expect command extensibility (e.g., custom :q variant)"
+      },
+      {
+        "subsystem": "Rendering (app.rs <-> renderer.rs)",
+        "smells": [
+          "Message Chain (app.rs must know renderer internals for redraw coordination)",
+          "Divergent Change (modified when adding panels, plugins, or themes)"
+        ],
+        "author": "Andrea Laforgia",
+        "urgency": "MEDIUM - good isolation but coupling could be tighter"
+      }
+    ]
+  },
+  "change_analysis_by_feature": {
+    "browser_feature": {
+      "commits_involved": 15,
+      "files_modified": [
+        "crates/alfred-core/src/editor_state.rs (added panels, panel_focus)",
+        "crates/alfred-core/src/panel.rs (created)",
+        "crates/alfred-lisp/src/bridge.rs (added filesystem primitives)",
+        "crates/alfred-lisp/src/runtime.rs (added panel event hooks)",
+        "crates/alfred-tui/src/app.rs (added InputState::Browse, Lisp integration)",
+        "plugins/browse-mode/init.lisp (created)"
+      ],
+      "pattern": "Feature required touching 6+ files across 3 crates; command/input dispatch added to app.rs; core API expanded"
+    },
+    "visual_mode_feature": {
+      "commits_involved": 8,
+      "files_modified": [
+        "crates/alfred-core/src/editor_state.rs (added selection_start, visual_linewise)",
+        "crates/alfred-tui/src/app.rs (added InputState::Visual, visual mode dispatch)",
+        "crates/alfred-core/src/text_object.rs (added visual range computation)"
+      ],
+      "pattern": "Feature required EditorState field additions + InputState variant + visual-specific motion logic in app.rs"
+    },
+    "search_and_replace": {
+      "commits_involved": 6,
+      "files_modified": [
+        "crates/alfred-core/src/editor_state.rs (added search_pattern, search_forward, last_char_find)",
+        "crates/alfred-tui/src/app.rs (added InputState::Search, search loop, :s/:g/:v/ commands)"
+      ],
+      "pattern": "Search state scattered across EditorState + app.rs; colon commands tightly coupled to TUI"
+    },
+    "macro_recording": {
+      "commits_involved": 3,
+      "files_modified": [
+        "crates/alfred-core/src/editor_state.rs (added macro_register, recording_macro, recorded_keys)",
+        "crates/alfred-tui/src/app.rs (added macro recording/playback dispatch)"
+      ],
+      "pattern": "Macro state in EditorState; dispatch logic in app.rs; isolated but fragile"
+    }
+  },
+  "refactoring_ownership_plan": {
+    "owner": "Andrea Laforgia (single contributor)",
+    "decision_making": "Can decide all refactoring directions unilaterally; recommend peer code review on:  (1) EditorFacade design (public API boundary), (2) InputStateMachine abstraction (complex logic), (3) Subsystem decomposition (architectural impact)",
+    "implementation_approach": "Serial refactoring by component; feature freeze during Phase 1-2 (abstraction boundaries + TUI decomposition) recommended to avoid conflicts",
+    "testing_responsibility": "All test updates owned by Andrea; no need to coordinate with other team members",
+    "documentation_responsibility": "Update CLAUDE.md architectural sections after major refactorings; document new module responsibilities"
+  },
+  "git_history_recommendations": {
+    "commit_granularity": "Current commits are well-scoped (one feature per commit); continue this practice during refactorings",
+    "branch_strategy": "Create feature branches for each refactoring (e.g., feature/extract-input-machine, feature/editor-facade). Rebase onto main when ready.",
+    "pull_request_strategy": "Each refactoring rank 1-5 should be a separate PR for reviewability; ranks 6-11 can be grouped by phase",
+    "history_preservation": "No git rewriting recommended; linear history aids future archaeology of design decisions"
+  },
+  "future_contribution_guidance": {
+    "new_commands": "After refactoring #6 (data-driven command table), add new commands to crates/alfred-core/src/handlers/ module + BUILTIN_COMMANDS table entry",
+    "new_lisp_primitives": "After refactoring #3 + #7 (EditorFacade + bridge extraction), add primitives to crates/alfred-lisp/src/bridge.rs using only EditorFacade methods",
+    "new_colon_commands": "After refactoring #2 (ColonCommandDispatcher), add to crates/alfred-tui/src/colon_commands.rs registry",
+    "new_input_modes": "After refactoring #1 (InputStateMachine), define new InputState variant in crates/alfred-tui/src/input_machine.rs + add process handler"
+  },
+  "code_smell_remediation_impact": {
+    "refactoring_1_2_3_combined": {
+      "removes_smells": [
+        "Long Method (handle_key_event shrinks 605->200 lines)",
+        "Message Chain (app.rs 355 references -> <50)",
+        "Conditional Complexity (colon command match becomes registry lookup)",
+        "Divergent Change (app.rs no longer modified for new modes, commands, or motions)"
+      ],
+      "estimated_bug_reduction": "30% (less complex dispatch = fewer edge cases)"
+    },
+    "refactoring_5_6_combined": {
+      "removes_smells": [
+        "Large Class (EditorState subsystem extraction)",
+        "Shotgun Surgery (command registration becomes data-driven)",
+        "Long Method (register_builtin_commands shrinks 887->100 lines)"
+      ],
+      "estimated_bug_reduction": "20% (smaller code units = easier to reason about)"
+    },
+    "refactoring_7": {
+      "removes_smells": [
+        "Feature Envy (bridge.rs accesses <= 1 module (EditorFacade) instead of 8)",
+        "Insider Trading (all core access mediated by facade)"
+      ],
+      "estimated_extensibility_gain": "60% easier for future plugin authors to understand Lisp primitive contracts"
+    }
+  }
+}

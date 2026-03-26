@@ -1,0 +1,55 @@
+{
+  "overall_score": 7.0,
+  "risk_level": "Medium",
+  "dependency_count": 9,
+  "testability_score": 0.72,
+  "seam_availability": {
+    "object": 6,
+    "link": 4,
+    "preprocessing": 0
+  },
+  "modules_at_risk": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "risk": "High",
+      "dependencies": 6,
+      "seams": 1,
+      "notes": "Largest file at ~8000 lines. Mixes domain logic (InputState, Operator, execute_motion) with event loop I/O. Rc<RefCell<EditorState>> shared mutation makes unit testing difficult without a terminal. Has unit tests for pure sub-functions (convert_crossterm_key) but the handle_key_event function is hard to isolate."
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "risk": "High",
+      "dependencies": 5,
+      "seams": 2,
+      "notes": "~5200 lines. Registers closures that capture Rc<RefCell<EditorState>>. Each primitive is a closure registered at startup; substitution requires replacing the entire bridge registration. Tests exist in the runtime module but bridge functions are tested mostly via integration paths."
+    },
+    {
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "risk": "Medium",
+      "dependencies": 7,
+      "seams": 3,
+      "notes": "~3350 lines. EditorState has 40+ public fields making it a wide dependency surface. Any caller that borrows EditorState has implicit coupling to the entire state. Tests exist (unit tests in editor_state module) but full state construction is required for every test."
+    },
+    {
+      "file": "crates/alfred-core/src/buffer.rs",
+      "risk": "Low",
+      "dependencies": 2,
+      "seams": 4,
+      "notes": "~1670 lines. Pure functions on Buffer/Rope. Well-tested. Ropey dependency is the only risk -- it is stable and widely used."
+    },
+    {
+      "file": "crates/alfred-tui/src/renderer.rs",
+      "risk": "Medium",
+      "dependencies": 5,
+      "seams": 2,
+      "notes": "~1300 lines. Reads &EditorState and drives ratatui. Testable via ratatui's TestBackend (test seam exists). Tests present in module. Coupling to ratatui API is the main risk."
+    },
+    {
+      "file": "crates/alfred-core/src/cursor.rs",
+      "risk": "Low",
+      "dependencies": 1,
+      "seams": 3,
+      "notes": "~1130 lines. All pure functions. Well-tested with unit tests. No I/O dependencies."
+    }
+  ]
+}

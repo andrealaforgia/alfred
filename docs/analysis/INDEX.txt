@@ -1,0 +1,318 @@
+================================================================================
+ALFRED REFACTORING ANALYSIS - FILE INDEX
+Generated: 2026-03-25
+================================================================================
+
+START HERE (Choose your role):
+  
+  5-MINUTE SUMMARY:
+    QUICK_START.txt
+    - 6 primary problems + solutions
+    - 4-phase roadmap overview
+    - Who does what
+
+  30-MINUTE SUMMARY:
+    REFACTORING_SUMMARY.md
+    - Executive summary
+    - Detailed roadmap (Phase 1-4)
+    - Risk management
+    - Functional paradigm alignment
+
+  DETAILED REFERENCE:
+    refactoring-expert-data.json
+    - 11 refactoring recommendations (Rank 1-11)
+    - Before/after code examples
+    - Step-by-step implementations
+    - Risk assessment per refactoring
+    - Implementation sequence with dependencies
+    - Expected architectural improvements
+
+  OWNERSHIP & HISTORY:
+    ownership-analyzer-data.json
+    - Git history analysis (176 commits)
+    - File ownership by change frequency
+    - Subsystem ownership mapping
+    - Change patterns by feature
+    - Future contribution guidance
+
+  NAVIGATION:
+    README.md
+    - How to use this analysis by role
+    - Key statistics table
+    - Architectural principles addressed
+
+================================================================================
+BY ROLE - WHAT TO READ:
+================================================================================
+
+PROJECT MANAGER / DECISION MAKER (15 minutes):
+  1. QUICK_START.txt (10 min)
+  2. REFACTORING_SUMMARY.md → "Executive Summary" (5 min)
+  Decision Point: Approve Phase 1 (2 weeks, 34 hours)?
+
+ARCHITECT / TECHNICAL LEAD (1.5 hours):
+  1. REFACTORING_SUMMARY.md (full, 30 min)
+  2. refactoring-expert-data.json → Refactoring #3 (EditorFacade, 30 min)
+  3. refactoring-expert-data.json → overall_assessment (15 min)
+  4. Answer "Questions for Stakeholder Review" section
+
+DEVELOPER - IMPLEMENTING REFACTORING (varies):
+  1. refactoring-expert-data.json → your refactoring number
+  2. Read: `current_state`, `proposed_solution`, `steps`, `testing_strategy`
+  3. Reference: `risk_mitigation` if issues arise during implementation
+  4. Estimate: Check `estimated_effort` field
+
+CODE REVIEWER - REVIEWING PR (30 min per PR):
+  1. refactoring-expert-data.json → refactoring being reviewed
+  2. Compare current code against "before" section
+  3. Verify changes match "after" and `steps` section
+  4. Run tests from `testing_strategy` section
+  5. Verify behavior unchanged (zero logic modification)
+
+FUTURE MAINTAINER - EXTENDING SYSTEM (post-refactoring):
+  1. ownership-analyzer-data.json → "future_contribution_guidance"
+  2. How to add new command (use command_table.rs after Phase 3)
+  3. How to add new input mode (use InputStateMachine after Phase 2)
+  4. How to add new Lisp primitive (use EditorFacade after Phase 1)
+
+================================================================================
+ANALYSIS FILE DESCRIPTIONS:
+================================================================================
+
+REFACTORING_SUMMARY.md (12 KB, Markdown)
+  Comprehensive roadmap covering:
+  - Current codebase health (Grade B, 14 issues, 65% in 3 mega-files)
+  - Primary issues: coupling, god object, monolithic state machine, etc.
+  - Impact on development (hard to add features, test, extend, maintain)
+  - 4-phase refactoring plan (10 weeks, 150 hours)
+  - Phase-by-phase details with duration, risk, dependencies
+  - Expected outcomes: Grade B → A-, zero critical violations
+  - Risk management: CSF, rollback strategies
+  - Resource allocation: timeline, effort, team roles
+  - Functional paradigm alignment analysis
+  - Stakeholder review questions
+
+QUICK_START.txt (5 KB, Plain Text)
+  Quick reference covering:
+  - 6 primary architectural problems with solutions
+  - Phase breakdown (Weeks, hours, risk, outcome)
+  - Expected outcomes before/after
+  - Who should do what (4 roles: decision-maker, architect, developer, reviewer)
+  - Files to read (5 min, 30 min, 2 hours, 30 min)
+  - Next steps checklist
+  - Contact points for questions
+
+refactoring-expert-data.json (33 KB, JSON)
+  Structured recommendations for 11 refactorings:
+  - overall_assessment: health metrics, effort, quality lift
+  - refactoring_recommendations: [11 items]
+    Per item:
+    - rank: 1-11 (priority)
+    - title: refactoring name
+    - file: affected file(s)
+    - smell_category: Bloaters, Couplers, etc.
+    - severity: HIGH, MEDIUM, LOW
+    - fowler_technique: Martin Fowler reference
+    - reason: why this matters
+    - current_state: before code structure
+    - proposed_solution: after code structure with benefits
+    - steps: 1-N step implementation guide
+    - testing_strategy: validation approach
+    - risk_level & risk_mitigation: failure modes and safeguards
+    - estimated_effort: hours to complete
+    - impact_on_architecture: long-term consequences
+  - implementation_sequence: 4 phases with duration, goal, dependencies
+  - sequence_dependencies: critical ordering constraints
+  - risk_assessment_summary: risk categorization by refactoring
+  - expected_outcomes: before/after code metrics, architectural principles
+
+ownership-analyzer-data.json (13 KB, JSON)
+  Git history and code ownership analysis:
+  - git_history_analysis: single contributor (Andrea Laforgia, 176 commits)
+  - file_ownership_by_change_frequency: hottest files (app.rs #1, editor_state.rs #2)
+  - subsystem_ownership_map: 7 subsystems and their owners
+  - code_smell_by_subsystem: which smells in which subsystems
+  - change_analysis_by_feature: browser, visual-mode, search, macros
+  - refactoring_ownership_plan: Andrew can decide unilaterally; recommend peer review
+  - git_history_recommendations: commit granularity, branching, history preservation
+  - future_contribution_guidance: how to extend after refactorings
+  - code_smell_remediation_impact: which refactorings fix which smells
+
+README.md (3 KB, Markdown)
+  Navigation and usage guide:
+  - Files overview (1-5 with descriptions)
+  - How to use by role (5 roles: PM, architect, developer, reviewer, maintainer)
+  - Key statistics table
+  - Architectural principles addressed
+  - Critical path dependencies
+  - Questions/clarifications reference guide
+
+codebase-context.json (8 KB, JSON)
+  Pre-scan context:
+  - Project structure (6-crate workspace, 47 files, 25.9K lines)
+  - Dependencies (ropey, crossterm, ratatui, tree-sitter, rust_lisp)
+  - DevOps (CI/CD, test framework)
+  - Git history (recent commits)
+  - File tree and file distribution
+
+code-smell-detector-data.json (5 KB, JSON)
+  Code quality analyzer findings:
+  - Grade: B
+  - 14 total issues (2 high, 8 medium, 4 low)
+  - SOLID compliance scores
+  - Category distribution (Bloaters, Couplers, etc.)
+
+================================================================================
+KEY STATISTICS AT A GLANCE:
+================================================================================
+
+CURRENT CODEBASE:
+  Grade: B
+  Total Issues: 14 (2 high, 8 medium, 4 low)
+  Total Rust LOC: 25,972
+  Megafile burden: 65% in 3 files
+    - app.rs: 7,987 lines
+    - bridge.rs: 5,198 lines
+    - editor_state.rs: 3,355 lines
+  SOLID Compliance:
+    - SRP: 4/10 (4 violations)
+    - OCP: 7/10 (monolithic dispatch)
+    - DIP: 6/10 (tight coupling)
+
+REFACTORING EFFORT:
+  Total: 150 hours over 10 weeks
+  - Phase 1: 34 hours (2 weeks) - CRITICAL path, medium risk
+  - Phase 2: 58 hours (3 weeks) - Depends on Phase 1
+  - Phase 3: 52 hours (4 weeks) - Depends on Phase 1+2, high risk
+  - Phase 4: 6 hours (1 week) - Low risk
+
+EXPECTED OUTCOMES:
+  Grade: A- (expected)
+  Issues: 0-2 (residual)
+  Largest file: ~2,000 lines (vs 7,987)
+  SRP violations: 0 (vs 4)
+  Coupling: <50 direct imports (vs 355)
+
+ARCHITECTURAL IMPROVEMENTS:
+  - Functional Core / Imperative Shell: ✓ Aligned
+  - SRP: ✓ No violations
+  - OCP: ✓ Data-driven tables
+  - DIP: ✓ EditorFacade abstraction
+  - Testability: ✓ Pure functions unit-testable
+  - Plugin extensibility: ✓ 60% easier (cleaner APIs)
+
+================================================================================
+CRITICAL PATH:
+================================================================================
+
+MUST HAPPEN FIRST:
+  Phase 1 (Weeks 1-2): Abstraction Boundaries
+  - Refactoring #3: Extract EditorFacade (18h)
+  - Refactoring #7: bridge.rs use EditorFacade (16h)
+  REASON: All later phases depend on this abstraction boundary
+
+THEN (in order):
+  Phase 2 (Weeks 3-5): TUI Decomposition
+  - Refactoring #1: Extract InputStateMachine (24h)
+  - Refactoring #2: Extract ColonCommandDispatcher (16h)
+  - Refactoring #4: Extract DeferredActionExecutor (8h)
+  - Refactoring #8: Extract RendererFacade (10h)
+
+THEN:
+  Phase 3 (Weeks 6-9): Core Refactoring
+  - Refactoring #5: Decompose EditorState subsystems (32h)
+  - Refactoring #6: Data-drive command registration (20h)
+
+FINALLY:
+  Phase 4 (Week 10): Code Cleanliness
+  - Refactoring #9-11 (6h total)
+
+FEATURE FREEZE: Recommended during Phases 1-2 (weeks 1-5)
+
+================================================================================
+DECISION CHECKLIST:
+================================================================================
+
+Before Approving Phase 1:
+  [ ] Read QUICK_START.txt (10 minutes)
+  [ ] Skim REFACTORING_SUMMARY.md (30 minutes)
+  [ ] Understand: Phase 1 = abstraction boundary foundation for all later phases
+  [ ] Accept: Medium risk, 2-week timeline, 34 hours effort
+  [ ] Plan: Feature freeze weeks 1-5 to avoid conflicts
+  [ ] Assign: Developer (Andrea Laforgia can execute autonomously)
+
+Before Starting Implementation:
+  [ ] Architect reviews EditorFacade API design
+  [ ] Decisions on trait vs struct dispatch approach
+  [ ] Confirm facade method completeness
+  [ ] Code review infrastructure in place for peer review
+
+During Implementation:
+  [ ] Run full test suite after each refactoring
+  [ ] Incremental git commits per component
+  [ ] Verify behavior unchanged (zero logic modification)
+  [ ] Peer review on architectural decisions (Phases 1, 3)
+
+After Each Phase:
+  [ ] Grade codebase (verify expected grade progress)
+  [ ] Measure coupling metrics (alfred_core:: references)
+  [ ] Update CLAUDE.md documentation
+  [ ] Tag commit with phase completion
+
+================================================================================
+QUESTIONS? LOOK HERE:
+================================================================================
+
+"What are we fixing?"
+  → QUICK_START.txt: KEY ARCHITECTURAL PROBLEMS section
+  → REFACTORING_SUMMARY.md: Executive Summary section
+
+"How long will this take?"
+  → REFACTORING_SUMMARY.md: Resource Allocation section
+  → QUICK_START.txt: REFACTORING ROADMAP section
+
+"What are the risks?"
+  → REFACTORING_SUMMARY.md: Risk Management section
+  → refactoring-expert-data.json: each refactoring's risk_level and risk_mitigation
+
+"How do I implement Refactoring #X?"
+  → refactoring-expert-data.json: find your refactoring number, read `steps`
+
+"How do I test my changes?"
+  → refactoring-expert-data.json: find your refactoring number, read `testing_strategy`
+
+"What's the order of refactorings?"
+  → REFACTORING_SUMMARY.md: Implementation Sequence section
+  → refactoring-expert-data.json: sequence_dependencies section
+
+"Who wrote what code? (git ownership)"
+  → ownership-analyzer-data.json: entire file
+
+"How do we avoid merge conflicts?"
+  → REFACTORING_SUMMARY.md: Risk Management section (feature freeze)
+
+"What if things go wrong?"
+  → REFACTORING_SUMMARY.md: Risk Management → Rollback Plan section
+
+"After refactoring, how do I add new features?"
+  → ownership-analyzer-data.json: future_contribution_guidance section
+
+================================================================================
+STATUS:
+================================================================================
+
+Analysis: COMPLETE ✓
+  - 14 code smells identified and categorized
+  - 11 refactoring recommendations with detailed plans
+  - 4 implementation phases with clear dependencies
+  - Risk assessment and mitigation strategies
+  - Git history and ownership analysis
+  - Future contribution guidance
+
+Ready for: REVIEW → DECISION → PLANNING → IMPLEMENTATION
+
+Generated: 2026-03-25
+Analysis by: Refactoring Expert Agent
+Codebase: Alfred (Emacs-like text editor, Rust, functional paradigm)
+
+================================================================================

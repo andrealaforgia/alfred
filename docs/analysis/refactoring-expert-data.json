@@ -1,0 +1,607 @@
+{
+  "analysis_date": "2026-03-25",
+  "paradigm": "functional-core / imperative-shell (Rust)",
+  "overall_assessment": {
+    "codebase_health": "B",
+    "refactoring_priority": "HIGH",
+    "primary_concern": "Three mega-files (app.rs, editor_state.rs, bridge.rs) violate functional paradigm by aggregating too many responsibilities. Structural coupling between layers undermines modularity.",
+    "estimated_effort_hours": 120,
+    "expected_quality_lift": "A- (removes 70% of critical smells)"
+  },
+  "refactoring_recommendations": [
+    {
+      "rank": 1,
+      "title": "Extract InputStateMachine from app.rs (lines 379-1000)",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Bloaters",
+      "code_smell": "Long Method",
+      "severity": "HIGH",
+      "fowler_technique": "Extract Method / Extract Class",
+      "reason": "handle_key_event (~605 lines) contains 12+ distinct InputState branches, count accumulation, self-insert dispatch, and motion handling. Single function violates SRP and functional composition principles.",
+      "current_state": {
+        "lines": "379-1000",
+        "responsibilities": [
+          "InputState variant matching",
+          "Count accumulation (normal/visual modes)",
+          "Self-insert character handling",
+          "Motion dispatch (h/j/k/l/w/b/e/$0/^/f/F/t/T/gg/G/n/N/;/,)",
+          "Operator composition (d/c/y + motion)",
+          "Visual mode state machine",
+          "Undo/redo triggering",
+          "Jump list population"
+        ]
+      },
+      "proposed_solution": {
+        "new_module": "crates/alfred-tui/src/input_machine.rs",
+        "extracted_type": "KeyEventMachine",
+        "method_signature": "pub fn process_key(machine_state: InputState, key: KeyEvent, editor: &mut EditorState) -> (InputState, DeferredAction)",
+        "benefits": [
+          "Pure function: InputState + KeyEvent -> (InputState, DeferredAction)",
+          "Eliminates mutable borrow of app.rs's App struct",
+          "Enables property-based testing of state machine transitions",
+          "Separates terminal I/O from domain logic"
+        ]
+      },
+      "steps": [
+        "Create crates/alfred-tui/src/input_machine.rs",
+        "Extract InputState enum (already defined) to new module",
+        "Extract handle_key_event as pure function: process_key(...) -> (InputState, DeferredAction)",
+        "Extract sub-handlers: process_normal_mode, process_insert_mode, process_visual_mode, process_command_mode",
+        "Replace app.rs handle_key_event with call to input_machine::process_key",
+        "Update app.rs main event loop to assign returned (InputState, DeferredAction)",
+        "Test: all existing key handling tests pass unchanged"
+      ],
+      "testing_strategy": "property-based: generate random KeyEvent sequences, verify InputState invariants (no invalid transitions, count accumulation matches expectations)",
+      "risk_level": "MEDIUM",
+      "risk_mitigation": [
+        "Keep original handle_key_event as temporary thin wrapper during transition",
+        "Add integration tests comparing old/new behavior on 50+ key sequences",
+        "Commit incrementally per InputState variant extraction"
+      ],
+      "estimated_effort": 24,
+      "impact_on_architecture": "Moves input handling from imperative-shell boundary toward functional-core"
+    },
+    {
+      "rank": 2,
+      "title": "Extract ColonCommandDispatcher from app.rs (lines 984-1150)",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Control Flow / Couplers",
+      "code_smell": "Conditional Complexity / Message Chain",
+      "severity": "HIGH",
+      "fowler_technique": "Replace Conditional with Polymorphism / Introduce Command Pattern",
+      "reason": "execute_colon_command uses monolithic match over 10+ command strings (q, q!, wq, w, e, eval, g/, g!/, v/, s/, %s/). Each command reaches 5-8 lines into alfred_core, violating DIP (Dependency Inversion Principle). Brittle to extension.",
+      "current_state": {
+        "lines": "984-1150",
+        "commands_in_match": [
+          "q",
+          "q!",
+          "wq",
+          "w <path>",
+          "e <path>",
+          "eval",
+          "g/pattern/d",
+          "g!/pattern/d",
+          "v/pattern/d",
+          "s/old/new/g",
+          "%s/old/new/g"
+        ],
+        "problem": "Each branch directly accesses buffer, cursor, viewport via alfred_core:: paths"
+      },
+      "proposed_solution": {
+        "new_module": "crates/alfred-tui/src/colon_commands.rs",
+        "design_pattern": "Command Registry + Factory",
+        "structure": "pub struct ColonCommand { name: String, handler: Box<dyn Fn(&mut EditorState, &str) -> CommandResult> }",
+        "registry_type": "HashMap<String, Arc<ColonCommand>>",
+        "benefits": [
+          "Open/Closed Principle: adding new colon commands requires no modification to dispatcher",
+          "Commands become data-driven, not code-driven",
+          "Each command handler is testable in isolation",
+          "Dependency Injection: editor state passed via handler function, not global coupling"
+        ]
+      },
+      "steps": [
+        "Create crates/alfred-tui/src/colon_commands.rs",
+        "Define ColonCommand type with name and handler closure",
+        "Extract each match arm into dedicated function: cmd_quit(), cmd_write(), cmd_eval(), cmd_global_delete(), cmd_substitute()",
+        "Create builder function populate_builtin_colon_commands(registry: &mut HashMap<String, ColonCommand>)",
+        "Replace execute_colon_command with registry lookup and dispatch",
+        "Update App struct to hold colon_commands registry (initialized in new())",
+        "Tests: verify all 11+ commands execute correctly via registry"
+      ],
+      "testing_strategy": "table-driven tests with (input_command, expected_state_changes) tuples",
+      "risk_level": "MEDIUM",
+      "risk_mitigation": [
+        "Registry is initialized once in App::new(), immutable thereafter",
+        "Handler closures can still access shared EditorState via Rc<RefCell<>>",
+        "Keep original execute_colon_command as deprecated wrapper during migration"
+      ],
+      "estimated_effort": 16,
+      "impact_on_architecture": "Enables plugin-friendly colon command system; reduces coupling to app.rs"
+    },
+    {
+      "rank": 3,
+      "title": "Extract CommandDispatcher facade from app.rs",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Couplers",
+      "code_smell": "Message Chain / Insider Trading",
+      "severity": "HIGH",
+      "fowler_technique": "Hide Delegate / Extract Facade",
+      "reason": "355 occurrences of alfred_core:: fully-qualified paths in app.rs indicate direct coupling to all core submodules. TUI should communicate with editor via a single facade, not reach into internals.",
+      "current_state": {
+        "direct_accesses": [
+          "alfred_core::buffer",
+          "alfred_core::cursor",
+          "alfred_core::viewport",
+          "alfred_core::editor_state",
+          "alfred_core::hook",
+          "alfred_core::command",
+          "alfred_core::panel",
+          "alfred_core::theme"
+        ],
+        "count": 355,
+        "violation": "TUI violates Dependency Inversion Principle (depends on concrete modules, not abstraction)"
+      },
+      "proposed_solution": {
+        "new_module": "crates/alfred-core/src/facade.rs",
+        "type": "EditorFacade",
+        "methods": [
+          "pub fn cursor_position(&self) -> (usize, usize)",
+          "pub fn buffer_content(&self) -> String",
+          "pub fn set_buffer_content(&mut self, content: String)",
+          "pub fn move_cursor_by(&mut self, direction: Direction, count: usize)",
+          "pub fn insert_char(&mut self, ch: char)",
+          "pub fn delete_char(&mut self)",
+          "pub fn set_message(&mut self, msg: String)",
+          "pub fn undo(&mut self) -> Result<(), String>",
+          "pub fn redo(&mut self) -> Result<(), String>",
+          "pub fn get_registers(&self) -> HashMap<char, RegisterEntry>"
+        ],
+        "implementation": "EditorFacade wraps Rc<RefCell<EditorState>>, provides controlled read/write access without exposing internals"
+      },
+      "steps": [
+        "Create crates/alfred-core/src/facade.rs with EditorFacade struct",
+        "Implement all read methods as forwarding to wrapped EditorState fields",
+        "Implement all mutation methods as controlled edits (with invariant checks)",
+        "Export EditorFacade from alfred-core lib.rs",
+        "Replace all 355 alfred_core:: references in app.rs with EditorFacade method calls",
+        "Add compile-time assertion (cfg_attr) that alfred-tui only imports EditorFacade from alfred_core (catches new direct imports)",
+        "Tests: verify facade behavior matches previous direct access"
+      ],
+      "testing_strategy": "regression tests comparing old/new behavior on cursor, buffer, viewport, register operations",
+      "risk_level": "MEDIUM",
+      "risk_mitigation": [
+        "Facade is additive (wraps existing code), no breaking changes to EditorState internals",
+        "Each facade method is thin wrapper, zero logic change",
+        "Can stage migration method-by-method"
+      ],
+      "estimated_effort": 18,
+      "impact_on_architecture": "Eliminates structural coupling; enables substitutable EditorState implementations (testing, mocking)"
+    },
+    {
+      "rank": 4,
+      "title": "Extract CommandRegistry dispatcher from app.rs",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Couplers",
+      "code_smell": "Divergent Change / Feature Envy",
+      "severity": "MEDIUM",
+      "fowler_technique": "Move Method / Extract Class",
+      "reason": "execute_deferred_action dispatches built-in, Lisp dynamic, and macro commands via repeated pattern: command::execute(). Add new deferred action type = modify app.rs. Violates SRP.",
+      "current_state": {
+        "responsibilities": [
+          "Dispatch built-in Native commands (via command::execute)",
+          "Dispatch Dynamic Lisp commands (via LispRuntime)",
+          "Dispatch Macro playback",
+          "Dispatch Search repeat (n/N)",
+          "Dispatch Replace operation"
+        ],
+        "problem": "Each new deferred action type requires modifying app.rs event loop"
+      },
+      "proposed_solution": {
+        "new_module": "crates/alfred-core/src/command_dispatcher.rs",
+        "type": "DeferredCommandExecutor",
+        "method": "pub fn execute(state: &mut EditorState, action: DeferredAction, runtime: &LispRuntime) -> Result<(), String>",
+        "benefits": [
+          "Pure function: DeferredAction + EditorState -> EditorState'",
+          "App.rs becomes thin event loop, not command processor",
+          "New command types added without modifying app.rs",
+          "Enables composition (chain multiple deferred actions)"
+        ]
+      },
+      "steps": [
+        "Create crates/alfred-core/src/command_dispatcher.rs",
+        "Move execute_deferred_action logic from app.rs to new module",
+        "Accept LispRuntime as parameter instead of accessing from App",
+        "Replace app.rs execute_deferred_action call with module function",
+        "Update DeferredAction enum to support new variants without app.rs changes",
+        "Test: all command execution paths (built-in, Lisp, macro, search) pass unchanged"
+      ],
+      "testing_strategy": "property-based: generate random DeferredAction sequences, verify idempotency and state consistency",
+      "risk_level": "LOW",
+      "risk_mitigation": [
+        "All command execution logic moves unchanged; no behavior modification",
+        "App.rs only changes to remove execute_deferred_action implementation (thin wrapper remains)"
+      ],
+      "estimated_effort": 8,
+      "impact_on_architecture": "App.rs becomes event loop + renderer; commands are pure domain logic"
+    },
+    {
+      "rank": 5,
+      "title": "Decompose EditorState into subsystem types",
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "smell_category": "Bloaters",
+      "code_smell": "Large Class / God Object",
+      "severity": "HIGH",
+      "fowler_technique": "Extract Class / Introduce Parameter Object",
+      "reason": "EditorState has 39+ public fields aggregating: buffer, cursor, viewport, keymaps, registers, undo/redo, macros, marks, jump list, change list, search, theme, panels, focus. Single mutable container prevents composition and violates functional paradigm.",
+      "current_state": {
+        "fields": 39,
+        "subsystems": [
+          "Buffer subsystem: buffer, dirty flag (implicit)",
+          "Cursor subsystem: cursor",
+          "Viewport subsystem: viewport",
+          "Keymap subsystem: keymaps, active_keymaps, mode",
+          "Register subsystem: registers, pending_register",
+          "Undo/Redo subsystem: undo_stack, redo_stack",
+          "Search subsystem: search_pattern, search_forward, last_char_find",
+          "Edit tracking: last_edit_command",
+          "Selection subsystem: selection_start, visual_linewise",
+          "Theme subsystem: theme, named_themes, cursor_shapes",
+          "Panel subsystem: panels, panel_focus",
+          "Command subsystem: commands",
+          "Hook subsystem: hooks",
+          "Misc: message, running, count, repeat_count"
+        ],
+        "problem": "Each subsystem modification requires updating new() and snapshot/undo logic"
+      },
+      "proposed_solution": {
+        "approach": "Extract 6 subsystem types, keep EditorState as composition root",
+        "subsystem_types": [
+          "BufferView { buffer: Buffer, dirty: bool }",
+          "CursorView { cursor: Cursor, viewport: Viewport }",
+          "RegisterSet { registers: HashMap<char, RegisterEntry>, pending: Option<char> }",
+          "UndoState { undo_stack: Vec<UndoSnapshot>, redo_stack: Vec<UndoSnapshot> }",
+          "SearchState { pattern: Option<String>, forward: bool, last_char_find: Option<(CharFindKind, char)> }",
+          "ModeState { mode: String, keymaps: HashMap<String, Keymap>, active_keymaps: Vec<String>, cursor_shapes: HashMap<String, String> }"
+        ],
+        "refactored_editor_state": "pub struct EditorState { buffer: BufferView, cursor: CursorView, registers: RegisterSet, undo: UndoState, search: SearchState, mode: ModeState, theme: Theme, named_themes: HashMap<String, Theme>, panels: PanelRegistry, panel_focus: PanelFocus, commands: CommandRegistry, hooks: HookRegistry, message: Option<String>, running: bool }",
+        "benefits": [
+          "Functional composition: each subsystem can be updated independently",
+          "Testability: subsystems have focused, clear contracts",
+          "Future extensibility: new subsystems don't touch existing ones",
+          "Snapshotting: UndoState can implement Copy semantics once fields are smaller"
+        ]
+      },
+      "steps": [
+        "Define subsystem types in new modules: crates/alfred-core/src/buffer_view.rs, cursor_view.rs, register_set.rs, etc.",
+        "Add pub field accessors to EditorState (buffer_view(), cursor_view(), registers(), etc.)",
+        "Gradually migrate register_builtin_commands from direct field access to subsystem accessors",
+        "Extract snapshot/undo logic: impl UndoState { fn snapshot(&self) -> UndoSnapshot { ... } }",
+        "Update App to use subsystem getters instead of direct EditorState fields",
+        "Migrate bridge.rs primitives to use subsystem types (e.g., buffer-insert accesses buffer_view.buffer)",
+        "Test: all existing tests pass; new subsystem types have focused unit tests"
+      ],
+      "testing_strategy": "unit tests per subsystem (CursorView::move_up_viewport_adjusted, RegisterSet::set_with_fallback, etc.) plus integration tests for EditorState composition",
+      "risk_level": "HIGH",
+      "risk_mitigation": [
+        "Subsystem types are internal; EditorState API remains unchanged",
+        "Add deprecation period where old direct field access still works (via pub fields)",
+        "Migrate register_builtin_commands incrementally, command by command",
+        "Keep undo_stack/redo_stack as Vec<(BufferView, CursorView)> (minimal snapshot) until subsystems stabilize"
+      ],
+      "estimated_effort": 32,
+      "impact_on_architecture": "Transforms EditorState from monolithic to compositional; enables future subsystem independence"
+    },
+    {
+      "rank": 6,
+      "title": "Refactor register_builtin_commands from procedural to data-driven",
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "smell_category": "Bloaters",
+      "code_smell": "Long Method",
+      "severity": "HIGH",
+      "fowler_technique": "Replace Method with Method Object / Introduce Table-Driven Pattern",
+      "reason": "register_builtin_commands is ~887 lines (lines 258-1145), registering 30+ commands inline using repeated crate:: prefixes. Violates DRY and makes command set opaque. Should be declarative table.",
+      "current_state": {
+        "lines": "258-1145",
+        "command_count": 30,
+        "pattern": "crate::command::register(&mut state.commands, \"cmd-name\", crate::command::CommandHandler::Native(|s| { ... }))",
+        "problem": "Each command registration is 5-30 lines of boilerplate; same pattern repeated 30+ times"
+      },
+      "proposed_solution": {
+        "approach": "Table-driven command registration",
+        "data_structure": "Vec<CommandDefinition> where CommandDefinition = { name: &'static str, handler: fn(&mut EditorState) -> Result<(), String> }",
+        "refactored_signature": "pub fn register_builtin_commands(state: &mut EditorState) { for cmd in BUILTIN_COMMANDS.iter() { register_command(state, cmd); } }",
+        "data_table": "const BUILTIN_COMMANDS: &[CommandDefinition] = &[ CommandDefinition { name: \"cursor-up\", handler: handlers::cursor_up }, CommandDefinition { name: \"cursor-down\", handler: handlers::cursor_down }, ... ]",
+        "benefits": [
+          "Command registry becomes declarative, not procedural",
+          "Handlers move to separate handlers module (crates/alfred-core/src/handlers/mod.rs)",
+          "Can generate command list/docs from table",
+          "Easy to disable/enable commands via feature flags",
+          "New command = add row to table + define handler"
+        ]
+      },
+      "steps": [
+        "Create crates/alfred-core/src/handlers/ directory with handler modules (cursor.rs, editing.rs, register.rs, search.rs, etc.)",
+        "Define CommandDefinition type in crates/alfred-core/src/command_table.rs",
+        "Extract each command handler from register_builtin_commands into handlers/ module",
+        "Create BUILTIN_COMMANDS table in command_table.rs (initially 30+ rows)",
+        "Refactor register_builtin_commands to loop over BUILTIN_COMMANDS",
+        "Add new pub fn command_list() -> Vec<&'static str> for documentation",
+        "Test: verify all 30+ commands still register and execute correctly"
+      ],
+      "testing_strategy": "parametrized tests iterating over BUILTIN_COMMANDS, verifying each command executes without error",
+      "risk_level": "MEDIUM",
+      "risk_mitigation": [
+        "Handlers are extracted unchanged (no logic modification)",
+        "Table structure is additive (no breaking changes to CommandRegistry)",
+        "Can keep original register_builtin_commands as temporary wrapper during migration"
+      ],
+      "estimated_effort": 20,
+      "impact_on_architecture": "Register_builtin_commands shrinks from 887 to <100 lines; handlers become modular and testable"
+    },
+    {
+      "rank": 7,
+      "title": "Extract BridgePrimitives subsystem from bridge.rs",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "smell_category": "Couplers",
+      "code_smell": "Feature Envy / Insider Trading",
+      "severity": "HIGH",
+      "fowler_technique": "Extract Class / Hide Delegate",
+      "reason": "5198-line bridge.rs directly accesses 8+ alfred_core submodules via repeated Rc<RefCell<EditorState>> borrows (buffer, cursor, viewport, hook, command, theme, panel, editor_state). Creates intense structural coupling; 100+ direct field accesses per primitive.",
+      "current_state": {
+        "file_size": 5198,
+        "primitive_count": 35,
+        "direct_module_accesses": [
+          "alfred_core::buffer",
+          "alfred_core::cursor",
+          "alfred_core::viewport",
+          "alfred_core::hook",
+          "alfred_core::command",
+          "alfred_core::theme",
+          "alfred_core::panel",
+          "alfred_core::editor_state"
+        ],
+        "pattern": "Each primitive borrows state, accesses 3-8 submodule functions, mutates EditorState fields"
+      },
+      "proposed_solution": {
+        "approach": "Leverage EditorFacade (from refactoring #3) as single bridge to core",
+        "new_structure": "bridge.rs uses only EditorFacade methods, never directly accesses submodules",
+        "refactored_primitive": "fn register_buffer_insert(env: &Rc<RefCell<Env>>, facade: EditorFacade) { define_native_closure(env, \"buffer-insert\", move |_env, args| { let text = extract_string_arg(&args, \"buffer-insert\")?; facade.insert_char(&text)?; Ok(Value::Nil) }) }",
+        "benefits": [
+          "Bridge only imports alfred_core::facade::EditorFacade (one import instead of eight)",
+          "Eliminates all direct submodule access patterns",
+          "Makes coupling explicit: bridge->facade->submodules (three-layer, not flat)",
+          "Enables testing: facade can be mocked for unit testing primitives"
+        ]
+      },
+      "steps": [
+        "Refactor (with refactoring #3) to ensure EditorFacade has all methods bridge primitives need",
+        "Remove all alfred_core::buffer, alfred_core::cursor, etc. imports from bridge.rs",
+        "Replace all direct submodule calls with EditorFacade method calls",
+        "Primitive signatures change: register_buffer_insert(env: &Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) -> register_buffer_insert(env: &Rc<RefCell<Env>>, facade: EditorFacade)",
+        "Update all 35 primitive registrations in register_core_primitives()",
+        "Test: all Lisp tests pass; primitives behave identically"
+      ],
+      "testing_strategy": "snapshot tests comparing Lisp runtime output before/after; property-based tests on primitive behavior",
+      "risk_level": "MEDIUM",
+      "risk_mitigation": [
+        "EditorFacade is thin wrapper (no behavior change)",
+        "Primitive behavior unchanged (only access path changes)",
+        "Keep original primitive implementations as fallback during transition"
+      ],
+      "estimated_effort": 16,
+      "impact_on_architecture": "Reduces bridge coupling; positions EditorFacade as canonical abstraction boundary"
+    },
+    {
+      "rank": 8,
+      "title": "Extract RendererModule from app.rs renderer operations",
+      "file": "crates/alfred-tui/src/app.rs / crates/alfred-tui/src/renderer.rs",
+      "smell_category": "Couplers",
+      "code_smell": "Message Chain / Feature Envy",
+      "severity": "MEDIUM",
+      "fowler_technique": "Move Method / Extract Facade",
+      "reason": "Main event loop in app.rs intersperses rendering logic (parse color themes, gutter rendering, buffer display) with command execution. Renderer is separate module but app.rs still reaches into its internals.",
+      "current_state": {
+        "concern": "Renderer and App are tightly coupled; app.rs must know about renderer's internal structure to trigger redraws"
+      },
+      "proposed_solution": {
+        "new_type": "RendererFacade",
+        "methods": [
+          "pub fn render_frame(&mut self, editor: &EditorState, lisp_runtime: &LispRuntime) -> io::Result<()>",
+          "pub fn clear(&mut self) -> io::Result<()>",
+          "pub fn terminal_size(&self) -> (u16, u16)"
+        ],
+        "implementation": "Facade owns Terminal, SyntaxHighlighter, and all renderer state; app.rs calls only these three methods"
+      },
+      "steps": [
+        "Create RendererFacade in crates/alfred-tui/src/renderer_facade.rs",
+        "Move renderer ownership to RendererFacade",
+        "Replace all inline renderer calls in app.rs event loop with RendererFacade method calls",
+        "Simplify app.rs event loop: read key -> process key -> render frame -> repeat"
+      ],
+      "testing_strategy": "integration tests with mock terminal backend, verify render calls synchronize with editor state changes",
+      "risk_level": "LOW",
+      "risk_mitigation": [
+        "Renderer logic unchanged (only facade layer added)",
+        "Existing renderer tests continue to pass"
+      ],
+      "estimated_effort": 10,
+      "impact_on_architecture": "App.rs becomes pure event loop; renderer becomes black box"
+    },
+    {
+      "rank": 9,
+      "title": "Fix dead code: PluginRegistry in main.rs, dead assignment in bridge.rs",
+      "file": "crates/alfred-bin/src/main.rs / crates/alfred-lisp/src/bridge.rs",
+      "smell_category": "Dispensables",
+      "code_smell": "Dead Variable / Dead Assignment",
+      "severity": "LOW",
+      "fowler_technique": "Inline / Remove Variable",
+      "reason": "Two low-risk dead code removals: (1) PluginRegistry built but dropped in main.rs (let _ = reg); (2) let _lisp_env = runtime.env() assigned but unused in bridge.rs",
+      "current_state": {
+        "main_rs_issue": "let _ = reg = PluginRegistry::load_plugins(...) immediately dropped; noted as future work but creates confusion",
+        "bridge_rs_issue": "let _lisp_env = runtime.env() in register_define_command, marked as unused"
+      },
+      "proposed_solution": {
+        "main_rs_fix": "Remove PluginRegistry::load_plugins() call entirely; add TODO comment explaining Lisp plugins are now primary extension mechanism",
+        "bridge_rs_fix": "Remove unused let _lisp_env assignment; if env is genuinely needed, use it; otherwise delete"
+      },
+      "steps": [
+        "Remove let _ = PluginRegistry::load_plugins(...) from main.rs",
+        "Remove PluginRegistry import from main.rs if no longer used",
+        "Remove let _lisp_env assignment from register_define_command",
+        "Verify no other code path expects PluginRegistry (grep codebase)",
+        "Test: e2e tests pass; no plugin loading behavior change (Lisp plugins already loaded)"
+      ],
+      "testing_strategy": "smoke test: editor starts, loads Lisp plugins from disk, functions normally",
+      "risk_level": "LOW",
+      "risk_mitigation": [
+        "Both removals are purely dead code (no behavior change)",
+        "PluginRegistry remains available for future Rust plugin system"
+      ],
+      "estimated_effort": 1,
+      "impact_on_architecture": "Minor code cleanliness; clarifies that Lisp plugins are primary extension point"
+    },
+    {
+      "rank": 10,
+      "title": "Replace boolean blindness: execute_global_delete invert parameter",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Naming",
+      "code_smell": "Boolean Blindness",
+      "severity": "LOW",
+      "fowler_technique": "Replace Boolean with Enum",
+      "reason": "execute_global_delete uses plain bool invert parameter. A small enum (MatchingLines / NonMatchingLines) would be clearer and prevent accidental boolean inversion bugs.",
+      "current_state": {
+        "function_signature": "fn execute_global_delete(state: &mut EditorState, pattern: &str, invert: bool) -> (InputState, DeferredAction)",
+        "problem": "Caller must reason about bool semantics; easy to confuse invert=true as 'delete inverted matches' vs 'invert the matching logic'"
+      },
+      "proposed_solution": {
+        "new_enum": "pub enum GlobalDeleteMode { MatchingLines, NonMatchingLines }",
+        "refactored_signature": "fn execute_global_delete(state: &mut EditorState, pattern: &str, mode: GlobalDeleteMode) -> (InputState, DeferredAction)",
+        "call_sites": "execute_global_delete(state, pattern, GlobalDeleteMode::MatchingLines) vs execute_global_delete(state, pattern, GlobalDeleteMode::NonMatchingLines)"
+      },
+      "steps": [
+        "Define GlobalDeleteMode enum in app.rs (or editor_state.rs)",
+        "Update execute_global_delete signature to use GlobalDeleteMode",
+        "Update all call sites (g/pattern/d -> MatchingLines; g!/pattern/d -> NonMatchingLines)",
+        "Test: all global delete tests pass with new enum"
+      ],
+      "testing_strategy": "property-based tests with both enum variants, verify correct lines deleted",
+      "risk_level": "LOW",
+      "risk_mitigation": [
+        "Enum change is API-only (no logic modification)",
+        "All existing tests can be updated mechanically"
+      ],
+      "estimated_effort": 2,
+      "impact_on_architecture": "Minor; improves code clarity and reduces bugs from boolean confusion"
+    },
+    {
+      "rank": 11,
+      "title": "Extract duplicate range-computation logic (delete/yank operator patterns)",
+      "file": "crates/alfred-tui/src/app.rs",
+      "smell_category": "Dispensables",
+      "code_smell": "Duplicated Code",
+      "severity": "LOW",
+      "fowler_technique": "Extract Method",
+      "reason": "execute_delete_with_motion and execute_yank_with_motion both share CharWise/LineWise pattern with identical range-computation logic. Should be factored into shared helper.",
+      "current_state": {
+        "duplicated_functions": [
+          "execute_delete_with_motion",
+          "execute_yank_with_motion"
+        ],
+        "common_logic": "match (operator_kind, text_object_kind) { (CharWise, ...) => ...; (LineWise, ...) => ... }"
+      },
+      "proposed_solution": {
+        "new_function": "fn compute_operator_range(text_object: &TextObject, cursor: Cursor, buffer: &Buffer) -> Range",
+        "refactored_delete": "fn execute_delete_with_motion(...) { let range = compute_operator_range(...); let text = extract_text(&buffer, range); delete_text(&mut buffer, range); set_register(..., text); }",
+        "refactored_yank": "fn execute_yank_with_motion(...) { let range = compute_operator_range(...); let text = extract_text(&buffer, range); set_register(..., text); }"
+      },
+      "steps": [
+        "Extract compute_operator_range() helper function",
+        "Replace duplicated range logic in execute_delete_with_motion with call to helper",
+        "Replace duplicated range logic in execute_yank_with_motion with call to helper",
+        "Test: all delete/yank tests pass unchanged"
+      ],
+      "testing_strategy": "property-based tests on compute_operator_range with various TextObject/Cursor combinations",
+      "risk_level": "LOW",
+      "risk_mitigation": [
+        "New function is pure (cursor, buffer -> range)",
+        "Behavior unchanged (only refactoring)"
+      ],
+      "estimated_effort": 3,
+      "impact_on_architecture": "Minor DRY cleanup; improves maintainability"
+    }
+  ],
+  "implementation_sequence": [
+    {
+      "phase": 1,
+      "name": "Foundation: Abstraction Boundaries",
+      "refactorings": [3, 7],
+      "duration_weeks": 2,
+      "goal": "Establish EditorFacade and eliminate direct structural coupling between layers"
+    },
+    {
+      "phase": 2,
+      "name": "TUI Decomposition",
+      "refactorings": [1, 2, 4, 8],
+      "duration_weeks": 3,
+      "goal": "Extract input state machine, command dispatchers, and renderer facade from app.rs"
+    },
+    {
+      "phase": 3,
+      "name": "Core Refactoring",
+      "refactorings": [5, 6],
+      "duration_weeks": 4,
+      "goal": "Decompose EditorState into subsystems; make command registration data-driven"
+    },
+    {
+      "phase": 4,
+      "name": "Code Cleanliness",
+      "refactorings": [9, 10, 11],
+      "duration_weeks": 1,
+      "goal": "Remove dead code, fix boolean blindness, deduplicate logic"
+    }
+  ],
+  "sequence_dependencies": {
+    "refactoring_3_must_precede": [7, "EditorFacade must exist before bridge.rs can use it"],
+    "refactoring_1_must_precede": [2, "InputStateMachine extraction makes col-command handling clearer"],
+    "refactoring_5_depends_on": [3, "Subsystem extraction easier with EditorFacade reducing coupling"],
+    "refactoring_6_depends_on": [5, "Data-driven command table works better with subsystem types"]
+  },
+  "risk_assessment_summary": {
+    "high_risk_refactorings": [5],
+    "medium_risk_refactorings": [1, 2, 3, 6, 7],
+    "low_risk_refactorings": [4, 8, 9, 10, 11],
+    "mitigation_strategy": "Phase 1 (abstraction boundaries) must complete before later phases; use feature flags to gradually enable new code paths; commit incremental progress after each extracted component"
+  },
+  "expected_outcomes": {
+    "before_refactoring": {
+      "largest_files": [
+        "app.rs: 7987 lines",
+        "bridge.rs: 5198 lines",
+        "editor_state.rs: 3355 lines"
+      ],
+      "total_megafile_lines": 16540,
+      "grade": "B",
+      "issues": 14
+    },
+    "after_refactoring": {
+      "expected_structure": {
+        "app.rs": "~1200 lines (event loop + main facade)",
+        "input_machine.rs": "~800 lines (KeyEventMachine)",
+        "colon_commands.rs": "~600 lines (command dispatcher)",
+        "bridge.rs": "~2000 lines (primitives using EditorFacade)",
+        "editor_state.rs": "~1000 lines (subsystem composition)",
+        "handlers/": "~900 lines (command handlers)",
+        "command_dispatcher.rs": "~200 lines (deferred action executor)"
+      },
+      "expected_grade": "A-",
+      "expected_critical_issues": 0,
+      "expected_medium_issues": "1-2 (residual plugin system design debt)"
+    }
+  },
+  "architectural_principles_addressed": {
+    "SRP": "Each file/module has one reason to change",
+    "OCP": "New commands via table extension, not code modification",
+    "DIP": "TUI depends on EditorFacade (abstraction), not concrete modules",
+    "functional_paradigm": "Pure core (command handlers, input machine, command dispatcher) with I/O shell (app.rs event loop, renderer facade)"
+  }
+}

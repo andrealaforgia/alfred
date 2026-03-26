@@ -1,0 +1,129 @@
+{
+  "overall_score": 82,
+  "summary": "The codebase demonstrates strong naming and formatting consistency throughout. All Rust source follows snake_case, module-level doc comments, and a pure-function / free-function style that is applied uniformly. The main consistency gaps are: (1) bridge.rs uses two slightly different argument-extraction helper functions (extract_string_arg vs extract_string_arg_at) where one generic version could serve both; (2) mode entry in app.rs duplicates state.mode + state.active_keymaps assignment without a helper; (3) register_builtin_commands in editor_state.rs uses fully-qualified crate:: paths while bridge.rs uses imported aliases — inconsistent within the same domain. Lisp plugin files follow a clear convention. No formatter config file (rustfmt.toml) found, though code style is consistent enough to imply formatter use.",
+  "naming_conventions": {
+    "score": 93,
+    "dominant_function_style": "snake_case",
+    "dominant_file_style": "kebab-case",
+    "violations": [
+      "DeferredAction enum in app.rs uses PascalCase variants consistently (correct), but the `dummy` variable name for the throwaway EditorState is not descriptive.",
+      "Variable s used for EditorState borrows in bridge closures (e.g., |s| { s.cursor... }) is idiomatic Rust but differs from the more explicit `editor` name used in most bridge primitives."
+    ],
+    "violation_count": 2,
+    "total_names_checked": 420
+  },
+  "structure_consistency": {
+    "score": 78,
+    "pattern": "layered",
+    "anomalies": [
+      "app.rs combines: key event conversion (pure), input state machine (pure), event loop (IO), substitute/global/search execution (mixed), test helpers, and 6000+ lines of tests — all in one file. Other TUI files (renderer.rs) are well-scoped.",
+      "editor_state.rs mixes the EditorState struct definition, its constructor, register_builtin_commands (~887 lines), and numerous pure utility functions. The command registration logically belongs in a separate commands setup module.",
+      "Unit tests are co-located in the same file (idiomatic Rust) but app.rs has ~6000 lines of tests vs ~1700 lines of production code — an unusual ratio suggesting the file needs splitting.",
+      "PluginRegistry is created and immediately discarded in load_plugins() because it is not yet wired to EditorState — acknowledged in a comment but creates structural inconsistency."
+    ]
+  },
+  "import_consistency": {
+    "score": 88,
+    "dominant_style": "absolute",
+    "ordering_consistent": true,
+    "wildcard_imports": 0
+  },
+  "logging_uniformity": {
+    "score": 72,
+    "structured_pct": 0.0,
+    "dominant_style": "printf",
+    "logger_pattern": "none",
+    "notes": "No structured logging framework. The editor uses state.message = Some(format!(...)) as the sole user-facing message channel. Internal errors are propagated via Result. No tracing/log crate usage found. eprintln! is used only in main for fatal startup errors. This is appropriate for a TUI application but the format!() message pattern is applied inconsistently: some messages include punctuation, some do not; capitalization varies (e.g., 'Pattern not found' vs 'pattern not found', 'No file name' vs 'No file name')."
+  },
+  "config_patterns": {
+    "score": 85,
+    "dominant_pattern": "config_object",
+    "deviations": [
+      "Tab width is stored as usize on EditorState and mutated via Lisp (set-tab-width); consistent with other settings.",
+      "Cursor shapes use a HashMap<String,String> on EditorState; consistent.",
+      "The plugins/ directory path is hardcoded as a relative path (Path::new('plugins')) in main.rs rather than configurable — minor inflexibility.",
+      "User config path uses HOME env var with a hardcoded ~/.config/alfred/init.lisp suffix; no XDG_CONFIG_HOME support."
+    ]
+  },
+  "error_handling_consistency": {
+    "score": 80,
+    "dominant_pattern": "custom_exceptions",
+    "notes": "alfred-core uses a custom AlfredError enum (thiserror) and a Result<T> alias. alfred-lisp uses LispError (thiserror) with ParseError/RuntimeError/IoError variants. Bridge functions return RuntimeError (rust_lisp's type) from closures. main.rs uses Box<dyn std::error::Error>. Plugin system uses PluginError (thiserror). The multi-layer error types are appropriate but mean callers must handle 3-4 different error types depending on call site. Unwrap() appears in 3 non-test production locations in app.rs (macro recording take().unwrap(), strip_prefix().unwrap() for already-guarded patterns) — low risk but inconsistent with the general propagation pattern."
+  },
+  "formatting_consistency": {
+    "score": 91,
+    "indentation": "spaces_4",
+    "formatter_config_present": false,
+    "formatter": "rustfmt",
+    "notes": "No rustfmt.toml found at project root. Code style is consistent with rustfmt defaults throughout: 4-space indentation, trailing commas in multi-line expressions, consistent brace placement, 100-char line length (estimated). The absence of a committed rustfmt.toml means formatting rules are implicit rather than enforced by config."
+  },
+  "pattern_adherence": {
+    "score": 84,
+    "patterns_detected": [
+      {
+        "pattern": "Functional core / imperative shell",
+        "adherence": "Good — core modules (buffer.rs, cursor.rs, text_object.rs, hook.rs) are pure functions returning new values. The IO shell (app.rs run(), renderer.rs) is cleanly separated. Bridge closures are the main deviation: they mutate shared state via RefCell rather than returning new values, which is forced by the Lisp interop model.",
+        "score": 82
+      },
+      {
+        "pattern": "Free-function module style (no impl bloat)",
+        "adherence": "Excellent — almost all domain logic is free functions operating on data types (buffer::insert_at, cursor::move_down, hook::dispatch_hook). Structs are plain data; impl blocks contain only constructors and accessors. Consistent across all crates.",
+        "score": 95
+      },
+      {
+        "pattern": "Plugin-first architecture via Lisp",
+        "adherence": "Good — keybindings, status bar, line numbers, browse mode, themes are all Lisp plugins. The bridge layer exposes the right primitives. Some Vim-specific logic (operator-pending, text objects, macros, visual mode) is baked into app.rs rather than being expressible in Lisp, which is a pragmatic trade-off but slightly inconsistent with the declared plugin-first philosophy.",
+        "score": 76
+      },
+      {
+        "pattern": "Types-first design with ADTs",
+        "adherence": "Good — InputState, Operator, MotionKind, DeferredAction, CharFindKind, TextObjectModifier, PanelPosition are all purposeful enums. EditorState is the main exception: it is a large mutable bag rather than a composition of smaller typed subsystems.",
+        "score": 80
+      }
+    ]
+  },
+  "risk_distribution": {
+    "critical": 0,
+    "high": 1,
+    "medium": 3,
+    "low": 4
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Split app.rs into focused modules",
+      "description": "Extract handle_key_event and its InputState/Operator/MotionKind types into a key_handler module. Extract execute_colon_command and execute_substitute/execute_global_delete into a command_executor module. Extract the run() event loop into event_loop.rs. The tests (currently ~6000 lines) can move with their respective modules. This would reduce the primary cognitive load offender from 7987 to roughly 4 files of 500-800 lines each.",
+      "effort": "medium"
+    },
+    {
+      "priority": 2,
+      "title": "Extract a mode-entry helper function",
+      "description": "The pattern `state.mode = MODE_INSERT.to_string(); state.active_keymaps = vec![format!(\"{}-mode\", MODE_INSERT)];` appears ~6 times in app.rs and editor_state.rs. Extract into `enter_mode(state, mode_name)` in editor_state.rs to eliminate duplication and reduce future divergence.",
+      "effort": "low"
+    },
+    {
+      "priority": 3,
+      "title": "Add rustfmt.toml to encode formatting conventions",
+      "description": "The codebase is consistently formatted but relies on implicit rustfmt defaults. Adding a committed rustfmt.toml ensures new contributors use identical settings and CI format checks enforce the same rules.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Replace bool invert in execute_global_delete with a named enum",
+      "description": "The `invert: bool` parameter in parse_global_command and execute_global_delete should be replaced with `enum GlobalCommandMode { MatchingLines, NonMatchingLines }` to eliminate boolean blindness and self-document call sites.",
+      "effort": "low"
+    },
+    {
+      "priority": 5,
+      "title": "Consolidate register_builtin_commands into a data-driven table",
+      "description": "register_builtin_commands is 887 lines of repetitive crate::command::register(...) calls. Replace with a static slice of (name, fn_pointer) tuples iterated in a loop. This reduces the function to ~50 lines and makes it easier to scan the full command catalog.",
+      "effort": "medium"
+    },
+    {
+      "priority": 6,
+      "title": "Remove dead let _lisp_env assignment in register_define_command",
+      "description": "The unused `let _lisp_env = runtime.env();` assignment in bridge.rs register_define_command should be removed. It is annotated as no longer used but wastes a clone of the Rc and adds confusion.",
+      "effort": "low"
+    }
+  ]
+}

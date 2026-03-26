@@ -1,0 +1,89 @@
+{
+  "project": {
+    "name": "alfred",
+    "root": "/Users/andrealaforgia/dev/personal/alfred",
+    "primary_language": "rust",
+    "languages": {"rust": 25972},
+    "total_files": 47,
+    "total_loc": 25972
+  },
+  "structure": {
+    "tree": ".\n./crates\n./crates/alfred-plugin/src\n./crates/alfred-tui/src\n./crates/alfred-syntax/queries\n./crates/alfred-syntax/src\n./crates/alfred-bin/src\n./crates/alfred-lisp/src\n./crates/alfred-core/src\n./plugins (vim-keybindings, browse-mode, test-plugin, line-numbers, rainbow-csv, word-count, status-bar, default-theme)\n./tests/e2e\n./docs (adrs, feature, research, walkthrough)\n./scripts\n./.github/workflows",
+    "entry_points": ["crates/alfred-bin/src/main.rs"],
+    "test_dirs": ["tests/", "tests/e2e/"],
+    "test_framework": "cargo test + pexpect e2e"
+  },
+  "dependencies": {
+    "manifest_files": ["Cargo.toml", "crates/alfred-core/Cargo.toml", "crates/alfred-lisp/Cargo.toml", "crates/alfred-plugin/Cargo.toml", "crates/alfred-syntax/Cargo.toml", "crates/alfred-tui/Cargo.toml", "crates/alfred-bin/Cargo.toml"],
+    "manifest_contents": {
+      "Cargo.toml": "[workspace]\nresolver = \"2\"\nmembers = [\n    \"crates/alfred-core\",\n    \"crates/alfred-lisp\",\n    \"crates/alfred-plugin\",\n    \"crates/alfred-syntax\",\n    \"crates/alfred-tui\",\n    \"crates/alfred-bin\",\n]"
+    },
+    "lock_file_present": true,
+    "lock_files": ["Cargo.lock"]
+  },
+  "devops": {
+    "ci_configs": [".github/workflows/ci.yml"],
+    "ci_config_contents": {
+      ".github/workflows/ci.yml": "name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\nenv:\n  CARGO_TERM_COLOR: always\njobs:\n  check:\n    name: Check\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: dtolnay/rust-toolchain@stable\n      - uses: Swatinem/rust-cache@v2\n      - run: make check\n  test:\n    name: Test\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: dtolnay/rust-toolchain@stable\n      - uses: Swatinem/rust-cache@v2\n      - run: make test\n  format:\n    name: Format\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: dtolnay/rust-toolchain@stable\n        with: { components: rustfmt }\n      - run: make format\n  lint:\n    name: Lint\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: dtolnay/rust-toolchain@stable\n        with: { components: clippy }\n      - uses: Swatinem/rust-cache@v2\n      - run: make lint\n  e2e:\n    name: E2E Tests\n    runs-on: ubuntu-latest\n    needs: [test, lint]\n    steps:\n      - uses: actions/checkout@v4\n      - run: make e2e"
+    },
+    "dockerfiles": [],
+    "dockerfile_contents": {}
+  },
+  "git": {
+    "recent_commits": "e91f5c1 feat(browse-mode): add per-line color highlighting to browser view\n409eaef feat(browse-mode): Ctrl-b toggle browser, Ctrl-e toggle sidebar\nda66c23 fix(browse-mode): prevent navigating above the root browse directory\n06bb924 feat(browse-mode): add :browse command to return to folder browser\n390ae6b fix: syntax highlighting activates after opening file from browser\nefedb20 fix: add newline constant, browser entries render on separate lines\ndc681fd fix: remove compile-only tautology test (Farley reviewer finding)\nb63eb22 fix(e2e): simplify browser rendering tests for reliability\n48babb5 fix: add = equality primitive (rust_lisp uses == not =)\n82e0ece fix(browse-mode): replace #f with nil (rust_lisp doesn't support #f)\n6e20667 fix(browse-mode): replace empty string literals with str-concat workaround\n00da933 fix(e2e): add fallback :q for browser tests, improve diagnostics\n1403953 fix: rewrite browse-mode plugin to avoid define-inside-begin-lambda\nd290ad7 refactor: browser is now a pure Lisp plugin, remove all Rust browser code\nfb390fd feat(alfred-lisp): add filesystem primitives for pure-plugin browser\ndcc7147 refactor: remove plugin-specific fields and primitives from core\n3fcd854 fix(e2e): simplify chunk boundary test to avoid navigation timeout\n7c4273b fix(e2e): reduce delay for repeated j keys in chunk boundary test\nf576d5c fix(e2e): use sequential pexpect.expect for browser tests, fix goto-line\n77450c8 fix(e2e): use pexpect.expect for reliable browser rendering tests",
+    "contributors": "Single contributor project",
+    "branch": "main"
+  },
+  "files": {
+    "file_tree": [
+      "Cargo.toml", "Cargo.lock", "CLAUDE.md", "Makefile", ".gitignore", ".dockerignore",
+      "crates/alfred-core/Cargo.toml", "crates/alfred-core/src/lib.rs", "crates/alfred-core/src/buffer.rs",
+      "crates/alfred-core/src/command.rs", "crates/alfred-core/src/cursor.rs", "crates/alfred-core/src/editor_state.rs",
+      "crates/alfred-core/src/error.rs", "crates/alfred-core/src/hook.rs", "crates/alfred-core/src/key_event.rs",
+      "crates/alfred-core/src/panel.rs", "crates/alfred-core/src/rainbow_csv.rs", "crates/alfred-core/src/text_object.rs",
+      "crates/alfred-core/src/theme.rs", "crates/alfred-core/src/viewport.rs",
+      "crates/alfred-lisp/Cargo.toml", "crates/alfred-lisp/src/lib.rs", "crates/alfred-lisp/src/bridge.rs", "crates/alfred-lisp/src/runtime.rs",
+      "crates/alfred-plugin/Cargo.toml", "crates/alfred-plugin/src/lib.rs", "crates/alfred-plugin/src/registry.rs",
+      "crates/alfred-plugin/src/discovery.rs", "crates/alfred-plugin/src/error.rs", "crates/alfred-plugin/src/metadata.rs",
+      "crates/alfred-syntax/Cargo.toml", "crates/alfred-syntax/src/lib.rs", "crates/alfred-syntax/src/highlighter.rs", "crates/alfred-syntax/src/language.rs",
+      "crates/alfred-syntax/queries/rust/highlights.scm", "crates/alfred-syntax/queries/python/highlights.scm", "crates/alfred-syntax/queries/javascript/highlights.scm",
+      "crates/alfred-tui/Cargo.toml", "crates/alfred-tui/src/lib.rs", "crates/alfred-tui/src/app.rs", "crates/alfred-tui/src/renderer.rs",
+      "crates/alfred-bin/Cargo.toml", "crates/alfred-bin/src/main.rs",
+      "plugins/vim-keybindings/init.lisp", "plugins/browse-mode/init.lisp", "plugins/test-plugin/init.lisp",
+      "plugins/line-numbers/init.lisp", "plugins/rainbow-csv/init.lisp", "plugins/word-count/init.lisp",
+      "plugins/status-bar/init.lisp", "plugins/default-theme/init.lisp",
+      "tests/e2e/test_basic.py", "tests/e2e/test_file_operations.py", "tests/e2e/test_syntax_highlighting.py",
+      "tests/e2e/test_cursor_movement.py", "tests/e2e/test_large_files.py", "tests/e2e/test_browser.py",
+      ".github/workflows/ci.yml"
+    ],
+    "extension_distribution": {"rs": 27, "toml": 7, "lisp": 8, "md": 30, "py": 6, "scm": 3, "yml": 1},
+    "largest_source_files": [
+      {"path": "crates/alfred-tui/src/app.rs", "lines": 7987},
+      {"path": "crates/alfred-lisp/src/bridge.rs", "lines": 5198},
+      {"path": "crates/alfred-core/src/editor_state.rs", "lines": 3351},
+      {"path": "crates/alfred-core/src/buffer.rs", "lines": 1668},
+      {"path": "crates/alfred-tui/src/renderer.rs", "lines": 1307},
+      {"path": "crates/alfred-core/src/cursor.rs", "lines": 1128},
+      {"path": "crates/alfred-syntax/src/highlighter.rs", "lines": 962},
+      {"path": "crates/alfred-plugin/src/lib.rs", "lines": 763},
+      {"path": "crates/alfred-core/src/text_object.rs", "lines": 640},
+      {"path": "crates/alfred-lisp/src/runtime.rs", "lines": 552}
+    ],
+    "import_graph_sample": "Workspace crates: alfred-core -> alfred-lisp -> alfred-plugin -> alfred-syntax -> alfred-tui -> alfred-bin. Key deps: ropey, crossterm, ratatui, tree-sitter, rust_lisp."
+  },
+  "documentation": {
+    "readme_excerpt": "No README found",
+    "doc_files": [
+      "docs/adrs/adr-001-adopt-existing-lisp.md", "docs/adrs/adr-002-plugin-first-architecture.md",
+      "docs/adrs/adr-003-single-process-synchronous.md", "docs/adrs/adr-004-lisp-interpreter-selection.md",
+      "docs/adrs/adr-005-development-paradigm.md", "docs/adrs/adr-006-crate-structure.md",
+      "docs/adrs/adr-007-tree-sitter-syntax-highlighting.md", "docs/adrs/adr-008-folder-browser-architecture.md",
+      "docs/walkthrough/alfred-overview.md", "docs/walkthrough/alfred-walkthrough.md",
+      "docs/research/vim/vim-commands-comprehensive-research.md",
+      "docs/research/editors/alfred-emacs-like-editor-comprehensive-research.md",
+      "docs/feature/alfred-core/design/architecture.md", "docs/feature/folder-browser/design/architecture-design.md",
+      "docs/feature/syntax-highlighting/design/architecture.md",
+      "CLAUDE.md"
+    ]
+  }
+}

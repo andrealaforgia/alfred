@@ -1,0 +1,118 @@
+{
+  "overall_score": 76,
+  "summary": "Alfred is a local-only desktop text editor with no network-facing attack surface. There are no hardcoded secrets, no web endpoints, and no authentication layer. The primary security concerns are: unrestricted filesystem access via Lisp primitives (list-dir, open-file, save-buffer, path-join accept arbitrary paths), execution of arbitrary Lisp code from user-controlled plugin files at startup, and verbose Lisp error messages exposed directly to the UI. The codebase is unsafe-free and uses typed errors throughout the production path. Security posture is appropriate for a local editor but would need sandboxing if plugins were ever loaded from untrusted sources.",
+  "owasp_findings": [
+    {
+      "category": "Broken Access Control",
+      "severity": "medium",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 2054,
+      "description": "The `list-dir` Lisp primitive accepts an arbitrary filesystem path string from plugin code with no restrictions. Plugins can enumerate any directory accessible to the running user, including sensitive system directories.",
+      "evidence": "fn register_list_dir: `let path = std::path::Path::new(&path_str); let read_dir = match std::fs::read_dir(path)`",
+      "remediation": "For a local editor this is low-risk but if plugins are ever loaded from untrusted sources, add a configurable allowed-path list or chroot-style boundary."
+    },
+    {
+      "category": "Broken Access Control",
+      "severity": "medium",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 2279,
+      "description": "The `open-file` Lisp primitive reads any file from disk into the editor buffer without path validation. A malicious plugin could silently exfiltrate file contents by combining open-file + buffer-content.",
+      "evidence": "fn register_open_file: `let path_str = extract_string_arg(&args, \"open-file\")?; ... Buffer::from_file(&path)`",
+      "remediation": "Consider restricting open-file to directories the user has explicitly visited or document the trust model for plugins."
+    },
+    {
+      "category": "Broken Access Control",
+      "severity": "medium",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 680,
+      "description": "The `save-buffer` Lisp primitive can write the buffer contents to any arbitrary path provided as a string argument, with no path validation or user confirmation.",
+      "evidence": "save-buffer: `let save_path = ... std::path::PathBuf::from(explicit_path_arg); buffer::save_to_file(&editor.buffer, &save_path)`",
+      "remediation": "A confirmation prompt or path restriction would mitigate accidental or malicious file overwrites by plugins."
+    },
+    {
+      "category": "Security Misconfiguration",
+      "severity": "low",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 114,
+      "description": "Plugins are loaded from the `plugins/` directory relative to the current working directory. An attacker who can place a directory in the CWD could inject a plugin that executes arbitrary Lisp code.",
+      "evidence": "`let plugins_dir = Path::new(\"plugins\");` in load_plugins()",
+      "remediation": "Load plugins from an absolute path rooted in the binary's installation directory or the user's config home ($XDG_CONFIG_HOME)."
+    },
+    {
+      "category": "Sensitive Data Exposure",
+      "severity": "low",
+      "file": "crates/alfred-tui/src/app.rs",
+      "line": 1217,
+      "description": "Lisp runtime error messages (which can include internal symbols, stack traces, or partial expression state) are shown verbatim in the editor's message line.",
+      "evidence": "`state_rc.borrow_mut().message = Some(format!(\"Lisp error: {}\", err));`",
+      "remediation": "Low risk for a local editor, but consider sanitising error messages if plugin code might leak sensitive variable values."
+    },
+    {
+      "category": "Security Misconfiguration",
+      "severity": "low",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 88,
+      "description": "The user config file path is derived from the HOME environment variable without validation. On systems where HOME is unset, the path silently falls back to an empty string, causing the config file check to be skipped. This is safe but fragile.",
+      "evidence": "`let home_dir = std::env::var(\"HOME\").unwrap_or_default(); if !home_dir.is_empty() { ... }`",
+      "remediation": "Use the `dirs` or `home` crate for platform-portable home directory resolution."
+    }
+  ],
+  "secrets_detected": [],
+  "input_validation": {
+    "entry_points_total": 6,
+    "entry_points_validated": 4,
+    "coverage_ratio": 0.67,
+    "unvalidated_entries": [
+      {
+        "file": "crates/alfred-lisp/src/bridge.rs",
+        "line": 2054,
+        "description": "list-dir accepts arbitrary path strings from Lisp plugins without restriction"
+      },
+      {
+        "file": "crates/alfred-lisp/src/bridge.rs",
+        "line": 2279,
+        "description": "open-file accepts arbitrary path strings from Lisp plugins without restriction"
+      }
+    ]
+  },
+  "auth_assessment": {
+    "consistency_score": 100,
+    "missing_auth_endpoints": [],
+    "patterns_found": ["No authentication required - local desktop editor"],
+    "issues": []
+  },
+  "dependency_cves": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "details": []
+  },
+  "crypto_issues": [],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 0,
+    "medium": 3,
+    "low": 3
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Load plugins from a fixed absolute path, not CWD-relative",
+      "description": "Change `Path::new(\"plugins\")` to resolve from the binary's install location or $XDG_CONFIG_HOME/alfred/plugins. This prevents accidental or malicious plugin injection when the editor is started from an attacker-controlled directory.",
+      "effort": "low"
+    },
+    {
+      "priority": 2,
+      "title": "Document the Lisp plugin trust model and consider sandboxing",
+      "description": "The filesystem primitives (list-dir, open-file, save-buffer) give plugins full read/write access to the user's filesystem. Add a README section explaining that plugins are trusted code, and evaluate adding a capability/sandbox model if third-party plugin distribution is planned.",
+      "effort": "high"
+    },
+    {
+      "priority": 3,
+      "title": "Use a platform-portable home directory resolution crate",
+      "description": "Replace `std::env::var(\"HOME\")` with the `dirs` crate's `config_dir()` function for cross-platform robustness and correctness on Windows/macOS/Linux.",
+      "effort": "low"
+    }
+  ]
+}

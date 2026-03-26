@@ -1,0 +1,122 @@
+{
+  "overall_score": 70,
+  "summary": "Alfred is a desktop text editor with no network access, authentication system, or cryptographic data handling. The compliance posture is neutral to strong in areas applicable to a local single-user application: consistent error handling, no hardcoded secrets detected, strong Rust type system preventing many classes of vulnerabilities. Areas not applicable: network encryption, access control, audit logging, regulatory compliance (GDPR, HIPAA). Code is well-structured with separation of concerns.",
+  "frameworks_audited": [
+    "Local Application Security Baseline"
+  ],
+  "per_framework_scores": {
+    "Local Application Security Baseline": 70
+  },
+  "total_findings": 8,
+  "findings_by_severity": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 6,
+    "informational": 0
+  },
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "Error Handling",
+      "title": "Plugin load errors not auditable",
+      "description": "Plugin discovery, load order resolution, and initialization errors are collected and displayed as UI messages but not persisted for audit. No record of which plugins failed to load, when, and why.",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 79
+    },
+    {
+      "severity": "medium",
+      "category": "Input Validation",
+      "title": "File path handling in CLI args",
+      "description": "File path from CLI arg (argv[1]) is used directly without validation. Path traversal via `../` is possible if Alfred is invoked programmatically. Mitigated by file system permissions, but consider canonicalization.",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 23
+    },
+    {
+      "severity": "low",
+      "category": "Code Structure",
+      "title": "No input sanitization before Lisp evaluation",
+      "description": "User config file (init.lisp) is evaluated directly without sandbox. Lisp code can call any registered primitive (filesystem access, mode changes). No capability-based security model. Acceptable for local user config, but document this assumption.",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 165
+    },
+    {
+      "severity": "low",
+      "category": "Code Structure",
+      "title": "Plugin init.lisp evaluated without isolation",
+      "description": "Plugins are loaded from plugins/ directory and init.lisp files executed. No sandboxing or capability restrictions. Plugin code has full access to editor state and filesystem primitives. Acceptable for trusted plugin ecosystem, but limits third-party plugin safety.",
+      "file": "crates/alfred-plugin/src/lib.rs",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "category": "Documentation",
+      "title": "No security model documentation",
+      "description": "No security.md or threat model. Assumptions about threat boundaries (local user, trusted plugins, single-user OS) are implicit. Document what this tool does NOT protect against.",
+      "file": "docs/",
+      "line": 0
+    },
+    {
+      "severity": "low",
+      "category": "Dependencies",
+      "title": "Dependency audit not automated",
+      "description": "No `cargo audit` or `cargo-deny` in CI pipeline. Cargo.lock is committed, which is good. Consider adding automated vulnerability scanning.",
+      "file": ".github/workflows/ci.yml",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "category": "Type Safety",
+      "title": "Result types are consistently used",
+      "description": "Positive finding: All fallible operations return Result<T, Error>, no unwrap() in library code, panics reserved for test assertions. Strong error handling discipline.",
+      "file": "crates/alfred-core/src/error.rs",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "category": "Code Quality",
+      "title": "No hardcoded secrets detected",
+      "description": "Positive finding: Scan found no API keys, passwords, tokens, or credentials in source. Environment variables (HOME) used for config path computation.",
+      "file": "crates/alfred-bin/src/main.rs",
+      "line": 88
+    }
+  ],
+  "risk_distribution": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 6
+  },
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Document security model and threat boundaries",
+      "description": "Create a SECURITY.md file explaining what Alfred does and does not protect against. Clarify assumptions (local user, single-process, trusted plugins, file system permissions). This sets expectations and aids threat modeling.",
+      "effort": "low"
+    },
+    {
+      "priority": 2,
+      "title": "Add cargo-deny to CI for dependency scanning",
+      "description": "Integrate `cargo deny check` into GitHub Actions CI to automatically audit dependencies for known vulnerabilities. Update Cargo.lock regularly.",
+      "effort": "low"
+    },
+    {
+      "priority": 3,
+      "title": "Canonicalize file paths from CLI args",
+      "description": "Use `std::fs::canonicalize()` or `dunce::canonicalize()` on file_path from CLI argument to prevent directory traversal exploits and normalize paths.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Add audit logging for plugin load events",
+      "description": "Persist plugin discovery, load order, and error events to a debug/audit log (optional, feature-gated). This aids troubleshooting and provides a record of plugin system state changes.",
+      "effort": "medium"
+    },
+    {
+      "priority": 5,
+      "title": "Consider plugin capability model",
+      "description": "As the plugin ecosystem grows, consider restricting primitive access per plugin (e.g., some plugins get filesystem access, others don't). This is a future-oriented recommendation.",
+      "effort": "high"
+    }
+  ]
+}

@@ -1,0 +1,299 @@
+{
+  "overall_score": 85,
+  "summary": "Alfred is a terminal UI editor without REST/HTTP API endpoints. Instead, it exposes a Lisp interpreter bridge with ~50 native primitives (define-command, buffer-insert, cursor-move, etc.) and a plugin system via init.lisp files. The bridge provides consistent naming (snake-case), clear signatures, and good documentation. Error handling is uniform (RuntimeError enums). There is no web API specification (OpenAPI/Swagger). Assessment adapts to this architecture: treating bridge primitives as the 'API' contract.",
+  "endpoint_inventory": [
+    {
+      "method": "lisp-function",
+      "path": "buffer-insert",
+      "handler": "register_buffer_insert",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(buffer-insert text) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "buffer-delete",
+      "handler": "register_buffer_delete",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(buffer-delete) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "buffer-content",
+      "handler": "register_buffer_content",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(buffer-content) -> string"
+    },
+    {
+      "method": "lisp-function",
+      "path": "cursor-position",
+      "handler": "register_cursor_position",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(cursor-position) -> (line column)"
+    },
+    {
+      "method": "lisp-function",
+      "path": "cursor-move",
+      "handler": "register_cursor_move",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(cursor-move direction [count]) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "message",
+      "handler": "register_message",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(message text) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "current-mode",
+      "handler": "register_current_mode",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(current-mode) -> string"
+    },
+    {
+      "method": "lisp-function",
+      "path": "set-mode",
+      "handler": "register_set_mode",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(set-mode name) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "buffer-filename",
+      "handler": "register_buffer_filename",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(buffer-filename) -> string"
+    },
+    {
+      "method": "lisp-function",
+      "path": "buffer-modified?",
+      "handler": "register_buffer_modified",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(buffer-modified?) -> boolean"
+    },
+    {
+      "method": "lisp-function",
+      "path": "save-buffer",
+      "handler": "register_save_buffer",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(save-buffer [path]) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "set-cursor-shape",
+      "handler": "register_set_cursor_shape",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(set-cursor-shape mode shape) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "get-cursor-shape",
+      "handler": "register_get_cursor_shape",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(get-cursor-shape mode) -> string"
+    },
+    {
+      "method": "lisp-function",
+      "path": "quit",
+      "handler": "register_quit",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(quit) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "define-command",
+      "handler": "register_define_command",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(define-command name callback) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "add-hook",
+      "handler": "register_hook_primitives",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(add-hook hook-name callback) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "make-keymap",
+      "handler": "register_keymap_primitives",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(make-keymap name) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "define-key",
+      "handler": "register_keymap_primitives",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(define-key keymap key command) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "define-theme",
+      "handler": "register_theme_primitives",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(define-theme name bg fg styles) -> nil"
+    },
+    {
+      "method": "lisp-function",
+      "path": "string-concat",
+      "handler": "register_string_primitives",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "documented": true,
+      "signature": "(string-concat str1 str2 ...) -> string"
+    }
+  ],
+  "naming_consistency": {
+    "score": 95,
+    "dominant_convention": "kebab-case",
+    "violations": [],
+    "notes": "All bridge primitives use snake-case identifiers (buffer-insert, cursor-move, define-command, etc.), consistent with Lisp convention. No mixed conventions detected. File read/write commands (list-directory, file-exists?, read-file) also follow kebab-case."
+  },
+  "http_method_correctness": {
+    "score": 100,
+    "violations": [],
+    "notes": "Not applicable. No HTTP API. Bridge primitives are pure function calls."
+  },
+  "status_code_consistency": {
+    "score": 100,
+    "violations": [],
+    "notes": "Not applicable. No HTTP status codes. Error handling uses RuntimeError for all bridge primitive failures. Errors propagate to Lisp as exceptions."
+  },
+  "error_format_uniformity": {
+    "score": 90,
+    "formats_found": [
+      "RuntimeError (Lisp exceptions)",
+      "AlfredError (Rust domain errors)",
+      "PluginError (Plugin lifecycle errors)"
+    ],
+    "inconsistencies": [
+      "RuntimeError messages are unstructured strings (no structured fields like code/severity). Error context is implicit in message text."
+    ],
+    "notes": "Bridge primitives return RuntimeError on failure. Plugin load errors are collected and displayed as UI messages. File I/O errors use thiserror enums with path and source context. Consistent error handling discipline, but Lisp-side error representation could be more structured."
+  },
+  "versioning_assessment": {
+    "strategy": "none",
+    "coverage": 0.0,
+    "notes": "No API versioning. Bridge primitives are stable as of current release. No deprecation mechanism. If primitives change, plugins must be updated. Consider documenting when/if backward compatibility will be broken."
+  },
+  "pagination_consistency": {
+    "score": 0,
+    "strategy": "none",
+    "notes": "Not applicable. No list/search endpoints. Plugins interact with file system via filesystem primitives (list-directory returns all entries)."
+  },
+  "request_response_documentation": {
+    "openapi_spec": "none",
+    "markdown_docs": "yes",
+    "inline_docs": "yes",
+    "coverage_pct": 85,
+    "notes": "Bridge primitives are documented in comments in bridge.rs (each register_* function has doc comments explaining signature, usage, and side effects). No OpenAPI/Swagger spec. Plugin authors must read source comments or empirical testing."
+  },
+  "risk_distribution": {
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 4
+  },
+  "findings": [
+    {
+      "severity": "medium",
+      "category": "Documentation",
+      "title": "No unified API reference documentation",
+      "description": "Bridge primitives are documented in code comments (bridge.rs) but no generated API reference (e.g., Markdown list, HTML doc). Plugin authors must read source code to discover available primitives and signatures. Consider auto-generating a primitives list from code.",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 1
+    },
+    {
+      "severity": "medium",
+      "category": "Error Handling",
+      "title": "Unstructured error messages in RuntimeError",
+      "description": "RuntimeError stores only a message string, no error code or severity. Plugin code cannot programmatically handle different error types. Consider adding code field (e.g., :unknown_command, :type_mismatch, :io_error).",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 40
+    },
+    {
+      "severity": "low",
+      "category": "Versioning",
+      "title": "No API versioning strategy",
+      "description": "Bridge primitives have no version field or deprecation markers. If a primitive changes signature, all plugins using it will break. Consider documenting stability guarantees.",
+      "file": "crates/alfred-lisp/src/lib.rs",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "category": "Consistency",
+      "title": "Plugin discovery error reporting",
+      "description": "Plugin errors (missing init.lisp, parse error, init error) are collected and displayed as UI messages. No structured error format for plugins to distinguish failure types. Improved error reporting would aid debugging.",
+      "file": "crates/alfred-plugin/src/error.rs",
+      "line": 1
+    },
+    {
+      "severity": "low",
+      "category": "Consistency",
+      "title": "Type annotation discrepancies in primitive signatures",
+      "description": "Some primitives accept variable arguments (e.g., string-concat accepts N args), but Lisp signature documentation could be clearer. Consider using variadic notation in comments.",
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "line": 1000
+    },
+    {
+      "severity": "low",
+      "category": "Design",
+      "title": "No capability restrictions on bridge primitives",
+      "description": "All loaded plugins have access to all registered primitives (filesystem, buffer, theme, hooks). No capability-based access control. Acceptable for trusted plugins, but limits third-party plugin safety.",
+      "file": "crates/alfred-plugin/src/lib.rs",
+      "line": 1
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "title": "Generate unified API reference documentation",
+      "description": "Create a BRIDGE_PRIMITIVES.md or API.md documenting all registered Lisp functions, signatures, arguments, return types, and error cases. Consider auto-generating from bridge.rs using a macro or doc comment parser.",
+      "effort": "medium"
+    },
+    {
+      "priority": 2,
+      "title": "Enhance RuntimeError with structured error codes",
+      "description": "Extend RuntimeError to include an error code (enum) in addition to message. This allows plugins to programmatically handle different failure modes (type error, missing arg, unknown command, etc.).",
+      "effort": "medium"
+    },
+    {
+      "priority": 3,
+      "title": "Document bridge API stability and versioning",
+      "description": "Create BRIDGE_STABILITY.md explaining which primitives are stable, which are experimental, and policy for deprecation. Declare semantic versioning for bridge API.",
+      "effort": "low"
+    },
+    {
+      "priority": 4,
+      "title": "Add argument type checking helpers",
+      "description": "Create helper functions (extract_int_arg, extract_symbol_arg, extract_list_arg) to reduce boilerplate and improve error consistency when parsing Lisp arguments.",
+      "effort": "low"
+    },
+    {
+      "priority": 5,
+      "title": "Consider capability-based plugin access model",
+      "description": "As the plugin ecosystem grows, define which primitives each plugin requires. Restrict access at load time. This future-work recommendation aids third-party plugin safety.",
+      "effort": "high"
+    }
+  ]
+}

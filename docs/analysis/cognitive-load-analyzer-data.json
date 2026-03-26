@@ -1,0 +1,74 @@
+{
+  "cli_score": 382,
+  "rating": "Moderate",
+  "dimensions": {
+    "D1: Structural Complexity": {
+      "raw": "Estimated cyclomatic complexity: handle_key_event ~90 (12 state arms × branching within each), register_builtin_commands ~30, execute_colon_command ~18, run loop ~15. Most helper functions are low (2-8). High outliers: 3 functions over CC=15. Total grep-estimated branch points in app.rs alone: ~117.",
+      "normalized": 0.68,
+      "weighted": 0.14
+    },
+    "D2: Nesting Depth": {
+      "raw": "Max nesting depth: ~6 levels in handle_key_event (match inside if-let inside loop inside match inside if inside function). P90 across codebase: ~3 levels. Bridge closures nest 3 levels (define_native_closure > closure body > match). Most files maintain 2-3 levels.",
+      "normalized": 0.48,
+      "weighted": 0.07
+    },
+    "D3: Volume/Size": {
+      "raw": "Total: 25972 LOC across 27 Rust files. Largest: app.rs (7987), bridge.rs (5198), editor_state.rs (3355), buffer.rs (1668), renderer.rs (1307), cursor.rs (1128). Top 3 files = 66% of all LOC. 15 of 27 Rust files are under 200 LOC. P90 function size: ~30 lines; max: 887 lines (register_builtin_commands), 605 lines (handle_key_event).",
+      "normalized": 0.72,
+      "weighted": 0.11
+    },
+    "D4: Naming Quality": {
+      "raw": "Naming is generally excellent: snake_case throughout, descriptive identifiers (execute_delete_with_motion, push_undo, resolve_key), consistent verb-noun patterns (register_*, get_*, set_*). Only minor issues: s for EditorState borrow in closures is opaque; invert bool in global_delete. No abbreviations except standard Rust conventions (buf, env, cb).",
+      "normalized": 0.12,
+      "weighted": 0.015
+    },
+    "D5: Coupling": {
+      "raw": "app.rs: 14 use statements, 355 alfred_core:: fully-qualified references, plus alfred_lisp and alfred_syntax imports. bridge.rs: 8 alfred_core sub-module imports, 101 functions, all sharing Rc<RefCell<EditorState>>. main.rs: 8 inter-crate use statements. Effective fan-out for app.rs = 4 crates. Inter-crate dependency graph is linear (core -> lisp -> plugin -> syntax -> tui -> bin).",
+      "normalized": 0.55,
+      "weighted": 0.083
+    },
+    "D6: Cohesion": {
+      "raw": "EditorState has 39 fields serving unrelated concerns (text editing, vim macros, plugin state, syntax highlighting coordination, jump navigation, marks, undo). register_builtin_commands registers 30+ commands in one function, mixing cursor, insert, delete, yank, paste, undo, mode-switch, and advanced vim commands. Core modules (buffer.rs, cursor.rs, hook.rs, command.rs) are highly cohesive. bridge.rs has moderate cohesion (all primitives relate to Lisp-Rust bridging).",
+      "normalized": 0.58,
+      "weighted": 0.07
+    },
+    "D7: Duplication": {
+      "raw": "Structural duplication observed in: (1) execute_delete_with_motion / execute_yank_with_motion share CharWise/LineWise range logic; (2) 12 similar register_* functions in bridge.rs each follow identical define_native_closure pattern; (3) state.mode/active_keymaps assignment repeated ~6 times across insert-mode entry paths; (4) viewport adjustment (state.viewport = alfred_core::viewport::adjust(...)) repeated ~30 times across app.rs. Pattern is consistent but verbose.",
+      "normalized": 0.38,
+      "weighted": 0.057
+    },
+    "D8: Navigability": {
+      "raw": "6-crate workspace with clear naming (alfred-core, alfred-lisp, alfred-plugin, alfred-syntax, alfred-tui, alfred-bin). Each crate has a focused purpose. Plugins in plugins/ directory are self-describing. Documentation in docs/adrs/ and docs/feature/. No README at root. Test co-location: unit tests in same file under #[cfg(test)], e2e tests in tests/e2e/. Main entry point is clear: alfred-bin/src/main.rs. Directory depth is shallow (3 levels). The 7987-line app.rs is the primary navigability obstacle.",
+      "normalized": 0.28,
+      "weighted": 0.028
+    }
+  },
+  "interaction_penalty": 18.5,
+  "worst_offenders": [
+    {
+      "file": "crates/alfred-tui/src/app.rs",
+      "score": 0.74,
+      "primary_dimension": "D3: Volume/Size"
+    },
+    {
+      "file": "crates/alfred-core/src/editor_state.rs",
+      "score": 0.62,
+      "primary_dimension": "D6: Cohesion"
+    },
+    {
+      "file": "crates/alfred-lisp/src/bridge.rs",
+      "score": 0.58,
+      "primary_dimension": "D5: Coupling"
+    },
+    {
+      "file": "crates/alfred-tui/src/renderer.rs",
+      "score": 0.31,
+      "primary_dimension": "D1: Structural Complexity"
+    },
+    {
+      "file": "crates/alfred-core/src/buffer.rs",
+      "score": 0.28,
+      "primary_dimension": "D3: Volume/Size"
+    }
+  ]
+}
