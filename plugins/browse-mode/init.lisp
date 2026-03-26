@@ -36,6 +36,12 @@
 (define browser-cursor 0)
 (define browser-history (list))
 
+;; Browser search/filter state
+(define browser-search-active nil)
+(define browser-search-query (str-concat (list)))
+(define browser-pre-search-cursor 0)
+(define browser-filtered-entries (list))
+
 ;; ---------------------------------------------------------------------------
 ;; Helpers — no local (define) inside lambdas, use args or inline
 ;; ---------------------------------------------------------------------------
