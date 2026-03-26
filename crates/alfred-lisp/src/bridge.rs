@@ -522,7 +522,7 @@ fn register_buffer_delete(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>
 fn register_buffer_content(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "buffer-content", move |_env, _args| {
         let editor = state.borrow();
-        let text = buffer::content(&editor.buffer);
+        let text = alfred_core::facade::buffer_content(&editor);
         Ok(Value::String(text))
     });
 }
@@ -659,7 +659,9 @@ fn register_message(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
 fn register_buffer_filename(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "buffer-filename", move |_env, _args| {
         let editor = state.borrow();
-        let filename = editor.buffer.filename().unwrap_or("").to_string();
+        let filename = alfred_core::facade::buffer_filename(&editor)
+            .unwrap_or("")
+            .to_string();
         Ok(Value::String(filename))
     });
 }
@@ -670,7 +672,9 @@ fn register_buffer_filename(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
 fn register_buffer_modified(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "buffer-modified?", move |_env, _args| {
         let editor = state.borrow();
-        Ok(Value::from(editor.buffer.is_modified()))
+        Ok(Value::from(alfred_core::facade::buffer_is_modified(
+            &editor,
+        )))
     });
 }
 
@@ -1165,7 +1169,7 @@ fn register_set_line_style(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>
 fn register_buffer_line_count(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
     define_native_closure(&env, "buffer-line-count", move |_env, _args| {
         let editor = state.borrow();
-        let count = buffer::line_count(&editor.buffer) as i32;
+        let count = alfred_core::facade::buffer_line_count(&editor) as i32;
         Ok(Value::Int(count))
     });
 }
@@ -1188,7 +1192,7 @@ fn register_buffer_get_line(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
         };
 
         let editor = state.borrow();
-        let content = buffer::get_line_content(&editor.buffer, line_num);
+        let content = alfred_core::facade::buffer_get_line_content(&editor, line_num);
         Ok(Value::String(content))
     });
 }
