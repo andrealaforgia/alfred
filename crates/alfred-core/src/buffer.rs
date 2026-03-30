@@ -408,10 +408,11 @@ pub fn find_forward(
         return None;
     }
 
-    // Search from the current line (after start_col) through end of buffer
+    // Search from the current line (after start_col) through end of buffer.
+    // Use .to_string() instead of .as_str() because as_str() returns None
+    // when a line spans a ropey chunk boundary, silently aborting the search.
     for line_idx in start_line..total_lines {
-        let line_str = buffer.rope.line(line_idx);
-        let line_text = line_str.as_str()?;
+        let line_text = buffer.rope.line(line_idx).to_string();
         let search_from = if line_idx == start_line {
             // Skip past current position so we don't re-find the same match
             (start_col + 1).min(line_text.len())
@@ -425,8 +426,7 @@ pub fn find_forward(
 
     // Wrap around: search from beginning up to (and including) the start position
     for line_idx in 0..=start_line.min(total_lines - 1) {
-        let line_str = buffer.rope.line(line_idx);
-        let line_text = line_str.as_str()?;
+        let line_text = buffer.rope.line(line_idx).to_string();
         let search_to = if line_idx == start_line {
             (start_col + pattern.len()).min(line_text.len())
         } else {
@@ -462,10 +462,11 @@ pub fn find_backward(
         return None;
     }
 
-    // Search from current line (before start_col) backward to beginning
+    // Search from current line (before start_col) backward to beginning.
+    // Use .to_string() instead of .as_str() because as_str() returns None
+    // when a line spans a ropey chunk boundary, silently aborting the search.
     for line_idx in (0..=start_line.min(total_lines - 1)).rev() {
-        let line_str = buffer.rope.line(line_idx);
-        let line_text = line_str.as_str()?;
+        let line_text = buffer.rope.line(line_idx).to_string();
         let search_to = if line_idx == start_line {
             start_col.min(line_text.len())
         } else {
@@ -478,8 +479,7 @@ pub fn find_backward(
 
     // Wrap around: search from end of buffer back to the start position
     for line_idx in (start_line.min(total_lines - 1)..total_lines).rev() {
-        let line_str = buffer.rope.line(line_idx);
-        let line_text = line_str.as_str()?;
+        let line_text = buffer.rope.line(line_idx).to_string();
         let search_from = if line_idx == start_line {
             (start_col + 1).min(line_text.len())
         } else {

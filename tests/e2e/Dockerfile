@@ -16,7 +16,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN python3 -m venv /opt/venv && \
-    /opt/venv/bin/pip install --no-cache-dir pexpect pytest
+    /opt/venv/bin/pip install --no-cache-dir pexpect pytest pytest-xdist
 
 # Copy manifests first to cache dependency resolution
 COPY Cargo.toml Cargo.lock ./
@@ -53,6 +53,9 @@ RUN cp target/release/alfred /usr/local/bin/alfred
 # Copy plugins (Alfred loads them from ./plugins/ relative to CWD)
 COPY plugins/ /alfred/plugins/
 
+# Copy project files used as sample data by browser/search E2E tests
+COPY Makefile /alfred/Makefile
+
 # Copy the test driver
 COPY tests/e2e/test_alfred.py /alfred/tests/e2e/test_alfred.py
 
@@ -60,4 +63,4 @@ COPY tests/e2e/test_alfred.py /alfred/tests/e2e/test_alfred.py
 ENV PATH="/opt/venv/bin:$PATH"
 ENV TERM=xterm-256color
 
-CMD ["python3", "-m", "pytest", "-v", "/alfred/tests/e2e/test_alfred.py"]
+CMD ["python3", "-m", "pytest", "-v", "-n", "4", "--dist", "loadscope", "/alfred/tests/e2e/test_alfred.py"]

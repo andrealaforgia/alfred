@@ -25,6 +25,12 @@ ALFRED_BIN = "/usr/local/bin/alfred"
 # Generous timeout: the editor should respond well within this.
 TIMEOUT = 10
 
+# Alfred project paths inside the Docker container.
+# The full project is at /alfred after the Docker build; browser/search tests
+# use it instead of synthetic temp directories so they exercise a real codebase.
+ALFRED_PROJECT = "/alfred"
+ALFRED_BIN_CRATE = "/alfred/crates/alfred-bin"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,7 +72,7 @@ def spawn_alfred(file_path: str, timeout: int = TIMEOUT) -> pexpect.spawn:
         cwd="/alfred",
     )
     # Give Alfred time to start, load plugins, and render the first frame
-    time.sleep(1.0)
+    time.sleep(0.5)
     return child
 
 
@@ -949,6 +955,59 @@ class TestSearch:
         assert ">>target" in content, \
             f"Expected '>>target' in file, got: {repr(content)}"
         os.unlink(path)
+
+    def test_search_in_large_file_opened_from_browser(self):
+        """Searching in a large file opened via browser finds words past chunk boundaries.
+
+        Regression test: ropey's RopeSlice::as_str() returns None when a line
+        spans a chunk boundary (~1KB). The search used as_str()? which silently
+        aborted the entire search on the first None, making it impossible to
+        find words in large files.
+        """
+        child = spawn_alfred(ALFRED_PROJECT)
+
+        try:
+            child.expect("crates/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Browser did not render")
+
+        # Open buffer.rs (1668 lines) via browser search
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "buffer.rs":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Search for "derive" which is at line 31 (~1212 bytes in, past the
+        # first ropey chunk boundary at ~1024 bytes)
+        send_keys(child, "/")
+        time.sleep(0.2)
+        send_keys(child, "derive")
+        send_enter(child)
+        time.sleep(0.3)
+
+        # If search succeeded, cursor moved to the match. Insert a marker.
+        send_keys(child, "i")
+        time.sleep(0.2)
+        send_keys(child, ">>")
+        send_escape(child)
+        time.sleep(0.3)
+
+        target = os.path.join(
+            ALFRED_PROJECT, "crates", "alfred-core", "src", "buffer.rs")
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(target)
+        assert ">>derive" in saved, \
+            f"Search did not find 'derive' in buffer.rs, got near line 31: " \
+            f"{saved[1150:1250]!r}"
 
     def test_search_n_repeats(self):
         """Search for 'x', press n to find next, insert marker at second match."""
@@ -3293,23 +3352,15 @@ class TestBrowserPanel:
 
     def test_open_directory_shows_browser_panel(self):
         """alfred . opens a browser panel on the left with directory entries."""
-        import shutil
+        child = spawn_alfred(ALFRED_PROJECT)
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browser_")
-        os.mkdir(os.path.join(tmpdir, "src"))
-        with open(os.path.join(tmpdir, "README.md"), "w") as f:
-            f.write("# Hello\n")
-
-        child = spawn_alfred(tmpdir)
-
-        # Browser should render entry names
+        # Browser should render real project entries
         try:
-            child.expect("src/", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'src/'")
+            pytest.fail("Browser did not render 'crates/'")
 
         # Quit from the browser
         send_keys(child, "q")
@@ -3318,28 +3369,23 @@ class TestBrowserPanel:
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        shutil.rmtree(tmpdir)
 
     def test_select_file_opens_in_editor_browser_stays(self):
         """Selecting a file opens it in the editor; browser panel stays visible."""
-        import shutil
+        target = os.path.join(ALFRED_BIN_CRATE, "Cargo.toml")
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_browser_open_")
-        target = os.path.join(tmpdir, "hello.txt")
-        with open(target, "w") as f:
-            f.write("hello world\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_BIN_CRATE)
 
         try:
-            child.expect("hello.txt", timeout=5)
+            child.expect("Cargo.toml", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
-            pytest.fail("Browser did not render 'hello.txt'")
+            pytest.fail("Browser did not render 'Cargo.toml'")
 
-        # Select the file with Enter
+        # Navigate past src/ to Cargo.toml, then select
+        send_keys(child, "j")
+        time.sleep(0.2)
         child.send("\r")
         time.sleep(1.0)
 
@@ -3359,28 +3405,20 @@ class TestBrowserPanel:
         assert "EDITED" in saved, \
             f"Expected 'EDITED' in file after browser select, got: {saved!r}"
 
-        shutil.rmtree(tmpdir)
-
     def test_ctrl_e_toggles_browser_off_and_on(self):
         """Ctrl-e hides browser, Ctrl-e again shows it preserving directory."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_toggle_")
-        target = os.path.join(tmpdir, "file.txt")
-        with open(target, "w") as f:
-            f.write("content\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_BIN_CRATE)
 
         try:
-            child.expect("file.txt", timeout=5)
+            child.expect("Cargo.toml", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # Select file to get into editor mode
+        # Navigate to Cargo.toml (past src/) and select to get into editor mode
+        send_keys(child, "j")
+        time.sleep(0.2)
         child.send("\r")
         time.sleep(1.0)
 
@@ -3401,30 +3439,20 @@ class TestBrowserPanel:
         assert exit_code == 0, \
             f"Expected clean exit after toggle, got {exit_code}"
 
-        shutil.rmtree(tmpdir)
-
     def test_enter_subdirectory_and_navigate_back(self):
         """Enter a subdirectory, then h goes back to parent."""
-        import shutil
+        target = os.path.join(ALFRED_BIN_CRATE, "src", "main.rs")
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_subdir_")
-        subdir = os.path.join(tmpdir, "src")
-        os.mkdir(subdir)
-        target = os.path.join(subdir, "main.rs")
-        with open(target, "w") as f:
-            f.write("fn main() {}\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_BIN_CRATE)
 
         try:
             child.expect("src/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render 'src/'")
 
-        # Enter src/ directory
+        # Enter src/ directory (cursor starts on src/)
         child.send("\r")
         time.sleep(1.0)
 
@@ -3443,36 +3471,25 @@ class TestBrowserPanel:
         assert "fn main()" in saved, \
             f"Expected main.rs content, got: {saved!r}"
 
-        shutil.rmtree(tmpdir)
-
 
 class TestBrowserSearch:
     """Verify / search in the browser panel."""
 
     def test_search_filters_and_opens_file(self):
         """/ then typing filters entries; Enter opens the match."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_")
-        with open(os.path.join(tmpdir, "alpha.txt"), "w") as f:
-            f.write("alpha\n")
-        with open(os.path.join(tmpdir, "beta.rs"), "w") as f:
-            f.write("fn beta() {}\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_PROJECT)
 
         try:
-            child.expect("alpha.txt", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # / to search, type 'beta'
+        # / to search, type 'lock' to find Cargo.lock (filters out Cargo.toml etc.)
         send_keys(child, "/")
         time.sleep(0.3)
-        for ch in "beta":
+        for ch in "lock":
             send_keys(child, ch)
             time.sleep(0.15)
         time.sleep(0.3)
@@ -3484,7 +3501,7 @@ class TestBrowserSearch:
         # Edit to prove correct file opened
         send_keys(child, "A")
         time.sleep(0.2)
-        send_keys(child, " // found")
+        send_keys(child, " # found")
         time.sleep(0.2)
         child.send("\x1b")
         time.sleep(0.3)
@@ -3493,38 +3510,28 @@ class TestBrowserSearch:
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-        saved = read_file(os.path.join(tmpdir, "beta.rs"))
-        assert "// found" in saved, \
-            f"Expected beta.rs edited after search, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
+        saved = read_file(os.path.join(ALFRED_PROJECT, "Cargo.lock"))
+        assert "# found" in saved, \
+            f"Expected Cargo.lock edited after search, got: {saved!r}"
 
     def test_search_finds_file_in_subfolder(self):
         """/ search finds files recursively in subfolders."""
-        import shutil
+        # main.rs lives at crates/alfred-bin/src/main.rs — a real nested file
+        target = os.path.join(ALFRED_PROJECT, "crates", "alfred-bin", "src", "main.rs")
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_deep_")
-        os.makedirs(os.path.join(tmpdir, "src", "core"))
-        with open(os.path.join(tmpdir, "top.txt"), "w") as f:
-            f.write("top\n")
-        target = os.path.join(tmpdir, "src", "core", "deep.rs")
-        with open(target, "w") as f:
-            f.write("pub fn deep() {}\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_PROJECT)
 
         try:
-            child.expect("src/", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # / to search, type 'deep'
+        # / to search, type 'main.rs' to find crates/alfred-bin/src/main.rs
         send_keys(child, "/")
         time.sleep(0.3)
-        for ch in "deep":
+        for ch in "main.rs":
             send_keys(child, ch)
             time.sleep(0.15)
         time.sleep(0.5)
@@ -3547,26 +3554,17 @@ class TestBrowserSearch:
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
         saved = read_file(target)
         assert "// deep-found" in saved, \
-            f"Expected deep.rs edited after recursive search, got: {saved!r}"
-
-        shutil.rmtree(tmpdir)
+            f"Expected main.rs edited after recursive search, got: {saved!r}"
 
     def test_search_escape_returns_to_browse(self):
         """Escape during search returns to browse mode in the panel."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_esc_")
-        with open(os.path.join(tmpdir, "file.txt"), "w") as f:
-            f.write("content\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_PROJECT)
 
         try:
-            child.expect("file.txt", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
         # / then type, then Escape
@@ -3586,34 +3584,33 @@ class TestBrowserSearch:
         assert exit_code == 0, \
             f"Expected clean exit after search escape, got {exit_code}"
 
-        shutil.rmtree(tmpdir)
-
     def test_search_skips_target_directory(self):
         """Search does not find files inside target/ directory."""
-        import shutil
+        # Plant marker files: one in crates/ (visible to search) and one in
+        # the real target/ build directory (should be skipped by search).
+        visible = os.path.join(ALFRED_PROJECT, "crates", "e2e_skip_marker.rs")
+        hidden = os.path.join(ALFRED_PROJECT, "target", "e2e_skip_marker.rs")
 
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_skip_")
-        os.makedirs(os.path.join(tmpdir, "target", "debug"))
-        os.makedirs(os.path.join(tmpdir, "src"))
-        with open(os.path.join(tmpdir, "src", "visible.rs"), "w") as f:
+        with open(visible, "w") as f:
             f.write("pub fn visible() {}\n")
-        with open(os.path.join(tmpdir, "target", "debug", "hidden.rs"), "w") as f:
+        with open(hidden, "w") as f:
             f.write("// should not be found\n")
 
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_PROJECT)
 
         try:
-            child.expect("src/", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
+            os.remove(visible)
+            os.remove(hidden)
             pytest.fail("Browser did not render")
 
-        # Search for 'visible' — should find src/visible.rs
+        # Search for 'e2e_skip' — should only find crates/e2e_skip_marker.rs
         send_keys(child, "/")
         time.sleep(0.3)
-        for ch in "visible":
+        for ch in "e2e_skip":
             send_keys(child, ch)
             time.sleep(0.1)
         time.sleep(0.5)
@@ -3634,41 +3631,32 @@ class TestBrowserSearch:
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
 
-        visible = read_file(os.path.join(tmpdir, "src", "visible.rs"))
-        assert "// verified" in visible, \
-            f"Expected visible.rs edited, got: {visible!r}"
+        visible_content = read_file(visible)
+        assert "// verified" in visible_content, \
+            f"Expected visible file edited, got: {visible_content!r}"
 
-        hidden = read_file(os.path.join(tmpdir, "target", "debug", "hidden.rs"))
-        assert hidden.strip() == "// should not be found", \
-            f"target/ file should be untouched, got: {hidden!r}"
+        hidden_content = read_file(hidden)
+        assert hidden_content.strip() == "// should not be found", \
+            f"target/ file should be untouched, got: {hidden_content!r}"
 
-        shutil.rmtree(tmpdir)
+        os.remove(visible)
+        os.remove(hidden)
 
     def test_search_returns_to_browse_after_file_open(self):
         """After opening a file from search, browser returns to browse mode."""
-        import shutil
-
-        tmpdir = tempfile.mkdtemp(prefix="alfred_e2e_search_back_")
-        os.mkdir(os.path.join(tmpdir, "lib"))
-        with open(os.path.join(tmpdir, "lib", "utils.rs"), "w") as f:
-            f.write("pub fn util() {}\n")
-        with open(os.path.join(tmpdir, "main.txt"), "w") as f:
-            f.write("main\n")
-
-        child = spawn_alfred(tmpdir)
+        child = spawn_alfred(ALFRED_PROJECT)
 
         try:
-            child.expect("lib/", timeout=5)
+            child.expect("crates/", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            shutil.rmtree(tmpdir)
             pytest.fail("Browser did not render")
 
-        # Search and open a file
+        # Search and open a real nested file
         send_keys(child, "/")
         time.sleep(0.3)
-        for ch in "utils":
+        for ch in "test_alfred":
             send_keys(child, ch)
             time.sleep(0.1)
         time.sleep(0.5)
@@ -3682,4 +3670,87 @@ class TestBrowserSearch:
         assert exit_code == 0, \
             f"Expected clean exit after search->open, got {exit_code}"
 
-        shutil.rmtree(tmpdir)
+    def test_switch_file_via_search_does_not_corrupt_display(self):
+        """Opening a second file after toggling browser doesn't corrupt the display.
+
+        Regression test for a rendering bug where switching from a large file
+        (buffer.rs, 1668 lines -> gutter width 5) to a small file (Makefile,
+        71 lines -> gutter width 3) via browser search after toggling the
+        browser panel caused stale cells to remain on screen, producing
+        garbled output where old buffer content bled through.
+        """
+        child = spawn_alfred(ALFRED_PROJECT)
+
+        try:
+            child.expect("crates/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Browser did not render")
+
+        # Step 1: search for buffer.rs (large file) and open it
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "buffer.rs":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Step 2: Ctrl-e to close browser panel
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Step 3: Ctrl-e to reopen browser panel (triggers layout recalculation)
+        child.send("\x05")
+        time.sleep(0.5)
+
+        # Step 4: search for Makefile and open it (smaller file, gutter shrinks)
+        send_keys(child, "/")
+        time.sleep(0.3)
+        for ch in "makefile":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Verify Makefile content renders after the initial switch
+        try:
+            child.expect(".PHONY", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Makefile not rendered after file switch")
+
+        # Step 5: Ctrl-d x 5 to scroll down — this triggers differential
+        # rendering. If tab characters are passed raw to ratatui, the
+        # terminal cursor desynchronizes from ratatui's internal cell grid,
+        # and every subsequent scroll frame is corrupted.
+        for _ in range(5):
+            child.send("\x04")  # Ctrl-d
+            time.sleep(0.3)
+        time.sleep(0.5)
+
+        # After scrolling, check that Makefile content still renders cleanly.
+        # "install:" appears on line 14 and should be visible after scrolling.
+        try:
+            child.expect("install", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail(
+                "Display corruption after Ctrl-d scroll: 'install' not "
+                "found in PTY output — tab characters in Makefile likely "
+                "caused ratatui terminal desynchronization"
+            )
+
+        # Verify buffer integrity: save and check content matches original
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(os.path.join(ALFRED_PROJECT, "Makefile"))
+        assert ".PHONY:" in saved, \
+            f"Makefile buffer corrupted after file switch, got: {saved[:200]!r}"

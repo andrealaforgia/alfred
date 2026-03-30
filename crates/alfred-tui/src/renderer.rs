@@ -276,6 +276,7 @@ fn compute_message_area(total_area: Rect) -> Rect {
 fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line<'static>> {
     let top_line = state.viewport.top_line;
     let total_lines = buffer::line_count(&state.buffer);
+    let tab_spaces: String = " ".repeat(state.tab_width);
 
     (0..visible_height)
         .map(|row| {
@@ -283,7 +284,7 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
             if buffer_line_index < total_lines {
                 let line_content = buffer::get_line_string(&state.buffer, buffer_line_index)
                     .trim_end_matches('\n')
-                    .to_string();
+                    .replace('\t', &tab_spaces);
                 // Check for full-line background color (e.g., browser cursor highlight)
                 if let Some(&(fg, bg)) = state.line_backgrounds.get(&buffer_line_index) {
                     let fg_color = theme_color_to_ratatui(fg);

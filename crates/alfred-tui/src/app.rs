@@ -372,11 +372,14 @@ pub fn run(
         }
 
         // Detect if a new file was opened (e.g., via Lisp open-file primitive)
-        // by checking if the buffer id changed. Re-initialize syntax highlighting.
+        // by checking if the buffer id changed. Re-initialize syntax highlighting
+        // and force a full terminal redraw so stale cells don't bleed through
+        // when the layout geometry changes (e.g., gutter width shrinking).
         {
             let current_id = state_rc.borrow().buffer.id();
             if current_id != last_buffer_id {
                 last_buffer_id = current_id;
+                terminal.clear()?;
                 let state = state_rc.borrow();
                 if let Some(filename) = state.buffer.filename() {
                     let fname = filename.to_string();
