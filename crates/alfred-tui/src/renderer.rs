@@ -292,13 +292,20 @@ fn collect_visible_lines(state: &EditorState, visible_height: usize) -> Vec<Line
                     .trim_end_matches('\n')
                     .replace('\t', &tab_spaces);
                 // Check for full-line background color (e.g., browser cursor highlight)
-                if let Some(&(fg, bg)) = state.line_backgrounds.get(&buffer_line_index) {
-                    let fg_color = theme_color_to_ratatui(fg);
-                    let bg_color = theme_color_to_ratatui(bg);
-                    let style = Style::default().fg(fg_color).bg(bg_color);
-                    Line::from(Span::styled(line_content, style))
-                } else {
-                    build_styled_line(&line_content, state.line_styles.get(&buffer_line_index))
+                let styled_line =
+                    if let Some(&(fg, bg)) = state.line_backgrounds.get(&buffer_line_index) {
+                        let fg_color = theme_color_to_ratatui(fg);
+                        let bg_color = theme_color_to_ratatui(bg);
+                        let style = Style::default().fg(fg_color).bg(bg_color);
+                        Line::from(Span::styled(line_content, style))
+                    } else {
+                        build_styled_line(&line_content, state.line_styles.get(&buffer_line_index))
+                    };
+
+                // Apply match highlight backgrounds (preserving syntax fg colors)
+                match state.match_highlights.get(&buffer_line_index) {
+                    Some(highlights) => apply_match_highlights(styled_line, highlights),
+                    None => styled_line,
                 }
             } else {
                 Line::raw("")
@@ -370,6 +377,77 @@ fn build_styled_line(
     }
 }
 
+/// Applies match highlight background colors to a styled Line.
+///
+/// Walks through each span, splitting it at match highlight boundaries so that
+/// matched byte ranges gain a background color while preserving the existing
+/// foreground color from syntax highlighting. Returns the line unchanged if
+/// no highlights apply.
+fn apply_match_highlights(
+    line: Line<'static>,
+    highlights: &[(usize, usize, alfred_core::theme::ThemeColor)],
+) -> Line<'static> {
+    if highlights.is_empty() {
+        return line;
+    }
+
+    let mut result_spans: Vec<Span<'static>> = Vec::new();
+    let mut byte_offset: usize = 0;
+
+    for span in line.spans {
+        let span_len = span.content.len();
+        let span_start = byte_offset;
+        let span_end = byte_offset + span_len;
+
+        // Collect highlight segments that overlap with this span
+        let overlapping: Vec<(usize, usize, Color)> = highlights
+            .iter()
+            .filter(|(hl_start, hl_end, _)| *hl_start < span_end && *hl_end > span_start)
+            .map(|(hl_start, hl_end, color)| {
+                let clamped_start = (*hl_start).max(span_start) - span_start;
+                let clamped_end = (*hl_end).min(span_end) - span_start;
+                (clamped_start, clamped_end, theme_color_to_ratatui(*color))
+            })
+            .collect();
+
+        if overlapping.is_empty() {
+            result_spans.push(span);
+        } else {
+            let base_style = span.style;
+            let content = span.content.into_owned();
+            let mut pos = 0usize;
+
+            for (hl_start, hl_end, bg_color) in &overlapping {
+                // Non-highlighted portion before this highlight
+                if pos < *hl_start {
+                    result_spans.push(Span::styled(
+                        content[pos..*hl_start].to_string(),
+                        base_style,
+                    ));
+                }
+                // Highlighted portion: preserve fg, add bg
+                if *hl_start < *hl_end {
+                    let highlighted_style = base_style.bg(*bg_color);
+                    result_spans.push(Span::styled(
+                        content[*hl_start..*hl_end].to_string(),
+                        highlighted_style,
+                    ));
+                }
+                pos = *hl_end;
+            }
+
+            // Remaining non-highlighted portion after last highlight
+            if pos < content.len() {
+                result_spans.push(Span::styled(content[pos..].to_string(), base_style));
+            }
+        }
+
+        byte_offset = span_end;
+    }
+
+    Line::from(result_spans)
+}
+
 /// Splits a content area into a gutter area (left) and a text area (right).
 ///
 /// The gutter area occupies `gutter_width` columns on the left.
@@ -433,6 +511,19 @@ fn theme_color_to_ratatui(color: alfred_core::theme::ThemeColor) -> Color {
 
 /// Computes the centered rectangle for the overlay within the given area.
 ///
+/// Parses a hex color string like "#89b4fa" into a ratatui Color.
+/// Returns None for empty strings or invalid formats.
+fn parse_hex_color(hex: &str) -> Option<Color> {
+    let hex = hex.trim().strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some(Color::Rgb(r, g, b))
+}
+
 /// Overlay height = 2 (borders) + 1 (input) + min(items, max_visible).
 /// The result is centered horizontally and vertically.
 fn compute_overlay_rect(area: Rect, overlay: &Overlay) -> Rect {
@@ -452,11 +543,24 @@ fn compute_overlay_rect(area: Rect, overlay: &Overlay) -> Rect {
 /// Renders the overlay panel on top of existing content.
 ///
 /// Draws a centered bordered box containing an input line (prompt + query)
-/// and a scrollable list of items. The currently selected item is highlighted
-/// with a reversed (fg=Black, bg=White) style. Clears the overlay area
-/// first to prevent bleed-through from underlying content.
+/// and a scrollable list of items. Uses overlay style fields for colors
+/// (set by the Lisp plugin via `overlay-set-style`). Falls back to defaults
+/// when style fields are empty.
 fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay) {
     let overlay_rect = compute_overlay_rect(area, overlay);
+
+    // Resolve colors from overlay style fields (set by Lisp plugin)
+    let fg = parse_hex_color(&overlay.fg_color).unwrap_or(Color::Reset);
+    let bg = parse_hex_color(&overlay.bg_color).unwrap_or(Color::Reset);
+    let hl_fg = parse_hex_color(&overlay.highlight_fg).unwrap_or(Color::Black);
+    let hl_bg = parse_hex_color(&overlay.highlight_bg).unwrap_or(Color::White);
+    let prompt_fg = parse_hex_color(&overlay.prompt_fg).unwrap_or(fg);
+    let border_color = parse_hex_color(&overlay.border_color).unwrap_or(fg);
+
+    let base_style = Style::default().fg(fg).bg(bg);
+    let highlight_style = Style::default().fg(hl_fg).bg(hl_bg);
+    let prompt_style = Style::default().fg(prompt_fg).bg(bg);
+    let border_style = Style::default().fg(border_color).bg(bg);
 
     // Clear the overlay area to prevent bleed-through
     frame.render_widget(Clear, overlay_rect);
@@ -464,7 +568,9 @@ fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay)
     // Render bordered box with title
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(overlay.title.as_str());
+        .border_style(border_style)
+        .title(overlay.title.as_str())
+        .style(base_style);
     frame.render_widget(block, overlay_rect);
 
     // Inner area (inside border)
@@ -474,7 +580,7 @@ fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay)
 
     // Render input line: "> {query}"
     let prompt_text = format!("> {}", overlay.input);
-    let input_line = Paragraph::new(prompt_text);
+    let input_line = Paragraph::new(prompt_text).style(prompt_style);
     let input_area = Rect {
         x: inner_x,
         y: inner_y,
@@ -485,7 +591,6 @@ fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay)
 
     // Render visible items with cursor highlight
     let visible_item_count = overlay.items.len().min(overlay.max_visible_items);
-    let highlight_style = Style::default().fg(Color::Black).bg(Color::White);
 
     for row in 0..visible_item_count {
         let item_index = overlay.scroll_offset + row;
@@ -502,12 +607,11 @@ fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay)
         };
 
         if item_index == overlay.cursor_index {
-            // Pad to fill the full width so highlight spans the entire row
             let padded = format!("{:<width$}", item_text, width = inner_width as usize);
             let highlighted = Paragraph::new(padded).style(highlight_style);
             frame.render_widget(highlighted, item_area);
         } else {
-            let plain = Paragraph::new(item_text.as_str());
+            let plain = Paragraph::new(item_text.as_str()).style(base_style);
             frame.render_widget(plain, item_area);
         }
     }
@@ -1613,6 +1717,7 @@ mod tests {
             width: 30,
             max_visible_items: 5,
             scroll_offset: 0,
+            ..Default::default()
         };
 
         let backend = TestBackend::new(60, 20);
@@ -1658,6 +1763,7 @@ mod tests {
             width: 30,
             max_visible_items: 5,
             scroll_offset: 0,
+            ..Default::default()
         };
 
         let backend = TestBackend::new(60, 20);
@@ -1694,6 +1800,7 @@ mod tests {
             width: 30,
             max_visible_items: 5,
             scroll_offset: 0,
+            ..Default::default()
         };
 
         let backend = TestBackend::new(60, 20);
@@ -1745,6 +1852,7 @@ mod tests {
             width: 30,
             max_visible_items: 5,
             scroll_offset: 0,
+            ..Default::default()
         };
 
         let backend = TestBackend::new(60, 20);
@@ -1760,5 +1868,142 @@ mod tests {
         // cursor_y = center_y + 1 (border) = 9
         let mut backend_clone = terminal.backend_mut().clone();
         backend_clone.assert_cursor_position(ratatui::layout::Position::new(21, 9));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (02-01): match highlight rendering
+    // Test Budget: 3 behaviors x 2 = 6 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_match_highlights_when_rendered_then_matched_cells_have_background_color() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with buffer content "Hello World"
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello World");
+
+        // And: match highlights on line 0, columns 6..11 ("World") with yellow bg
+        editor_state::add_match_highlight(
+            &mut state,
+            0,
+            6,
+            11,
+            ThemeColor::Named(alfred_core::theme::NamedColor::Yellow),
+        );
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render the editor state
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: cells within the match range (cols 6-10) have yellow background
+        let rendered = terminal.backend();
+        for col in 6u16..11u16 {
+            let cell = &rendered.buffer()[(col, 0)];
+            assert_eq!(
+                cell.bg,
+                Color::Yellow,
+                "Cell at col {} should have Yellow bg but was: {:?}",
+                col,
+                cell.bg
+            );
+        }
+
+        // And: cells outside the match range do NOT have yellow background
+        for col in 0u16..6u16 {
+            let cell = &rendered.buffer()[(col, 0)];
+            assert_ne!(
+                cell.bg,
+                Color::Yellow,
+                "Cell at col {} should NOT have Yellow bg",
+                col
+            );
+        }
+    }
+
+    #[test]
+    fn given_match_highlights_with_syntax_styles_when_rendered_then_fg_colors_preserved() {
+        use alfred_core::theme::ThemeColor;
+        use ratatui::style::Color;
+
+        // Given: an EditorState with buffer content and syntax highlighting
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello World");
+
+        // And: syntax highlighting on line 0: "Hello" is green foreground
+        state.line_styles.entry(0).or_default().push((
+            0,
+            5,
+            ThemeColor::Named(alfred_core::theme::NamedColor::Green),
+        ));
+
+        // And: match highlights overlapping with syntax: cols 0..5 ("Hello") with yellow bg
+        editor_state::add_match_highlight(
+            &mut state,
+            0,
+            0,
+            5,
+            ThemeColor::Named(alfred_core::theme::NamedColor::Yellow),
+        );
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render the editor state
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: cells in the match range have yellow background AND green foreground
+        let rendered = terminal.backend();
+        for col in 0u16..5u16 {
+            let cell = &rendered.buffer()[(col, 0)];
+            assert_eq!(
+                cell.bg,
+                Color::Yellow,
+                "Cell at col {} should have Yellow bg but was: {:?}",
+                col,
+                cell.bg
+            );
+            assert_eq!(
+                cell.fg,
+                Color::Green,
+                "Cell at col {} should have Green fg (syntax) but was: {:?}",
+                col,
+                cell.fg
+            );
+        }
+    }
+
+    #[test]
+    fn given_no_match_highlights_when_rendered_then_lines_render_identically_to_before() {
+        use ratatui::style::Color;
+
+        // Given: an EditorState with buffer content and NO match highlights
+        let mut state = editor_state::new(20, 5);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+
+        // And: a TestBackend terminal
+        let backend = TestBackend::new(20, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render the editor state
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: no cells have any non-default background color
+        let rendered = terminal.backend();
+        for col in 0u16..20u16 {
+            let cell = &rendered.buffer()[(col, 0)];
+            assert_eq!(
+                cell.bg,
+                Color::Reset,
+                "Cell at col {} row 0 should have Reset bg (no highlights) but was: {:?}",
+                col,
+                cell.bg
+            );
+        }
     }
 }
