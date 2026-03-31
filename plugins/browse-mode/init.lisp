@@ -454,6 +454,7 @@
 (define-key "browser-panel-mode" "Char:q" "browser-quit")
 (define-key "browser-panel-mode" "Escape" "browser-quit")
 (define-key "browser-panel-mode" "Ctrl:e" "toggle-sidebar")
+(define-key "browser-panel-mode" "Ctrl:p" "overlay-file-search")
 
 ;; Browser search input mode — captures typed characters for search
 (make-keymap "browser-search-input")

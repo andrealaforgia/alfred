@@ -3754,3 +3754,51 @@ class TestBrowserSearch:
         saved = read_file(os.path.join(ALFRED_PROJECT, "Makefile"))
         assert ".PHONY:" in saved, \
             f"Makefile buffer corrupted after file switch, got: {saved[:200]!r}"
+
+
+class TestOverlaySearch:
+    """Verify Ctrl-p overlay search finds and opens files."""
+
+    def test_find_and_open_file_via_overlay_search(self):
+        """Ctrl-p opens overlay, type filename, Enter opens file."""
+        child = spawn_alfred(ALFRED_PROJECT)
+
+        try:
+            child.expect("crates/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Browser did not render")
+
+        # Ctrl-p to open overlay search
+        child.send("\x10")  # Ctrl-p
+        time.sleep(0.5)
+
+        # Check if overlay rendered — look for the ">" prompt
+        try:
+            child.expect(">", timeout=3)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail(
+                "Overlay did not open: '>' prompt not found after Ctrl-p. "
+                "The overlay-search plugin may not have loaded.")
+
+        # Type "makefile" to filter
+        for ch in "makefile":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+
+        # Enter to select first match
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Verify the Makefile opened by saving and checking content
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+        saved = read_file(os.path.join(ALFRED_PROJECT, "Makefile"))
+        assert ".PHONY:" in saved, \
+            f"Makefile was not opened after overlay search, got: {saved[:200]!r}"
