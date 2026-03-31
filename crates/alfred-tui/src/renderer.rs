@@ -11,6 +11,7 @@ use std::io;
 
 use alfred_core::buffer;
 use alfred_core::editor_state::{self, EditorState};
+use alfred_core::overlay::Overlay;
 use alfred_core::panel::{self, PanelPosition};
 use alfred_core::theme;
 use crossterm::cursor::SetCursorStyle;
@@ -18,7 +19,7 @@ use ratatui::backend::Backend;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Terminal;
 
 /// Renders a single frame of the editor state to the given terminal.
@@ -162,7 +163,12 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
             frame.render_widget(message_widget, message_area);
         }
 
-        let cursor_position = compute_cursor_position(state);
+        // Render overlay last (on top of everything)
+        if state.overlay.visible {
+            render_overlay(frame, area, &state.overlay);
+        }
+
+        let cursor_position = compute_cursor_position(state, area);
         frame.set_cursor_position(cursor_position);
     })?;
     Ok(())
@@ -425,15 +431,114 @@ fn theme_color_to_ratatui(color: alfred_core::theme::ThemeColor) -> Color {
     }
 }
 
+/// Computes the centered rectangle for the overlay within the given area.
+///
+/// Overlay height = 2 (borders) + 1 (input) + min(items, max_visible).
+/// The result is centered horizontally and vertically.
+fn compute_overlay_rect(area: Rect, overlay: &Overlay) -> Rect {
+    let visible_item_count = overlay.items.len().min(overlay.max_visible_items);
+    let overlay_height = 2 + 1 + visible_item_count as u16;
+    let overlay_width = (overlay.width as u16).min(area.width);
+    let overlay_x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
+    let overlay_y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
+    Rect {
+        x: overlay_x,
+        y: overlay_y,
+        width: overlay_width,
+        height: overlay_height,
+    }
+}
+
+/// Renders the overlay panel on top of existing content.
+///
+/// Draws a centered bordered box containing an input line (prompt + query)
+/// and a scrollable list of items. The currently selected item is highlighted
+/// with a reversed (fg=Black, bg=White) style. Clears the overlay area
+/// first to prevent bleed-through from underlying content.
+fn render_overlay(frame: &mut ratatui::Frame<'_>, area: Rect, overlay: &Overlay) {
+    let overlay_rect = compute_overlay_rect(area, overlay);
+
+    // Clear the overlay area to prevent bleed-through
+    frame.render_widget(Clear, overlay_rect);
+
+    // Render bordered box with title
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(overlay.title.as_str());
+    frame.render_widget(block, overlay_rect);
+
+    // Inner area (inside border)
+    let inner_x = overlay_rect.x + 1;
+    let inner_y = overlay_rect.y + 1;
+    let inner_width = overlay_rect.width.saturating_sub(2);
+
+    // Render input line: "> {query}"
+    let prompt_text = format!("> {}", overlay.input);
+    let input_line = Paragraph::new(prompt_text);
+    let input_area = Rect {
+        x: inner_x,
+        y: inner_y,
+        width: inner_width,
+        height: 1,
+    };
+    frame.render_widget(input_line, input_area);
+
+    // Render visible items with cursor highlight
+    let visible_item_count = overlay.items.len().min(overlay.max_visible_items);
+    let highlight_style = Style::default().fg(Color::Black).bg(Color::White);
+
+    for row in 0..visible_item_count {
+        let item_index = overlay.scroll_offset + row;
+        if item_index >= overlay.items.len() {
+            break;
+        }
+        let item_text = &overlay.items[item_index];
+        let item_y = inner_y + 1 + row as u16;
+        let item_area = Rect {
+            x: inner_x,
+            y: item_y,
+            width: inner_width,
+            height: 1,
+        };
+
+        if item_index == overlay.cursor_index {
+            // Pad to fill the full width so highlight spans the entire row
+            let padded = format!("{:<width$}", item_text, width = inner_width as usize);
+            let highlighted = Paragraph::new(padded).style(highlight_style);
+            frame.render_widget(highlighted, item_area);
+        } else {
+            let plain = Paragraph::new(item_text.as_str());
+            frame.render_widget(plain, item_area);
+        }
+    }
+}
+
+/// Computes the cursor position when the overlay is visible.
+///
+/// Places the cursor at the end of the input text in the overlay,
+/// right after the "> " prompt and the query text.
+fn compute_overlay_cursor_position(area: Rect, overlay: &Overlay) -> Position {
+    let overlay_rect = compute_overlay_rect(area, overlay);
+    let cursor_x = overlay_rect.x + 1 + 2 + overlay.input.len() as u16; // border + "> " + input
+    let cursor_y = overlay_rect.y + 1; // border + input row
+    Position::new(cursor_x, cursor_y)
+}
+
 /// Computes the terminal cursor position from the editor state.
 ///
-/// The cursor position is relative to the viewport: the terminal row is
+/// When the overlay is visible, the cursor is positioned at the end
+/// of the overlay input text. Otherwise, the cursor position is
+/// relative to the viewport: the terminal row is
 /// `cursor.line - viewport.top_line`, and the terminal column is
 /// `cursor.column + viewport.gutter_width` (to account for gutter offset).
-fn compute_cursor_position(state: &EditorState) -> Position {
-    let terminal_row = state.cursor.line.saturating_sub(state.viewport.top_line) as u16;
-    let terminal_column = state.cursor.column as u16 + state.viewport.gutter_width;
-    Position::new(terminal_column, terminal_row)
+fn compute_cursor_position(state: &EditorState, area: Rect) -> Position {
+    if state.overlay.visible {
+        compute_overlay_cursor_position(area, &state.overlay)
+    } else {
+        let terminal_row = state.cursor.line.saturating_sub(state.viewport.top_line) as u16;
+        let terminal_column = state.cursor.column as u16 + state.viewport.gutter_width;
+        Position::new(terminal_column, terminal_row)
+    }
 }
 
 /// Converts a cursor shape name string to a crossterm `SetCursorStyle`.
@@ -1462,5 +1567,198 @@ mod tests {
             "Panel file line should be gray but was: {:?}",
             cell1.fg
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests (01-03): overlay rendering
+    // Test Budget: 5 behaviors x 2 = 10 max
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_overlay_not_visible_when_rendered_then_no_overlay_content_appears() {
+        // Given: an EditorState with overlay visible=false
+        let mut state = editor_state::new(40, 20);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        // overlay is invisible by default (visible=false)
+        state.overlay = alfred_core::overlay::create("Search", 30, 5);
+
+        let backend = TestBackend::new(40, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: no overlay border characters appear (no box-drawing chars in center)
+        let rendered = terminal.backend();
+        let center_row = extract_row_text(rendered.buffer(), 10);
+        // The center of the screen should just be blank (no border chars)
+        assert!(
+            !center_row.contains('│') && !center_row.contains('┐'),
+            "No overlay border should appear when invisible, but row was: '{}'",
+            center_row
+        );
+    }
+
+    #[test]
+    fn given_visible_overlay_when_rendered_then_bordered_box_appears_centered() {
+        // Given: an EditorState with overlay visible, 30 cols wide, 5 max items
+        let mut state = editor_state::new(60, 20);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.overlay = alfred_core::overlay::Overlay {
+            visible: true,
+            title: "Search".to_string(),
+            input: String::new(),
+            items: vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+            cursor_index: 0,
+            width: 30,
+            max_visible_items: 5,
+            scroll_offset: 0,
+        };
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: a bordered box appears centered
+        // overlay_height = 2 (borders) + 1 (input line) + 3 (items) = 6
+        // center_y = (20 - 6) / 2 = 7
+        // center_x = (60 - 30) / 2 = 15
+        let rendered = terminal.backend();
+
+        // Top border row should contain box-drawing corner at the overlay x position
+        let top_border_row = extract_row_text(rendered.buffer(), 7);
+        assert!(
+            top_border_row.contains('┌') && top_border_row.contains('┐'),
+            "Top border row should have corners, but was: '{}'",
+            top_border_row
+        );
+
+        // Bottom border row
+        let bottom_border_row = extract_row_text(rendered.buffer(), 12);
+        assert!(
+            bottom_border_row.contains('└') && bottom_border_row.contains('┘'),
+            "Bottom border row should have corners, but was: '{}'",
+            bottom_border_row
+        );
+    }
+
+    #[test]
+    fn given_visible_overlay_with_input_when_rendered_then_input_line_shows_prompt_and_query() {
+        // Given: an overlay with input text "hel"
+        let mut state = editor_state::new(60, 20);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.overlay = alfred_core::overlay::Overlay {
+            visible: true,
+            title: "Search".to_string(),
+            input: "hel".to_string(),
+            items: vec!["hello".to_string()],
+            cursor_index: 0,
+            width: 30,
+            max_visible_items: 5,
+            scroll_offset: 0,
+        };
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: the input line (first row inside border) shows "> hel"
+        // overlay_height = 2 + 1 + 1 = 4; center_y = (20 - 4) / 2 = 8
+        // input row = center_y + 1 = 9
+        let rendered = terminal.backend();
+        let input_row = extract_row_text(rendered.buffer(), 9);
+        assert!(
+            input_row.contains("> hel"),
+            "Input line should show '> hel' but was: '{}'",
+            input_row
+        );
+    }
+
+    #[test]
+    fn given_visible_overlay_when_rendered_then_selected_item_has_reversed_style() {
+        use ratatui::style::Color;
+
+        // Given: an overlay with cursor on first item
+        let mut state = editor_state::new(60, 20);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.overlay = alfred_core::overlay::Overlay {
+            visible: true,
+            title: "Search".to_string(),
+            input: String::new(),
+            items: vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()],
+            cursor_index: 0,
+            width: 30,
+            max_visible_items: 5,
+            scroll_offset: 0,
+        };
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: the first item row uses reversed style (fg=Black, bg=White)
+        // overlay_height = 2 + 1 + 3 = 6; center_y = (20 - 6) / 2 = 7
+        // first item row = center_y + 1 (border) + 1 (input) = 9
+        let rendered = terminal.backend();
+        let overlay_x = (60u16 - 30) / 2;
+        // Check a cell inside the first item row (inside border, after left border char)
+        let item_cell = &rendered.buffer()[(overlay_x + 1, 9)];
+        assert_eq!(
+            item_cell.bg,
+            Color::White,
+            "Selected item bg should be White but was: {:?}",
+            item_cell.bg
+        );
+        assert_eq!(
+            item_cell.fg,
+            Color::Black,
+            "Selected item fg should be Black but was: {:?}",
+            item_cell.fg
+        );
+
+        // And: the second item row should NOT have reversed style
+        let non_selected_cell = &rendered.buffer()[(overlay_x + 1, 10)];
+        assert_ne!(
+            non_selected_cell.bg,
+            Color::White,
+            "Non-selected item bg should not be White"
+        );
+    }
+
+    #[test]
+    fn given_visible_overlay_when_rendered_then_cursor_position_at_end_of_input() {
+        // Given: an overlay with input "hel" visible
+        let mut state = editor_state::new(60, 20);
+        state.buffer = Buffer::from_string("Hello\nWorld");
+        state.overlay = alfred_core::overlay::Overlay {
+            visible: true,
+            title: "Search".to_string(),
+            input: "hel".to_string(),
+            items: vec!["hello".to_string()],
+            cursor_index: 0,
+            width: 30,
+            max_visible_items: 5,
+            scroll_offset: 0,
+        };
+
+        let backend = TestBackend::new(60, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // When: we render
+        super::render_frame(&mut terminal, &state).unwrap();
+
+        // Then: cursor is at end of input text inside overlay
+        // overlay_x = (60 - 30) / 2 = 15
+        // cursor_x = overlay_x + 1 (border) + 2 ("> ") + 3 ("hel") = 15 + 6 = 21
+        // overlay_height = 2 + 1 + 1 = 4; center_y = (20 - 4) / 2 = 8
+        // cursor_y = center_y + 1 (border) = 9
+        let mut backend_clone = terminal.backend_mut().clone();
+        backend_clone.assert_cursor_position(ratatui::layout::Position::new(21, 9));
     }
 }
