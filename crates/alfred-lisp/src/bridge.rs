@@ -15,6 +15,7 @@ use alfred_core::command;
 use alfred_core::cursor;
 use alfred_core::editor_state::EditorState;
 use alfred_core::hook;
+use alfred_core::overlay;
 use alfred_core::panel;
 use alfred_core::theme;
 use alfred_core::viewport;
@@ -2624,6 +2625,143 @@ fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
                 Ok(Value::NIL)
             }
         }
+    });
+}
+
+/// Registers overlay primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(open-overlay width max-items)` -- opens the overlay, resetting state and setting visible=true
+/// - `(close-overlay)` -- hides the overlay by setting visible=false
+/// - `(overlay-set-input text)` -- updates the overlay input text
+/// - `(overlay-set-items list)` -- replaces the overlay items from a Lisp list
+/// - `(overlay-get-selected)` -- returns the highlighted item string, or empty string if none
+pub fn register_overlay_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_open_overlay(env.clone(), state.clone());
+    register_close_overlay(env.clone(), state.clone());
+    register_overlay_set_input(env.clone(), state.clone());
+    register_overlay_set_items(env.clone(), state.clone());
+    register_overlay_get_selected(env, state);
+}
+
+/// Registers `open-overlay`: opens the overlay with given dimensions, resetting all state.
+///
+/// Usage: `(open-overlay width max-items)`
+///
+/// Sets visible=true and resets input, items, and cursor to empty/zero.
+fn register_open_overlay(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "open-overlay", move |_env, args| {
+        let width = match args.first() {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("open-overlay: expected integer for width, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "open-overlay: expected 2 arguments (width, max-items), got 0".to_string(),
+                });
+            }
+        };
+        let max_items = match args.get(1) {
+            Some(Value::Int(n)) => *n as usize,
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "open-overlay: expected integer for max-items, got {}",
+                        other
+                    ),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "open-overlay: expected 2 arguments (width, max-items), got 1".to_string(),
+                });
+            }
+        };
+
+        let mut editor = state.borrow_mut();
+        let title = editor.overlay.title.clone();
+        editor.overlay = overlay::create(&title, width, max_items);
+        editor.overlay.visible = true;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `close-overlay`: hides the overlay.
+///
+/// Usage: `(close-overlay)`
+///
+/// Sets visible=false on the overlay.
+fn register_close_overlay(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "close-overlay", move |_env, _args| {
+        state.borrow_mut().overlay.visible = false;
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `overlay-set-input`: updates the overlay input text.
+///
+/// Usage: `(overlay-set-input "text")`
+fn register_overlay_set_input(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-set-input", move |_env, args| {
+        let text = extract_string_arg(&args, "overlay-set-input")?;
+        let mut editor = state.borrow_mut();
+        editor.overlay = overlay::set_input(&editor.overlay, &text);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `overlay-set-items`: replaces the overlay items list from a Lisp list.
+///
+/// Usage: `(overlay-set-items (list "item1" "item2" ...))`
+///
+/// Converts each element of the Lisp list to a string and replaces the overlay items.
+/// Resets cursor_index and scroll_offset to zero.
+fn register_overlay_set_items(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-set-items", move |_env, args| {
+        let list = match args.first() {
+            Some(Value::List(l)) => l.clone(),
+            Some(other) => {
+                return Err(RuntimeError {
+                    msg: format!("overlay-set-items: expected list argument, got {}", other),
+                });
+            }
+            None => {
+                return Err(RuntimeError {
+                    msg: "overlay-set-items: expected 1 argument (list), got 0".to_string(),
+                });
+            }
+        };
+
+        let items: Vec<String> = list
+            .into_iter()
+            .map(|v| match v {
+                Value::String(s) => s,
+                other => format!("{}", other),
+            })
+            .collect();
+
+        let mut editor = state.borrow_mut();
+        editor.overlay = overlay::set_items(&editor.overlay, items);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `overlay-get-selected`: returns the highlighted item string.
+///
+/// Usage: `(overlay-get-selected)`
+///
+/// Returns the string at the current cursor position, or an empty string if
+/// the items list is empty.
+fn register_overlay_get_selected(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-get-selected", move |_env, _args| {
+        let editor = state.borrow();
+        let selected = overlay::get_selected(&editor.overlay).unwrap_or_default();
+        Ok(Value::String(selected))
     });
 }
 
@@ -5900,5 +6038,152 @@ mod tests {
             "Error message should mention the problem, got: {}",
             msg
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Overlay bridge primitives
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn overlay_bridge_full_open_set_get_cycle() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+        register_list_primitives(&runtime);
+
+        // AC1: open-overlay sets visible=true and resets input/items/cursor
+        runtime.eval("(open-overlay 60 10)").unwrap();
+        {
+            let editor = state.borrow();
+            assert!(
+                editor.overlay.visible,
+                "overlay should be visible after open"
+            );
+            assert!(
+                editor.overlay.input.is_empty(),
+                "input should be empty after open"
+            );
+            assert!(
+                editor.overlay.items.is_empty(),
+                "items should be empty after open"
+            );
+            assert_eq!(editor.overlay.cursor_index, 0);
+            assert_eq!(editor.overlay.width, 60);
+            assert_eq!(editor.overlay.max_visible_items, 10);
+        }
+
+        // AC3: overlay-set-input updates the input text
+        runtime.eval(r#"(overlay-set-input "hello")"#).unwrap();
+        assert_eq!(state.borrow().overlay.input, "hello");
+
+        // AC4: overlay-set-items replaces the items list
+        runtime
+            .eval(r#"(overlay-set-items (list "alpha" "beta" "gamma"))"#)
+            .unwrap();
+        {
+            let editor = state.borrow();
+            assert_eq!(editor.overlay.items, vec!["alpha", "beta", "gamma"]);
+        }
+
+        // AC5: overlay-get-selected returns the highlighted item
+        let selected = runtime.eval("(overlay-get-selected)").unwrap();
+        assert_eq!(selected.as_string(), Some("alpha".to_string()));
+
+        // AC2: close-overlay sets visible=false
+        runtime.eval("(close-overlay)").unwrap();
+        assert!(
+            !state.borrow().overlay.visible,
+            "overlay should be hidden after close"
+        );
+    }
+
+    #[test]
+    fn open_overlay_resets_state_and_sets_visible() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+
+        // Pre-populate overlay with some data
+        {
+            let mut editor = state.borrow_mut();
+            editor.overlay.input = "old query".to_string();
+            editor.overlay.items = vec!["stale".to_string()];
+            editor.overlay.cursor_index = 1;
+            editor.overlay.visible = true;
+        }
+
+        runtime.eval("(open-overlay 50 8)").unwrap();
+        let editor = state.borrow();
+        assert!(editor.overlay.visible);
+        assert!(editor.overlay.input.is_empty(), "input should be reset");
+        assert!(editor.overlay.items.is_empty(), "items should be reset");
+        assert_eq!(editor.overlay.cursor_index, 0, "cursor should be reset");
+        assert_eq!(editor.overlay.width, 50);
+        assert_eq!(editor.overlay.max_visible_items, 8);
+    }
+
+    #[test]
+    fn close_overlay_sets_visible_false() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+
+        state.borrow_mut().overlay.visible = true;
+        runtime.eval("(close-overlay)").unwrap();
+        assert!(!state.borrow().overlay.visible);
+    }
+
+    #[test]
+    fn overlay_set_input_updates_input_text() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+
+        runtime
+            .eval(r#"(overlay-set-input "search term")"#)
+            .unwrap();
+        assert_eq!(state.borrow().overlay.input, "search term");
+    }
+
+    #[test]
+    fn overlay_set_items_replaces_items_list() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+        register_list_primitives(&runtime);
+
+        runtime
+            .eval(r#"(overlay-set-items (list "one" "two" "three"))"#)
+            .unwrap();
+        let editor = state.borrow();
+        assert_eq!(editor.overlay.items, vec!["one", "two", "three"]);
+        assert_eq!(
+            editor.overlay.cursor_index, 0,
+            "cursor should reset on new items"
+        );
+    }
+
+    #[test]
+    fn overlay_get_selected_returns_highlighted_item() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+
+        // No items => empty string
+        let result = runtime.eval("(overlay-get-selected)").unwrap();
+        assert_eq!(result.as_string(), Some(String::new()));
+
+        // With items, returns first (cursor at 0)
+        {
+            let mut editor = state.borrow_mut();
+            editor.overlay.items = vec!["alpha".to_string(), "beta".to_string()];
+        }
+        let result = runtime.eval("(overlay-get-selected)").unwrap();
+        assert_eq!(result.as_string(), Some("alpha".to_string()));
+
+        // Move cursor to 1 and get "beta"
+        state.borrow_mut().overlay.cursor_index = 1;
+        let result = runtime.eval("(overlay-get-selected)").unwrap();
+        assert_eq!(result.as_string(), Some("beta".to_string()));
     }
 }
