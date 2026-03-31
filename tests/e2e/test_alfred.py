@@ -3756,6 +3756,7 @@ class TestBrowserSearch:
             f"Makefile buffer corrupted after file switch, got: {saved[:200]!r}"
 
 
+
 class TestOverlaySearch:
     """Verify Ctrl-p overlay search finds and opens files."""
 
@@ -3884,3 +3885,156 @@ class TestOverlaySearch:
         exit_code = wait_for_exit(child)
 
         assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+    def test_overlay_search_excludes_ignored_directories(self):
+        """Ctrl-p overlay search filters out files in ignored directories."""
+        # Plant marker files: one in crates/ (visible) and one in
+        # mutants.out/ (should be excluded by overlay-search-ignore-dirs).
+        visible = os.path.join(ALFRED_PROJECT, "crates", "e2e_ignore_marker.rs")
+        ignored_dir = os.path.join(ALFRED_PROJECT, "mutants.out")
+        hidden = os.path.join(ignored_dir, "e2e_ignore_marker.rs")
+
+        os.makedirs(ignored_dir, exist_ok=True)
+        with open(visible, "w") as f:
+            f.write("pub fn visible() {}\n")
+        with open(hidden, "w") as f:
+            f.write("// should not be found\n")
+
+        try:
+            child = spawn_alfred(ALFRED_PROJECT)
+
+            try:
+                child.expect("crates/", timeout=5)
+            except pexpect.TIMEOUT:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+                pytest.fail("Browser did not render")
+
+            # Ctrl-p to open overlay search
+            child.send("\x10")
+            time.sleep(0.5)
+
+            try:
+                child.expect(">", timeout=3)
+            except pexpect.TIMEOUT:
+                send_colon_command(child, "q!")
+                wait_for_exit(child)
+                pytest.fail("Overlay did not open")
+
+            # Type the unique marker name to filter results
+            for ch in "e2e_ignore_marker":
+                send_keys(child, ch)
+                time.sleep(0.15)
+            time.sleep(0.5)
+
+            # Enter opens the first (and only) match: crates/e2e_ignore_marker.rs
+            child.send("\r")
+            time.sleep(1.0)
+
+            # Edit to verify the correct file was opened
+            send_keys(child, "A")
+            time.sleep(0.2)
+            send_keys(child, " // verified")
+            time.sleep(0.2)
+            child.send("\x1b")
+            time.sleep(0.3)
+
+            send_colon_command(child, "wq")
+            exit_code = wait_for_exit(child)
+
+            assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+            # The visible file should have been edited
+            visible_content = read_file(visible)
+            assert "// verified" in visible_content, \
+                f"Expected crates/ marker file opened and edited, got: {visible_content!r}"
+
+            # The hidden file in mutants.out/ should NOT have been modified
+            hidden_content = read_file(hidden)
+            assert hidden_content.strip() == "// should not be found", \
+                f"mutants.out/ file should not have been touched, got: {hidden_content!r}"
+        finally:
+            # Clean up marker files
+            if os.path.exists(visible):
+                os.remove(visible)
+            if os.path.exists(hidden):
+                os.remove(hidden)
+            if os.path.isdir(ignored_dir):
+                os.rmdir(ignored_dir)
+
+
+class TestRegexWizard:
+    """Verify :regex wizard opens, highlights matches, and closes cleanly."""
+
+    def test_regex_wizard_opens_and_highlights_matches(self):
+        """:regex opens wizard panel, typing a pattern shows match count."""
+        path = create_temp_file("foo bar foo baz foo")
+        child = spawn_alfred(path)
+
+        # :regex to open regex wizard
+        send_colon_command(child, "regex")
+        time.sleep(0.5)
+
+        # Verify wizard panel rendered
+        try:
+            child.expect("Pattern", timeout=3)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail(
+                "Regex wizard did not open: 'Pattern' not found after :regex")
+
+        # Type "foo" to search
+        for ch in "foo":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+
+        # Verify match count displayed
+        try:
+            child.expect("3 matches", timeout=3)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Match count not shown after typing 'foo'")
+
+        # Escape to close wizard
+        child.send("\x1b")
+        time.sleep(0.3)
+
+        # Quit cleanly
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+    def test_regex_wizard_escape_closes_without_modifying_file(self):
+        """Escape closes wizard; file content remains unmodified after :wq."""
+        original_content = "hello world\n"
+        path = create_temp_file(original_content)
+        child = spawn_alfred(path)
+
+        # :regex to open wizard
+        send_colon_command(child, "regex")
+        time.sleep(0.5)
+
+        # Type "hello" to trigger a search
+        for ch in "hello":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.3)
+
+        # Escape to close wizard
+        child.send("\x1b")
+        time.sleep(0.3)
+
+        # Save and quit
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+        saved = read_file(path)
+        assert saved == original_content, \
+            f"File should be unmodified after regex wizard, got: {saved!r}"
+

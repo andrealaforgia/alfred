@@ -126,13 +126,37 @@
 (define-command "open-regex-wizard"
   (lambda ()
     (if regex-wizard-open
-      (regex-wizard-close)
-      (regex-wizard-open-wizard))))
+      (begin
+        (clear-match-highlights)
+        (set-panel-size regex-wizard-panel-name 0)
+        (set regex-wizard-open nil)
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set-mode "normal")
+        (set-active-keymap "normal-mode"))
+      (begin
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set regex-wizard-open 1)
+        (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
+        (set-panel-line regex-wizard-panel-name 0
+          (str-concat (list " Pattern: ")))
+        (set-panel-line regex-wizard-panel-name 1
+          (str-concat (list " 0 matches found")))
+        (set-panel-line regex-wizard-panel-name 2
+          (str-concat (list " [type pattern] [Esc: close]")))
+        (set-active-keymap "regex-wizard-input")))))
 
 ;; Escape: close wizard
 (define-command "regex-wizard-escape"
   (lambda ()
-    (regex-wizard-close)))
+    (clear-match-highlights)
+    (set-panel-size regex-wizard-panel-name 0)
+    (set regex-wizard-open nil)
+    (set regex-wizard-query (str-concat (list)))
+    (set regex-wizard-match-count 0)
+    (set-mode "normal")
+    (set-active-keymap "normal-mode")))
 
 ;; Backspace: remove last char or close if empty
 (define-command "regex-wizard-backspace"
@@ -302,7 +326,7 @@
 (define-command "regex-wizard-char-pipe" (lambda () (regex-wizard-append "|")))
 (define-command "regex-wizard-char-caret" (lambda () (regex-wizard-append "^")))
 (define-command "regex-wizard-char-dollar" (lambda () (regex-wizard-append "$")))
-(define-command "regex-wizard-char-backslash" (lambda () (regex-wizard-append "\\")))
+(define-command "regex-wizard-char-backslash" (lambda () (regex-wizard-append backslash-char)))
 (define-command "regex-wizard-char-lbracket" (lambda () (regex-wizard-append "[")))
 (define-command "regex-wizard-char-rbracket" (lambda () (regex-wizard-append "]")))
 (define-command "regex-wizard-char-lparen" (lambda () (regex-wizard-append "(")))
@@ -324,7 +348,7 @@
 (define-command "regex-wizard-char-slash" (lambda () (regex-wizard-append "/")))
 (define-command "regex-wizard-char-percent" (lambda () (regex-wizard-append "%")))
 (define-command "regex-wizard-char-singlequote" (lambda () (regex-wizard-append "'")))
-(define-command "regex-wizard-char-doublequote" (lambda () (regex-wizard-append "\"")))
+(define-command "regex-wizard-char-doublequote" (lambda () (regex-wizard-append double-quote)))
 (define-command "regex-wizard-char-backtick" (lambda () (regex-wizard-append "`")))
 (define-command "regex-wizard-char-lt" (lambda () (regex-wizard-append "<")))
 (define-command "regex-wizard-char-gt" (lambda () (regex-wizard-append ">")))
@@ -336,7 +360,7 @@
 (define-key "regex-wizard-input" "Char:|" "regex-wizard-char-pipe")
 (define-key "regex-wizard-input" "Char:^" "regex-wizard-char-caret")
 (define-key "regex-wizard-input" "Char:$" "regex-wizard-char-dollar")
-(define-key "regex-wizard-input" "Char:\\" "regex-wizard-char-backslash")
+(define-key "regex-wizard-input" (str-concat (list "Char:" backslash-char)) "regex-wizard-char-backslash")
 (define-key "regex-wizard-input" "Char:[" "regex-wizard-char-lbracket")
 (define-key "regex-wizard-input" "Char:]" "regex-wizard-char-rbracket")
 (define-key "regex-wizard-input" "Char:(" "regex-wizard-char-lparen")
@@ -363,8 +387,28 @@
 (define-key "regex-wizard-input" "Char:<" "regex-wizard-char-lt")
 (define-key "regex-wizard-input" "Char:>" "regex-wizard-char-gt")
 
-;; ---------------------------------------------------------------------------
-;; Normal-mode binding: Ctrl-r opens regex wizard
-;; ---------------------------------------------------------------------------
-
-(define-key "normal-mode" "Ctrl:r" "open-regex-wizard")
+;; Alias: :regex opens the wizard (inline logic — define-command
+;; callbacks have limited access to Lisp-defined functions)
+(define-command "regex"
+  (lambda ()
+    (if regex-wizard-open
+      (begin
+        (clear-match-highlights)
+        (set-panel-size regex-wizard-panel-name 0)
+        (set regex-wizard-open nil)
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set-mode "normal")
+        (set-active-keymap "normal-mode"))
+      (begin
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set regex-wizard-open 1)
+        (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
+        (set-panel-line regex-wizard-panel-name 0
+          (str-concat (list " Pattern: ")))
+        (set-panel-line regex-wizard-panel-name 1
+          (str-concat (list " 0 matches found")))
+        (set-panel-line regex-wizard-panel-name 2
+          (str-concat (list " [type pattern] [Esc: close]")))
+        (set-active-keymap "regex-wizard-input")))))
