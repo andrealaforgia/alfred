@@ -12,6 +12,7 @@ use crate::command::CommandRegistry;
 use crate::cursor::Cursor;
 use crate::hook::HookRegistry;
 use crate::key_event::KeyEvent;
+use crate::overlay::Overlay;
 use crate::panel::PanelRegistry;
 use crate::theme::Theme;
 use crate::viewport::Viewport;
@@ -146,6 +147,8 @@ pub struct EditorState {
     /// The name of the panel that currently has keyboard focus, or None for the editor.
     /// When a panel is focused, key events are routed through the panel's keymap.
     pub focused_panel: Option<String>,
+    /// The overlay panel for search, command palette, or similar floating UI.
+    pub overlay: Overlay,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -795,6 +798,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         panels: crate::panel::new(),
         cli_argument: None,
         focused_panel: None,
+        overlay: Overlay::default(),
     }
 }
 

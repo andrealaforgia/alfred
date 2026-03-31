@@ -13,6 +13,7 @@ pub mod facade;
 pub mod handlers;
 pub mod hook;
 pub mod key_event;
+pub mod overlay;
 pub mod panel;
 pub mod text_object;
 pub mod theme;
