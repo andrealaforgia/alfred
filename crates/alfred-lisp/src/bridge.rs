@@ -2636,6 +2636,8 @@ fn register_open_file(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
 /// - `(overlay-set-input text)` -- updates the overlay input text
 /// - `(overlay-set-items list)` -- replaces the overlay items from a Lisp list
 /// - `(overlay-get-selected)` -- returns the highlighted item string, or empty string if none
+/// - `(overlay-cursor-down)` -- moves the cursor highlight down by one, clamped at last item
+/// - `(overlay-cursor-up)` -- moves the cursor highlight up by one, clamped at zero
 pub fn register_overlay_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
@@ -2643,7 +2645,36 @@ pub fn register_overlay_primitives(runtime: &LispRuntime, state: Rc<RefCell<Edit
     register_close_overlay(env.clone(), state.clone());
     register_overlay_set_input(env.clone(), state.clone());
     register_overlay_set_items(env.clone(), state.clone());
-    register_overlay_get_selected(env, state);
+    register_overlay_get_selected(env.clone(), state.clone());
+
+    register_overlay_cursor_down(env.clone(), state.clone());
+    register_overlay_cursor_up(env, state);
+}
+
+/// Registers `overlay-cursor-down`: moves the cursor highlight down by one.
+///
+/// Usage: `(overlay-cursor-down)`
+///
+/// Clamps at the last item (does not wrap around).
+fn register_overlay_cursor_down(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-cursor-down", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        editor.overlay = overlay::cursor_down(&editor.overlay);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `overlay-cursor-up`: moves the cursor highlight up by one.
+///
+/// Usage: `(overlay-cursor-up)`
+///
+/// Clamps at zero (does not wrap around).
+fn register_overlay_cursor_up(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-cursor-up", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        editor.overlay = overlay::cursor_up(&editor.overlay);
+        Ok(Value::NIL)
+    });
 }
 
 /// Registers `open-overlay`: opens the overlay with given dimensions, resetting all state.
@@ -6185,5 +6216,67 @@ mod tests {
         state.borrow_mut().overlay.cursor_index = 1;
         let result = runtime.eval("(overlay-get-selected)").unwrap();
         assert_eq!(result.as_string(), Some("beta".to_string()));
+    }
+
+    #[test]
+    fn overlay_cursor_down_moves_highlight_down() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+        register_list_primitives(&runtime);
+
+        // Set up items
+        runtime
+            .eval(r#"(overlay-set-items (list "alpha" "beta" "gamma"))"#)
+            .unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 0);
+
+        // Move down once
+        runtime.eval("(overlay-cursor-down)").unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 1);
+
+        // Move down again
+        runtime.eval("(overlay-cursor-down)").unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 2);
+
+        // Move down at last item -- clamps
+        runtime.eval("(overlay-cursor-down)").unwrap();
+        assert_eq!(
+            state.borrow().overlay.cursor_index,
+            2,
+            "cursor should clamp at last item"
+        );
+    }
+
+    #[test]
+    fn overlay_cursor_up_moves_highlight_up() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_overlay_primitives(&runtime, state.clone());
+        register_list_primitives(&runtime);
+
+        // Set up items and move cursor to index 2
+        runtime
+            .eval(r#"(overlay-set-items (list "alpha" "beta" "gamma"))"#)
+            .unwrap();
+        runtime.eval("(overlay-cursor-down)").unwrap();
+        runtime.eval("(overlay-cursor-down)").unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 2);
+
+        // Move up once
+        runtime.eval("(overlay-cursor-up)").unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 1);
+
+        // Move up again
+        runtime.eval("(overlay-cursor-up)").unwrap();
+        assert_eq!(state.borrow().overlay.cursor_index, 0);
+
+        // Move up at zero -- clamps
+        runtime.eval("(overlay-cursor-up)").unwrap();
+        assert_eq!(
+            state.borrow().overlay.cursor_index,
+            0,
+            "cursor should clamp at zero"
+        );
     }
 }

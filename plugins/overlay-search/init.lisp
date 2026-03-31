@@ -17,6 +17,7 @@
 
 (define overlay-search-query (str-concat (list)))
 (define overlay-search-all-files (list))
+(define overlay-search-open nil)
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers -- pure utility functions
@@ -32,34 +33,37 @@
   (lambda (entries)
     (map first (filter overlay-search-is-file entries))))
 
-;; Check if a file path contains the query (case-insensitive)
-(define overlay-search-matches
-  (lambda (filepath query)
-    (str-contains (str-lower filepath) (str-lower query))))
+;; Check if a file path contains the current query (case-insensitive).
+;; Reads overlay-search-query directly to avoid nested lambda closures
+;; which trigger a rust_lisp bug with captured local variables.
+(define overlay-search-matches-query
+  (lambda (filepath)
+    (str-contains (str-lower filepath) (str-lower overlay-search-query))))
 
-;; Filter file list by query substring match
+;; Filter file list by current query substring match
 (define overlay-search-filter
-  (lambda (files query)
-    (if (= (str-length query) 0)
+  (lambda (files)
+    (if (= (str-length overlay-search-query) 0)
       files
-      (filter (lambda (f) (overlay-search-matches f query)) files))))
+      (filter overlay-search-matches-query files))))
 
 ;; ---------------------------------------------------------------------------
 ;; Overlay lifecycle
 ;; ---------------------------------------------------------------------------
 
-;; Close overlay and restore normal mode
+;; Close overlay and restore browser panel mode
 (define overlay-search-close
   (lambda ()
     (close-overlay)
-    (set-mode "normal")
-    (set-active-keymap "normal-mode")))
+    (set overlay-search-open nil)
+    (set-mode "panel-browse")
+    (set-active-keymap "browser-panel-mode")))
 
 ;; Update overlay items based on current query
 (define overlay-search-update-results
   (lambda ()
     (overlay-set-items
-      (overlay-search-filter overlay-search-all-files overlay-search-query))
+      (overlay-search-filter overlay-search-all-files))
     (overlay-set-input overlay-search-query)))
 
 ;; ---------------------------------------------------------------------------
@@ -69,13 +73,17 @@
 ;; Open the overlay file search
 (define-command "overlay-file-search"
   (lambda ()
-    (set overlay-search-query (str-concat (list)))
-    (set overlay-search-all-files
-      (overlay-search-extract-files (list-dir-recursive browser-root-dir)))
-    (open-overlay overlay-search-width overlay-search-max-items)
-    (overlay-set-items overlay-search-all-files)
-    (overlay-set-input overlay-search-query)
-    (set-active-keymap "overlay-search-input")))
+    (if overlay-search-open
+      (overlay-search-close)
+      (begin
+        (set overlay-search-open 1)
+        (set overlay-search-query (str-concat (list)))
+        (set overlay-search-all-files
+          (overlay-search-extract-files (list-dir-recursive browser-root-dir)))
+        (open-overlay overlay-search-width overlay-search-max-items)
+        (overlay-set-items overlay-search-all-files)
+        (overlay-set-input overlay-search-query)
+        (set-active-keymap "overlay-search-input")))))
 
 ;; Enter: open selected file and close overlay
 (define-command "overlay-search-enter"
@@ -84,7 +92,8 @@
       (overlay-search-close)
       (begin
         (open-file (path-join browser-root-dir (overlay-get-selected)))
-        (overlay-search-close)))))
+        (close-overlay)
+        (set overlay-search-open nil)))))
 
 ;; Escape: close overlay without action
 (define-command "overlay-search-escape"
@@ -112,10 +121,19 @@
 ;; Keymap
 ;; ---------------------------------------------------------------------------
 
+;; Cursor navigation commands
+(define-command "overlay-search-cursor-down"
+  (lambda () (overlay-cursor-down)))
+(define-command "overlay-search-cursor-up"
+  (lambda () (overlay-cursor-up)))
+
 (make-keymap "overlay-search-input")
 (define-key "overlay-search-input" "Escape" "overlay-search-escape")
 (define-key "overlay-search-input" "Enter" "overlay-search-enter")
 (define-key "overlay-search-input" "Backspace" "overlay-search-backspace")
+(define-key "overlay-search-input" "Ctrl:p" "overlay-search-escape")
+(define-key "overlay-search-input" "Down" "overlay-search-cursor-down")
+(define-key "overlay-search-input" "Up" "overlay-search-cursor-up")
 
 ;; Per-character commands for lowercase a-z
 (define-command "overlay-search-char-a" (lambda () (overlay-search-append "a")))
@@ -262,3 +280,6 @@
 (define-key "overlay-search-input" "Char:." "overlay-search-char-dot")
 (define-key "overlay-search-input" "Char:/" "overlay-search-char-slash")
 (define-key "overlay-search-input" "Char: " "overlay-search-char-space")
+
+;; Ctrl-p from normal mode (editor focused, no browser panel)
+(define-key "normal-mode" "Ctrl:p" "overlay-file-search")

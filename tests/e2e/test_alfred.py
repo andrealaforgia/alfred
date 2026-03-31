@@ -3802,3 +3802,85 @@ class TestOverlaySearch:
         saved = read_file(os.path.join(ALFRED_PROJECT, "Makefile"))
         assert ".PHONY:" in saved, \
             f"Makefile was not opened after overlay search, got: {saved[:200]!r}"
+
+    def test_ctrl_p_toggles_overlay(self):
+        """Ctrl-p opens overlay, Ctrl-p again closes it, Ctrl-p reopens."""
+        child = spawn_alfred(ALFRED_PROJECT)
+
+        try:
+            child.expect("crates/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Browser did not render")
+
+        # Ctrl-p to open overlay
+        child.send("\x10")
+        time.sleep(0.5)
+
+        try:
+            child.expect(">", timeout=3)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Overlay did not open on first Ctrl-p")
+
+        # Ctrl-p to close overlay
+        child.send("\x10")
+        time.sleep(0.5)
+
+        # Ctrl-p to reopen overlay
+        child.send("\x10")
+        time.sleep(0.5)
+
+        try:
+            child.expect(">", timeout=3)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Overlay did not reopen on third Ctrl-p")
+
+        # Escape to close, then quit
+        child.send("\x1b")
+        time.sleep(0.3)
+        send_keys(child, "q")
+        time.sleep(0.3)
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
+
+    def test_overlay_arrow_navigation(self):
+        """Up/Down arrows navigate overlay results."""
+        child = spawn_alfred(ALFRED_PROJECT)
+
+        try:
+            child.expect("crates/", timeout=5)
+        except pexpect.TIMEOUT:
+            send_colon_command(child, "q!")
+            wait_for_exit(child)
+            pytest.fail("Browser did not render")
+
+        # Open overlay
+        child.send("\x10")
+        time.sleep(0.5)
+
+        # Type "cargo" to get multiple results (Cargo.lock, Cargo.toml, crate Cargo.tomls)
+        for ch in "cargo":
+            send_keys(child, ch)
+            time.sleep(0.15)
+        time.sleep(0.5)
+
+        # Arrow down to second result
+        child.send("\x1b[B")  # Down arrow
+        time.sleep(0.3)
+
+        # Enter to open second match (should be Cargo.toml)
+        child.send("\r")
+        time.sleep(1.0)
+
+        # Verify a file was opened by saving
+        send_colon_command(child, "wq")
+        exit_code = wait_for_exit(child)
+
+        assert exit_code == 0, f"Expected clean exit, got {exit_code}"

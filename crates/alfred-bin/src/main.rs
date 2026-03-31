@@ -75,6 +75,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     bridge::register_string_primitives(&runtime);
     bridge::register_list_primitives(&runtime);
     bridge::register_filesystem_primitives(&runtime, state.clone());
+    bridge::register_overlay_primitives(&runtime, state.clone());
 
     // Discover and load plugins
     let plugin_errors = load_plugins(&runtime);
