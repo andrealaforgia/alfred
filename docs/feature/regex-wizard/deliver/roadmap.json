@@ -1,0 +1,88 @@
+{
+  "roadmap": {
+    "project_id": "regex-wizard",
+    "created_at": "2026-03-31T19:12:51Z",
+    "total_steps": 4,
+    "phases": 3
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Core data model and regex engine",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Match highlights data model and regex bridge primitives",
+          "criteria": [
+            "EditorState exposes a match_highlights field (line -> list of column-range+color segments), independent of line_styles",
+            "Bridge primitive regex-find-all populates match_highlights with all non-overlapping matches and returns integer match count",
+            "Bridge primitive regex-valid? returns 1 for compilable patterns, nil otherwise, with no side effects",
+            "Bridge primitive clear-match-highlights removes all entries from match_highlights",
+            "Invalid regex pattern sets editor message and produces zero highlights"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Rendering",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Render match highlights as background overlay on buffer content",
+          "criteria": [
+            "Match highlight ranges render with distinct background color on buffer text",
+            "Syntax highlighting foreground colors remain visible within highlighted matches",
+            "Match highlights render above line_backgrounds but below cursor in visual priority",
+            "Lines with no match highlights render identically to before"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Plugin and E2E",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Regex wizard plugin with bottom panel and manual regex input",
+          "criteria": [
+            "Keybinding opens a bottom panel with text input for manual regex entry",
+            "Each keystroke in the panel triggers live match highlighting across the entire buffer",
+            "Match count displayed in the wizard panel equals actual highlighted range count",
+            "Escape closes the wizard panel and clears all match highlights from buffer"
+          ]
+        },
+        {
+          "id": "03-02",
+          "name": "E2E test for regex wizard walking skeleton",
+          "criteria": [
+            "E2E test opens a file with known content, activates the regex wizard, types a pattern, saves and verifies file is unmodified",
+            "E2E test confirms wizard panel closes on Escape without persisting highlights"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/alfred-core/src/",
+      "crates/alfred-lisp/src/",
+      "crates/alfred-tui/src/",
+      "plugins/regex-wizard/",
+      "plugins/default-theme/"
+    ],
+    "test_directories": [
+      "tests/e2e/"
+    ],
+    "excluded_patterns": [
+      "__pycache__/**",
+      "target/**"
+    ]
+  },
+  "validation": {
+    "status": "pending",
+    "reviewer": "solution-architect-reviewer",
+    "approved_at": "TODO"
+  }
+}
