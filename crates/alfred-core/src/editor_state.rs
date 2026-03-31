@@ -149,6 +149,10 @@ pub struct EditorState {
     pub focused_panel: Option<String>,
     /// The overlay panel for search, command palette, or similar floating UI.
     pub overlay: Overlay,
+    /// Per-line match highlight segments for regex search results.
+    /// Maps line number -> Vec of (start_col, end_col, ThemeColor) segments.
+    /// Independent of line_styles to allow separate clearing/management.
+    pub match_highlights: HashMap<usize, Vec<(usize, usize, crate::theme::ThemeColor)>>,
 }
 
 /// Creates a new EditorState with default initialization.
@@ -799,6 +803,7 @@ pub fn new(width: u16, height: u16) -> EditorState {
         cli_argument: None,
         focused_panel: None,
         overlay: Overlay::default(),
+        match_highlights: HashMap::new(),
     }
 }
 
@@ -821,6 +826,29 @@ pub fn add_line_style(
 ) {
     state
         .line_styles
+        .entry(line)
+        .or_default()
+        .push((start_col, end_col, color));
+}
+
+/// Clears all match highlight segments.
+pub fn clear_match_highlights(state: &mut EditorState) {
+    state.match_highlights.clear();
+}
+
+/// Adds a match highlight segment for a specific line.
+///
+/// The segment covers columns `start_col..end_col` with the given color.
+/// Multiple segments per line are supported and stored in insertion order.
+pub fn add_match_highlight(
+    state: &mut EditorState,
+    line: usize,
+    start_col: usize,
+    end_col: usize,
+    color: crate::theme::ThemeColor,
+) {
+    state
+        .match_highlights
         .entry(line)
         .or_default()
         .push((start_col, end_col, color));

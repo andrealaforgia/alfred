@@ -9,6 +9,7 @@ perf-tests = []
 
 [dependencies]
 alfred-core = { version = "0.1.0", path = "../alfred-core" }
+regex = "1"
 rust_lisp = "0.18.0"
 thiserror = "1"
 

@@ -93,11 +93,13 @@ pub fn register_core_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorS
 /// After calling this, the following Lisp functions become available:
 /// - `(viewport-top-line)` -- returns the first visible line number (0-indexed)
 /// - `(viewport-height)` -- returns the number of visible lines
+/// - `(viewport-width)` -- returns the terminal width in columns
 pub fn register_rendering_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
     let env = runtime.env();
 
     register_viewport_top_line(env.clone(), state.clone());
-    register_viewport_height(env, state);
+    register_viewport_height(env.clone(), state.clone());
+    register_viewport_width(env, state);
 }
 
 /// Registers `viewport-top-line`: returns the first visible line number (0-indexed).
@@ -121,6 +123,16 @@ fn register_viewport_height(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState
         Ok(Value::Int(
             alfred_core::facade::viewport_height(&editor) as i32
         ))
+    });
+}
+
+/// Registers `viewport-width`: returns the terminal width in columns.
+///
+/// Usage: `(viewport-width)`
+fn register_viewport_width(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "viewport-width", move |_env, _args| {
+        let editor = state.borrow();
+        Ok(Value::Int(editor.viewport.width as i32))
     });
 }
 
@@ -2375,6 +2387,8 @@ pub fn register_filesystem_primitives(runtime: &LispRuntime, state: Rc<RefCell<E
     register_path_join(env.clone());
     register_path_parent(env.clone());
     register_cli_argument(env.clone(), state.clone());
+    register_read_file(env.clone());
+    register_file_exists(env.clone());
     register_open_file(env, state);
 }
 
@@ -2578,6 +2592,38 @@ fn register_path_parent(env: Rc<RefCell<Env>>) {
     });
 }
 
+/// Registers `read-file`: reads a file's contents as a string.
+///
+/// Usage: `(read-file "/path/to/file")` -> `"file contents..."` or `""` on error
+///
+/// Returns the file contents as a string. Returns an empty string if the file
+/// does not exist or cannot be read.
+fn register_read_file(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "read-file", move |_env, args| {
+        let path_str = extract_string_arg(&args, "read-file")?;
+        let path = std::path::Path::new(&path_str);
+        match std::fs::read_to_string(path) {
+            Ok(contents) => Ok(Value::String(contents)),
+            Err(_) => Ok(Value::String(String::new())),
+        }
+    });
+}
+
+/// Registers `file-exists`: checks if a file exists on the filesystem.
+///
+/// Usage: `(file-exists "/path/to/file")` -> `1` if exists, `nil` otherwise
+fn register_file_exists(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "file-exists", move |_env, args| {
+        let path_str = extract_string_arg(&args, "file-exists")?;
+        let path = std::path::Path::new(&path_str);
+        if path.exists() {
+            Ok(Value::Int(1))
+        } else {
+            Ok(Value::NIL)
+        }
+    });
+}
+
 /// Registers `cli-argument`: returns the CLI argument Alfred was started with.
 ///
 /// Usage: `(cli-argument)` -> `"/path/to/file"` or `""`
@@ -2648,7 +2694,8 @@ pub fn register_overlay_primitives(runtime: &LispRuntime, state: Rc<RefCell<Edit
     register_overlay_get_selected(env.clone(), state.clone());
 
     register_overlay_cursor_down(env.clone(), state.clone());
-    register_overlay_cursor_up(env, state);
+    register_overlay_cursor_up(env.clone(), state.clone());
+    register_overlay_set_style(env, state);
 }
 
 /// Registers `overlay-cursor-down`: moves the cursor highlight down by one.
@@ -2673,6 +2720,51 @@ fn register_overlay_cursor_up(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorSta
     define_native_closure(&env, "overlay-cursor-up", move |_env, _args| {
         let mut editor = state.borrow_mut();
         editor.overlay = overlay::cursor_up(&editor.overlay);
+        Ok(Value::NIL)
+    });
+}
+
+/// Registers `overlay-set-style`: sets overlay colors from Lisp.
+///
+/// Usage: `(overlay-set-style fg bg highlight-fg highlight-bg prompt-fg border-color)`
+///
+/// All arguments are hex color strings like "#89b4fa". Empty string means default.
+fn register_overlay_set_style(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "overlay-set-style", move |_env, args| {
+        let fg = match args.first() {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let bg = match args.get(1) {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let hl_fg = match args.get(2) {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let hl_bg = match args.get(3) {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let prompt_fg = match args.get(4) {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let border_color = match args.get(5) {
+            Some(Value::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let mut editor = state.borrow_mut();
+        editor.overlay = overlay::set_style(
+            &editor.overlay,
+            &fg,
+            &bg,
+            &hl_fg,
+            &hl_bg,
+            &prompt_fg,
+            &border_color,
+        );
         Ok(Value::NIL)
     });
 }
@@ -2793,6 +2885,101 @@ fn register_overlay_get_selected(env: Rc<RefCell<Env>>, state: Rc<RefCell<Editor
         let editor = state.borrow();
         let selected = overlay::get_selected(&editor.overlay).unwrap_or_default();
         Ok(Value::String(selected))
+    });
+}
+
+/// Registers all regex-related primitives into the runtime.
+///
+/// After calling this, the following Lisp functions become available:
+/// - `(regex-find-all pattern highlight-color)` -- find all matches, populate match_highlights
+/// - `(regex-valid? pattern)` -- check if pattern compiles, returns 1 or nil
+/// - `(clear-match-highlights)` -- remove all match highlight entries
+pub fn register_regex_primitives(runtime: &LispRuntime, state: Rc<RefCell<EditorState>>) {
+    let env = runtime.env();
+
+    register_regex_find_all(env.clone(), state.clone());
+    register_regex_valid(env.clone());
+    register_clear_match_highlights(env, state);
+}
+
+/// Registers `regex-find-all`: finds all non-overlapping matches across all buffer lines.
+///
+/// Usage: `(regex-find-all pattern highlight-color)`
+///
+/// - `pattern` is a regex string
+/// - `highlight-color` is a hex color string like "#f38ba8"
+///
+/// Populates `match_highlights` with (start_col, end_col, color) segments per line.
+/// Returns the total match count as an integer.
+/// If the regex is invalid, sets the editor message and returns 0.
+fn register_regex_find_all(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "regex-find-all", move |_env, args| {
+        let pattern = extract_string_arg_at(&args, 0, "regex-find-all", "pattern")?;
+        let color_str = extract_string_arg_at(&args, 1, "regex-find-all", "highlight-color")?;
+
+        let compiled = match regex::Regex::new(&pattern) {
+            Ok(re) => re,
+            Err(err) => {
+                let mut editor = state.borrow_mut();
+                editor.message = Some(format!("Invalid regex: {}", err));
+                return Ok(Value::Int(0));
+            }
+        };
+
+        let color = alfred_core::theme::parse_color(&color_str).ok_or_else(|| RuntimeError {
+            msg: format!("regex-find-all: invalid highlight color '{}'", color_str),
+        })?;
+
+        let mut editor = state.borrow_mut();
+        alfred_core::editor_state::clear_match_highlights(&mut editor);
+
+        let line_count = alfred_core::buffer::line_count(&editor.buffer);
+        let mut total_matches = 0;
+
+        for line_idx in 0..line_count {
+            let line_text = alfred_core::buffer::get_line_string(&editor.buffer, line_idx);
+            // Strip trailing newline for matching (ropey includes it)
+            let trimmed = line_text.trim_end_matches('\n');
+            for m in compiled.find_iter(trimmed) {
+                alfred_core::editor_state::add_match_highlight(
+                    &mut editor,
+                    line_idx,
+                    m.start(),
+                    m.end(),
+                    color,
+                );
+                total_matches += 1;
+            }
+        }
+
+        Ok(Value::Int(total_matches))
+    });
+}
+
+/// Registers `regex-valid?`: checks if a pattern string is a valid regex.
+///
+/// Usage: `(regex-valid? pattern)`
+///
+/// Returns 1 if the pattern compiles successfully, nil otherwise.
+/// This is a pure query with no side effects on editor state.
+fn register_regex_valid(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "regex-valid?", move |_env, args| {
+        let pattern = extract_string_arg_at(&args, 0, "regex-valid?", "pattern")?;
+        match regex::Regex::new(&pattern) {
+            Ok(_) => Ok(Value::Int(1)),
+            Err(_) => Ok(Value::NIL),
+        }
+    });
+}
+
+/// Registers `clear-match-highlights`: removes all match highlight entries.
+///
+/// Usage: `(clear-match-highlights)`
+fn register_clear_match_highlights(env: Rc<RefCell<Env>>, state: Rc<RefCell<EditorState>>) {
+    define_native_closure(&env, "clear-match-highlights", move |_env, _args| {
+        let mut editor = state.borrow_mut();
+        alfred_core::editor_state::clear_match_highlights(&mut editor);
+        Ok(Value::NIL)
     });
 }
 
@@ -6012,6 +6199,117 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // Filesystem primitives: read-file
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_existing_file_when_read_file_then_returns_file_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        std::fs::write(&file_path, "Hello, world!").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(read-file \"{}\")", path_str))
+            .unwrap();
+
+        assert_eq!(result.as_string(), Some("Hello, world!".to_string()));
+    }
+
+    #[test]
+    fn given_nonexistent_file_when_read_file_then_returns_empty_string() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(read-file \"/nonexistent/path/to/file.txt\")")
+            .unwrap();
+
+        assert_eq!(result.as_string(), Some("".to_string()));
+    }
+
+    #[test]
+    fn given_multiline_file_when_read_file_then_returns_all_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("multi.txt");
+        std::fs::write(&file_path, "line1\nline2\nline3").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(read-file \"{}\")", path_str))
+            .unwrap();
+
+        assert_eq!(result.as_string(), Some("line1\nline2\nline3".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem primitives: file-exists
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_existing_file_when_file_exists_then_returns_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("exists.txt");
+        std::fs::write(&file_path, "content").unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(file-exists \"{}\")", path_str))
+            .unwrap();
+
+        assert_eq!(result.inner().clone(), Value::Int(1));
+    }
+
+    #[test]
+    fn given_nonexistent_file_when_file_exists_then_returns_nil() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(file-exists \"/nonexistent/path/to/file.txt\")")
+            .unwrap();
+
+        let inner = result.inner().clone();
+        match inner {
+            Value::List(List::NIL) => {} // NIL = false
+            _ => panic!(
+                "file-exists on nonexistent file should return NIL, got {:?}",
+                inner
+            ),
+        }
+    }
+
+    #[test]
+    fn given_directory_when_file_exists_then_returns_one() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_filesystem_primitives(&runtime, state.clone());
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let result = runtime
+            .eval(&format!("(file-exists \"{}\")", dir_path))
+            .unwrap();
+
+        assert_eq!(result.inner().clone(), Value::Int(1));
+    }
+
+    // -----------------------------------------------------------------------
     // Filesystem primitives: open-file
     // -----------------------------------------------------------------------
 
@@ -6277,6 +6575,185 @@ mod tests {
             state.borrow().overlay.cursor_index,
             0,
             "cursor should clamp at zero"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Acceptance test: regex-find-all populates match_highlights
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_buffer_with_text_when_regex_find_all_evaluated_then_match_highlights_populated() {
+        // Given: a buffer with two lines containing the word "foo"
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("foo bar foo\nbaz foo qux\n");
+        }
+
+        // And: a runtime with regex primitives registered
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_regex_primitives(&runtime, state.clone());
+
+        // When: regex-find-all is evaluated with pattern "foo" and highlight color
+        let result = runtime
+            .eval("(regex-find-all \"foo\" \"#f38ba8\")")
+            .unwrap();
+
+        // Then: the match count is 3
+        assert_eq!(
+            result.as_integer(),
+            Some(3),
+            "regex-find-all should return total match count"
+        );
+
+        // And: match_highlights contains entries for lines 0 and 1
+        let editor = state.borrow();
+        let line0_highlights = editor
+            .match_highlights
+            .get(&0)
+            .expect("line 0 should have highlights");
+        assert_eq!(line0_highlights.len(), 2, "line 0 should have 2 matches");
+        assert_eq!(
+            line0_highlights[0],
+            (0, 3, alfred_core::theme::ThemeColor::Rgb(243, 139, 168))
+        );
+        assert_eq!(
+            line0_highlights[1],
+            (8, 11, alfred_core::theme::ThemeColor::Rgb(243, 139, 168))
+        );
+
+        let line1_highlights = editor
+            .match_highlights
+            .get(&1)
+            .expect("line 1 should have highlights");
+        assert_eq!(line1_highlights.len(), 1, "line 1 should have 1 match");
+        assert_eq!(
+            line1_highlights[0],
+            (4, 7, alfred_core::theme::ThemeColor::Rgb(243, 139, 168))
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: regex-valid? returns 1 for valid pattern
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_valid_regex_when_regex_valid_evaluated_then_returns_one() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(regex-valid? \"[a-z]+\")").unwrap();
+        assert_eq!(result.as_integer(), Some(1));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: regex-valid? returns nil for invalid pattern
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_invalid_regex_when_regex_valid_evaluated_then_returns_nil() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(regex-valid? \"[invalid\")").unwrap();
+        assert_eq!(*result.inner(), Value::NIL);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: clear-match-highlights removes all highlights
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_match_highlights_exist_when_clear_match_highlights_then_map_empty() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("hello hello\n");
+        }
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_regex_primitives(&runtime, state.clone());
+
+        // Populate highlights
+        runtime
+            .eval("(regex-find-all \"hello\" \"#ff0000\")")
+            .unwrap();
+        assert!(
+            !state.borrow().match_highlights.is_empty(),
+            "highlights should exist before clearing"
+        );
+
+        // Clear them
+        runtime.eval("(clear-match-highlights)").unwrap();
+
+        assert!(
+            state.borrow().match_highlights.is_empty(),
+            "match_highlights should be empty after clearing"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: invalid regex sets message and produces zero highlights
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_invalid_regex_when_regex_find_all_then_sets_message_and_zero_highlights() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        {
+            let mut editor = state.borrow_mut();
+            editor.buffer = alfred_core::buffer::Buffer::from_string("some text\n");
+        }
+
+        let runtime = LispRuntime::new();
+        register_core_primitives(&runtime, state.clone());
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime
+            .eval("(regex-find-all \"[invalid\" \"#ff0000\")")
+            .unwrap();
+
+        // Should return 0 matches
+        assert_eq!(result.as_integer(), Some(0));
+
+        // Should set an error message
+        let editor = state.borrow();
+        assert!(
+            editor.message.is_some(),
+            "editor message should be set for invalid regex"
+        );
+        assert!(
+            editor.match_highlights.is_empty(),
+            "no highlights should be added for invalid regex"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit test: regex-valid? has no side effects on editor state
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_editor_state_when_regex_valid_called_then_no_side_effects() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        // Call with invalid regex
+        runtime.eval("(regex-valid? \"[bad\")").unwrap();
+
+        // No message should be set (regex-valid? is pure)
+        let editor = state.borrow();
+        assert!(
+            editor.message.is_none(),
+            "regex-valid? should not modify editor state"
+        );
+        assert!(
+            editor.match_highlights.is_empty(),
+            "regex-valid? should not modify match_highlights"
         );
     }
 }

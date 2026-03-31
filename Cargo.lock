@@ -28,6 +28,7 @@ dependencies = [
 name = "alfred-core"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "ropey",
  "tempfile",
  "thiserror",
@@ -38,6 +39,7 @@ name = "alfred-lisp"
 version = "0.1.0"
 dependencies = [
  "alfred-core",
+ "regex",
  "rust_lisp",
  "tempfile",
  "thiserror",

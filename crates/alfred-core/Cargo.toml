@@ -5,6 +5,7 @@ edition = "2021"
 description = "Pure domain core for the Alfred text editor"
 
 [dependencies]
+regex = "1"
 ropey = "1"
 thiserror = "1"
 
