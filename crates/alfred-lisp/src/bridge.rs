@@ -5456,7 +5456,7 @@ mod tests {
         assert_eq!(*result.inner(), Value::NIL);
     }
 
-    // -- buffer-line-count (already registered via rainbow_csv_primitives) --
+    // -- buffer-line-count --
 
     #[test]
     fn given_multiline_buffer_when_buffer_line_count_then_returns_correct_count() {

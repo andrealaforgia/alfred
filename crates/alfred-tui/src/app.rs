@@ -121,7 +121,7 @@ pub(crate) fn eval_and_display(
 #[cfg(test)]
 /// Computes gutter content by dispatching the "render-gutter" hook.
 ///
-/// If no hook is registered (no line-numbers plugin), returns (0, empty vec).
+/// If no hook is registered, returns (0, empty vec).
 /// Otherwise, dispatches the hook with visible line range info and returns
 /// (gutter_width, formatted_lines).
 ///
@@ -221,7 +221,7 @@ pub(crate) fn compute_status_content(state: &EditorState) -> Option<String> {
 /// and writing results into `EditorState.line_styles`.
 ///
 /// This replaces any existing `line_styles` for the visible range with syntax
-/// highlight colors. Existing `line_styles` from plugins (e.g., rainbow-csv) are
+/// highlight colors. Existing `line_styles` from plugins are
 /// preserved for lines outside the visible range only if syntax highlighting
 /// is not active. When syntax highlighting IS active, it owns `line_styles` for
 /// visible lines.
@@ -240,7 +240,7 @@ fn apply_syntax_highlights(state_rc: &Rc<RefCell<EditorState>>, highlighter: &Sy
     let ranges = highlighter.highlight_lines(&source, top_line, end_line);
 
     // Don't overwrite if no language / no ranges and there are existing styles
-    // (e.g., from rainbow-csv)
+    // (e.g., from plugins that set their own line_styles)
     if ranges.is_empty() {
         return;
     }

@@ -1,6 +1,6 @@
 ;;; name: regex-wizard
-;;; version: 0.1.0
-;;; description: Regex wizard with bottom panel for live regex matching
+;;; version: 0.3.0
+;;; description: Regex wizard with component picker and live regex matching
 ;;; depends: default-theme
 
 ;; ---------------------------------------------------------------------------
@@ -8,7 +8,70 @@
 ;; ---------------------------------------------------------------------------
 
 (define regex-wizard-panel-name "regex-wizard")
-(define regex-wizard-panel-height 3)
+(define regex-wizard-panel-height 10)
+(define regex-wizard-tab-count 4)
+
+;; ---------------------------------------------------------------------------
+;; Component data -- parallel lists per tab
+;; ---------------------------------------------------------------------------
+
+;; Tab names
+(define regex-wizard-tab-names
+  (list "Character Classes" "Quantifiers" "Assertions" "Groups"))
+
+;; Tab 0: Character Classes -- labels
+(define regex-wizard-tab0-labels
+  (list "Any character (.)"
+        "Digit (\\d)"
+        "Non-digit (\\D)"
+        "Word character (\\w)"
+        "Non-word (\\W)"
+        "Whitespace (\\s)"
+        "Non-whitespace (\\S)"))
+
+;; Tab 0: Character Classes -- patterns
+(define regex-wizard-tab0-patterns
+  (list "."
+        (str-concat (list backslash-char "d"))
+        (str-concat (list backslash-char "D"))
+        (str-concat (list backslash-char "w"))
+        (str-concat (list backslash-char "W"))
+        (str-concat (list backslash-char "s"))
+        (str-concat (list backslash-char "S"))))
+
+;; Tab 1: Quantifiers -- labels
+(define regex-wizard-tab1-labels
+  (list "Zero or more (*)"
+        "One or more (+)"
+        "Zero or one (?)"))
+
+;; Tab 1: Quantifiers -- patterns
+(define regex-wizard-tab1-patterns
+  (list "*" "+" "?"))
+
+;; Tab 2: Assertions -- labels
+(define regex-wizard-tab2-labels
+  (list "Start of line (^)"
+        "End of line ($)"
+        "Word boundary (\\b)"
+        "Non-word boundary (\\B)"))
+
+;; Tab 2: Assertions -- patterns
+(define regex-wizard-tab2-patterns
+  (list "^"
+        "$"
+        (str-concat (list backslash-char "b"))
+        (str-concat (list backslash-char "B"))))
+
+;; Tab 3: Groups -- labels
+(define regex-wizard-tab3-labels
+  (list "Capturing group ()"
+        "Non-capturing (?:)"
+        "Alternation (|)"))
+
+;; Tab 3: Groups -- patterns
+(define regex-wizard-tab3-patterns
+  (list "()" "(?:)" "|"))
 
 ;; ---------------------------------------------------------------------------
 ;; State variables
@@ -19,58 +82,150 @@
 (define regex-wizard-match-count 0)
 (define regex-wizard-previous-mode (str-concat (list)))
 (define regex-wizard-previous-keymap (str-concat (list)))
+(define regex-wizard-tab-index 0)
+(define regex-wizard-cursor 0)
+
+;; Temporary variables used by inline panel rendering inside define-command
+(define regex-wizard-tmp-labels (list))
+(define regex-wizard-tmp-size 0)
+(define regex-wizard-tmp-line (str-concat (list)))
 
 ;; ---------------------------------------------------------------------------
-;; Panel setup — created at load time, initially hidden (size 0)
+;; Panel setup -- created at load time, initially hidden (size 0)
 ;; ---------------------------------------------------------------------------
 
 (define-panel regex-wizard-panel-name "bottom" 0)
 (set-panel-style regex-wizard-panel-name theme-fg theme-surface)
 
 ;; ---------------------------------------------------------------------------
-;; Helpers — pure utility functions
+;; Helpers -- get labels/patterns for current tab
+;; (kept for reference but NOT called from define-command callbacks)
 ;; ---------------------------------------------------------------------------
 
-;; Build the pattern display line (row 0): "Pattern: <query>"
+(define regex-wizard-current-labels
+  (lambda ()
+    (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+      (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+        (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+          regex-wizard-tab3-labels)))))
+
+(define regex-wizard-current-patterns
+  (lambda ()
+    (if (= regex-wizard-tab-index 0) regex-wizard-tab0-patterns
+      (if (= regex-wizard-tab-index 1) regex-wizard-tab1-patterns
+        (if (= regex-wizard-tab-index 2) regex-wizard-tab2-patterns
+          regex-wizard-tab3-patterns)))))
+
+(define regex-wizard-current-tab-size
+  (lambda ()
+    (length (regex-wizard-current-labels))))
+
+;; ---------------------------------------------------------------------------
+;; Rendering helpers -- kept for reference only
+;; ---------------------------------------------------------------------------
+
 (define regex-wizard-build-pattern-line
   (lambda ()
-    (str-concat (list " Pattern: " regex-wizard-query))))
+    (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches"))))
 
-;; Build the match count display line (row 1): "N matches found"
-(define regex-wizard-build-count-line
+(define regex-wizard-build-tab-bar
   (lambda ()
-    (str-concat (list " " (to-string regex-wizard-match-count) " matches found"))))
+    (str-concat
+      (list " "
+        (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+        (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+        (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+        (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] ")))))
 
-;; Build the hint line (row 2)
 (define regex-wizard-build-hint-line
   (lambda ()
-    (str-concat (list " [Esc] close  |  Type regex pattern"))))
+    (str-concat (list " " (to-string regex-wizard-match-count)
+      " matches | [Enter] add [BS] remove [Tab] next [Esc] close"))))
 
-;; ---------------------------------------------------------------------------
-;; Panel rendering — update all 3 rows with current state
-;; ---------------------------------------------------------------------------
+(define regex-wizard-render-item-line
+  (lambda (index label)
+    (if (= index regex-wizard-cursor)
+      (str-concat (list " > " label))
+      (str-concat (list "   " label)))))
 
 (define regex-wizard-render-panel
   (lambda ()
     (begin
       (clear-panel-lines regex-wizard-panel-name)
       (clear-panel-line-styles regex-wizard-panel-name)
-      ;; Row 0: Pattern
+
       (set-panel-line regex-wizard-panel-name 0 (regex-wizard-build-pattern-line))
       (set-panel-line-style regex-wizard-panel-name 0 0
         (str-length (regex-wizard-build-pattern-line)) theme-prompt)
-      ;; Row 1: Match count
-      (set-panel-line regex-wizard-panel-name 1 (regex-wizard-build-count-line))
+
+      (set-panel-line regex-wizard-panel-name 1 (regex-wizard-build-tab-bar))
       (set-panel-line-style regex-wizard-panel-name 1 0
-        (str-length (regex-wizard-build-count-line)) theme-accent)
-      ;; Row 2: Hints
-      (set-panel-line regex-wizard-panel-name 2 (regex-wizard-build-hint-line))
-      (set-panel-line-style regex-wizard-panel-name 2 0
+        (str-length (regex-wizard-build-tab-bar)) theme-accent)
+
+      (set regex-wizard-render-idx 0)
+      (set regex-wizard-render-labels (regex-wizard-current-labels))
+      (regex-wizard-render-items)
+
+      (set-panel-line regex-wizard-panel-name 9 (regex-wizard-build-hint-line))
+      (set-panel-line-style regex-wizard-panel-name 9 0
         (str-length (regex-wizard-build-hint-line)) theme-muted))))
 
+(define regex-wizard-render-idx 0)
+(define regex-wizard-render-labels (list))
+
+(define regex-wizard-render-items
+  (lambda ()
+    (if (>= regex-wizard-render-idx (length regex-wizard-render-labels))
+      nil
+      (begin
+        (set-panel-line regex-wizard-panel-name
+          (+ 2 regex-wizard-render-idx)
+          (regex-wizard-render-item-line
+            regex-wizard-render-idx
+            (nth regex-wizard-render-idx regex-wizard-render-labels)))
+        (if (= regex-wizard-render-idx regex-wizard-cursor)
+          (set-panel-line-style regex-wizard-panel-name
+            (+ 2 regex-wizard-render-idx)
+            0
+            (str-length
+              (regex-wizard-render-item-line
+                regex-wizard-render-idx
+                (nth regex-wizard-render-idx regex-wizard-render-labels)))
+            theme-highlight-bg)
+          nil)
+        (set regex-wizard-render-idx (+ regex-wizard-render-idx 1))
+        (regex-wizard-render-items)))))
+
 ;; ---------------------------------------------------------------------------
-;; Search execution — validate and run regex
+;; Lifecycle helpers -- kept for reference only
 ;; ---------------------------------------------------------------------------
+
+(define regex-wizard-close
+  (lambda ()
+    (begin
+      (clear-match-highlights)
+      (set-panel-size regex-wizard-panel-name 0)
+      (set regex-wizard-open nil)
+      (set regex-wizard-query (str-concat (list)))
+      (set regex-wizard-match-count 0)
+      (set regex-wizard-tab-index 0)
+      (set regex-wizard-cursor 0)
+      (set-mode regex-wizard-previous-mode)
+      (set-active-keymap regex-wizard-previous-keymap))))
+
+(define regex-wizard-open-wizard
+  (lambda ()
+    (begin
+      (set regex-wizard-previous-mode (current-mode))
+      (set regex-wizard-previous-keymap "normal-mode")
+      (set regex-wizard-query (str-concat (list)))
+      (set regex-wizard-match-count 0)
+      (set regex-wizard-tab-index 0)
+      (set regex-wizard-cursor 0)
+      (set regex-wizard-open 1)
+      (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
+      (regex-wizard-render-panel)
+      (set-active-keymap "regex-wizard-input"))))
 
 (define regex-wizard-run-search
   (lambda ()
@@ -89,12 +244,180 @@
           (set regex-wizard-match-count 0)
           (regex-wizard-render-panel))))))
 
+;; ===========================================================================
+;; COMMANDS -- All logic inlined using only bridge primitives and globals.
+;;
+;; define-command callbacks CANNOT call Lisp-defined functions.
+;; They CAN: read/write global variables, call bridge primitives,
+;; use if/begin/str-concat/set/nth/length.
+;; ===========================================================================
+
 ;; ---------------------------------------------------------------------------
-;; Wizard lifecycle — open and close
+;; Inline full panel render macro (used in open, tab switch, cursor move)
+;;
+;; Steps:
+;;   1. Clear all panel lines and styles
+;;   2. Row 0: pattern line
+;;   3. Row 1: tab bar
+;;   4. Rows 2-8: component items (unrolled loop, max 7 items)
+;;   5. Row 9: hint line
 ;; ---------------------------------------------------------------------------
 
-;; Close wizard: clear highlights, hide panel, restore previous mode/keymap
-(define regex-wizard-close
+;; Toggle open/close
+(define-command "open-regex-wizard"
+  (lambda ()
+    (if regex-wizard-open
+      ;; Inline close
+      (begin
+        (clear-match-highlights)
+        (set-panel-size regex-wizard-panel-name 0)
+        (set regex-wizard-open nil)
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set regex-wizard-tab-index 0)
+        (set regex-wizard-cursor 0)
+        (set-mode regex-wizard-previous-mode)
+        (set-active-keymap regex-wizard-previous-keymap))
+      ;; Inline open
+      (begin
+        (set regex-wizard-previous-mode (current-mode))
+        (set regex-wizard-previous-keymap "normal-mode")
+        (set regex-wizard-query (str-concat (list)))
+        (set regex-wizard-match-count 0)
+        (set regex-wizard-tab-index 0)
+        (set regex-wizard-cursor 0)
+        (set regex-wizard-open 1)
+        (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
+        ;; Inline full panel render
+        (clear-panel-lines regex-wizard-panel-name)
+        (clear-panel-line-styles regex-wizard-panel-name)
+        ;; Row 0: pattern
+        (set regex-wizard-tmp-line
+          (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+        (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 0 0
+          (str-length regex-wizard-tmp-line) theme-prompt)
+        ;; Row 1: tab bar
+        (set regex-wizard-tmp-line
+          (str-concat
+            (list " "
+              (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+              (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+              (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+              (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+        (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 1 0
+          (str-length regex-wizard-tmp-line) theme-accent)
+        ;; Rows 2-8: component items (unrolled)
+        (set regex-wizard-tmp-labels
+          (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+            (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+              (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+                regex-wizard-tab3-labels))))
+        (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+        ;; Item 0
+        (if (> regex-wizard-tmp-size 0)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 0)
+                (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 0)
+              (set-panel-line-style regex-wizard-panel-name 2 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 1
+        (if (> regex-wizard-tmp-size 1)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 1)
+                (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 1)
+              (set-panel-line-style regex-wizard-panel-name 3 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 2
+        (if (> regex-wizard-tmp-size 2)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 2)
+                (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 2)
+              (set-panel-line-style regex-wizard-panel-name 4 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 3
+        (if (> regex-wizard-tmp-size 3)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 3)
+                (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 3)
+              (set-panel-line-style regex-wizard-panel-name 5 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 4
+        (if (> regex-wizard-tmp-size 4)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 4)
+                (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 4)
+              (set-panel-line-style regex-wizard-panel-name 6 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 5
+        (if (> regex-wizard-tmp-size 5)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 5)
+                (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 5)
+              (set-panel-line-style regex-wizard-panel-name 7 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 6
+        (if (> regex-wizard-tmp-size 6)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 6)
+                (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 6)
+              (set-panel-line-style regex-wizard-panel-name 8 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Row 9: hint line
+        (set regex-wizard-tmp-line
+          (str-concat (list " " (to-string regex-wizard-match-count)
+            " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+        (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 9 0
+          (str-length regex-wizard-tmp-line) theme-muted)
+        ;; Activate keymap
+        (set-active-keymap "regex-wizard-input")))))
+
+;; Escape: close wizard (already fully inline)
+(define-command "regex-wizard-escape"
   (lambda ()
     (begin
       (clear-match-highlights)
@@ -102,313 +425,1184 @@
       (set regex-wizard-open nil)
       (set regex-wizard-query (str-concat (list)))
       (set regex-wizard-match-count 0)
-      (set-mode regex-wizard-previous-mode)
-      (set-active-keymap regex-wizard-previous-keymap))))
+      (set regex-wizard-tab-index 0)
+      (set regex-wizard-cursor 0)
+      (set-mode "normal")
+      (set-active-keymap "normal-mode"))))
 
-;; Open wizard: save current mode, show panel, switch to wizard keymap
-(define regex-wizard-open-wizard
+;; Backspace: remove last char from pattern, inline search + partial panel update
+(define-command "regex-wizard-backspace"
   (lambda ()
-    (begin
-      (set regex-wizard-previous-mode (current-mode))
-      (set regex-wizard-previous-keymap "normal-mode")
-      (set regex-wizard-query (str-concat (list)))
-      (set regex-wizard-match-count 0)
-      (set regex-wizard-open 1)
-      (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
-      (regex-wizard-render-panel)
-      (set-active-keymap "regex-wizard-input"))))
-
-;; ---------------------------------------------------------------------------
-;; Commands
-;; ---------------------------------------------------------------------------
-
-;; Toggle open/close
-(define-command "open-regex-wizard"
-  (lambda ()
-    (if regex-wizard-open
+    (if (= (str-length regex-wizard-query) 0)
+      ;; Inline close
       (begin
         (clear-match-highlights)
         (set-panel-size regex-wizard-panel-name 0)
         (set regex-wizard-open nil)
         (set regex-wizard-query (str-concat (list)))
         (set regex-wizard-match-count 0)
-        (set-mode "normal")
-        (set-active-keymap "normal-mode"))
-      (begin
-        (set regex-wizard-query (str-concat (list)))
-        (set regex-wizard-match-count 0)
-        (set regex-wizard-open 1)
-        (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
-        (set-panel-line regex-wizard-panel-name 0
-          (str-concat (list " Pattern: ")))
-        (set-panel-line regex-wizard-panel-name 1
-          (str-concat (list " 0 matches found")))
-        (set-panel-line regex-wizard-panel-name 2
-          (str-concat (list " [type pattern] [Esc: close]")))
-        (set-active-keymap "regex-wizard-input")))))
-
-;; Escape: close wizard
-(define-command "regex-wizard-escape"
-  (lambda ()
-    (clear-match-highlights)
-    (set-panel-size regex-wizard-panel-name 0)
-    (set regex-wizard-open nil)
-    (set regex-wizard-query (str-concat (list)))
-    (set regex-wizard-match-count 0)
-    (set-mode "normal")
-    (set-active-keymap "normal-mode")))
-
-;; Backspace: remove last char or close if empty
-(define-command "regex-wizard-backspace"
-  (lambda ()
-    (if (= (str-length regex-wizard-query) 0)
-      (regex-wizard-close)
+        (set regex-wizard-tab-index 0)
+        (set regex-wizard-cursor 0)
+        (set-mode regex-wizard-previous-mode)
+        (set-active-keymap regex-wizard-previous-keymap))
       (begin
         (set regex-wizard-query
           (str-substring regex-wizard-query 0
             (- (str-length regex-wizard-query) 1)))
-        (regex-wizard-run-search)))))
+        ;; Inline search
+        (if (= (str-length regex-wizard-query) 0)
+          (begin (clear-match-highlights) (set regex-wizard-match-count 0))
+          (if (regex-valid? regex-wizard-query)
+            (begin
+              (clear-match-highlights)
+              (set regex-wizard-match-count (regex-find-all regex-wizard-query theme-accent)))
+            (begin (clear-match-highlights) (set regex-wizard-match-count 0))))
+        ;; Inline full panel render
+        (clear-panel-lines regex-wizard-panel-name)
+        (clear-panel-line-styles regex-wizard-panel-name)
+        ;; Row 0: pattern
+        (set regex-wizard-tmp-line
+          (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+        (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 0 0
+          (str-length regex-wizard-tmp-line) theme-prompt)
+        ;; Row 1: tab bar
+        (set regex-wizard-tmp-line
+          (str-concat
+            (list " "
+              (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+              (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+              (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+              (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+        (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 1 0
+          (str-length regex-wizard-tmp-line) theme-accent)
+        ;; Rows 2-8: component items
+        (set regex-wizard-tmp-labels
+          (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+            (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+              (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+                regex-wizard-tab3-labels))))
+        (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+        ;; Item 0
+        (if (> regex-wizard-tmp-size 0)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 0)
+                (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 0)
+              (set-panel-line-style regex-wizard-panel-name 2 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 1
+        (if (> regex-wizard-tmp-size 1)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 1)
+                (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 1)
+              (set-panel-line-style regex-wizard-panel-name 3 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 2
+        (if (> regex-wizard-tmp-size 2)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 2)
+                (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 2)
+              (set-panel-line-style regex-wizard-panel-name 4 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 3
+        (if (> regex-wizard-tmp-size 3)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 3)
+                (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 3)
+              (set-panel-line-style regex-wizard-panel-name 5 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 4
+        (if (> regex-wizard-tmp-size 4)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 4)
+                (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 4)
+              (set-panel-line-style regex-wizard-panel-name 6 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 5
+        (if (> regex-wizard-tmp-size 5)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 5)
+                (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 5)
+              (set-panel-line-style regex-wizard-panel-name 7 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Item 6
+        (if (> regex-wizard-tmp-size 6)
+          (begin
+            (set regex-wizard-tmp-line
+              (if (= regex-wizard-cursor 6)
+                (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+                (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+            (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+            (if (= regex-wizard-cursor 6)
+              (set-panel-line-style regex-wizard-panel-name 8 0
+                (str-length regex-wizard-tmp-line) theme-highlight-bg)
+              nil))
+          nil)
+        ;; Row 9: hint line
+        (set regex-wizard-tmp-line
+          (str-concat (list " " (to-string regex-wizard-match-count)
+            " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+        (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 9 0
+          (str-length regex-wizard-tmp-line) theme-muted)))))
 
-;; Append a character to the regex query and re-run search
-(define regex-wizard-append
-  (lambda (ch)
+;; Tab: switch to next category tab, inline full panel render
+(define-command "regex-wizard-next-tab"
+  (lambda ()
     (begin
-      (set regex-wizard-query (str-concat (list regex-wizard-query ch)))
-      (regex-wizard-run-search))))
+      (set regex-wizard-tab-index
+        (if (= regex-wizard-tab-index 3) 0
+          (+ regex-wizard-tab-index 1)))
+      (set regex-wizard-cursor 0)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      ;; Row 0: pattern
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      ;; Row 1: tab bar
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " "
+            (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+            (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+            (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+            (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      ;; Rows 2-8: component items
+      (set regex-wizard-tmp-labels
+        (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+          (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+            (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+              regex-wizard-tab3-labels))))
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 4
+      (if (> regex-wizard-tmp-size 4)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 4)
+              (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 4)
+            (set-panel-line-style regex-wizard-panel-name 6 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 5
+      (if (> regex-wizard-tmp-size 5)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 5)
+              (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 5)
+            (set-panel-line-style regex-wizard-panel-name 7 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 6
+      (if (> regex-wizard-tmp-size 6)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 6)
+              (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 6)
+            (set-panel-line-style regex-wizard-panel-name 8 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+;; Cursor down: move to next component in active tab
+(define-command "regex-wizard-cursor-down"
+  (lambda ()
+    (begin
+      ;; Inline tab size
+      (set regex-wizard-tmp-size
+        (length
+          (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+            (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+              (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+                regex-wizard-tab3-labels)))))
+      (set regex-wizard-cursor
+        (if (>= (+ regex-wizard-cursor 1) regex-wizard-tmp-size)
+          0
+          (+ regex-wizard-cursor 1)))
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      ;; Row 0: pattern
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      ;; Row 1: tab bar
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " "
+            (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+            (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+            (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+            (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      ;; Rows 2-8: component items
+      (set regex-wizard-tmp-labels
+        (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+          (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+            (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+              regex-wizard-tab3-labels))))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 4
+      (if (> regex-wizard-tmp-size 4)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 4)
+              (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 4)
+            (set-panel-line-style regex-wizard-panel-name 6 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 5
+      (if (> regex-wizard-tmp-size 5)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 5)
+              (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 5)
+            (set-panel-line-style regex-wizard-panel-name 7 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 6
+      (if (> regex-wizard-tmp-size 6)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 6)
+              (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 6)
+            (set-panel-line-style regex-wizard-panel-name 8 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+;; Cursor up: move to previous component in active tab
+(define-command "regex-wizard-cursor-up"
+  (lambda ()
+    (begin
+      ;; Inline tab size
+      (set regex-wizard-tmp-size
+        (length
+          (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+            (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+              (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+                regex-wizard-tab3-labels)))))
+      (set regex-wizard-cursor
+        (if (= regex-wizard-cursor 0)
+          (- regex-wizard-tmp-size 1)
+          (- regex-wizard-cursor 1)))
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      ;; Row 0: pattern
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      ;; Row 1: tab bar
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " "
+            (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+            (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+            (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+            (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      ;; Rows 2-8: component items
+      (set regex-wizard-tmp-labels
+        (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+          (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+            (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+              regex-wizard-tab3-labels))))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 4
+      (if (> regex-wizard-tmp-size 4)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 4)
+              (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 4)
+            (set-panel-line-style regex-wizard-panel-name 6 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 5
+      (if (> regex-wizard-tmp-size 5)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 5)
+              (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 5)
+            (set-panel-line-style regex-wizard-panel-name 7 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 6
+      (if (> regex-wizard-tmp-size 6)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 6)
+              (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 6)
+            (set-panel-line-style regex-wizard-panel-name 8 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+;; Enter: add selected component pattern to the query
+(define-command "regex-wizard-select"
+  (lambda ()
+    (begin
+      ;; Inline current patterns lookup
+      (set regex-wizard-query
+        (str-concat (list regex-wizard-query
+          (nth regex-wizard-cursor
+            (if (= regex-wizard-tab-index 0) regex-wizard-tab0-patterns
+              (if (= regex-wizard-tab-index 1) regex-wizard-tab1-patterns
+                (if (= regex-wizard-tab-index 2) regex-wizard-tab2-patterns
+                  regex-wizard-tab3-patterns)))))))
+      ;; Inline search
+      (if (= (str-length regex-wizard-query) 0)
+        (begin (clear-match-highlights) (set regex-wizard-match-count 0))
+        (if (regex-valid? regex-wizard-query)
+          (begin
+            (clear-match-highlights)
+            (set regex-wizard-match-count (regex-find-all regex-wizard-query theme-accent)))
+          (begin (clear-match-highlights) (set regex-wizard-match-count 0))))
+      ;; Force full redraw by toggling panel size (resets ratatui cell cache)
+      (set-panel-size regex-wizard-panel-name 0)
+      (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      ;; Row 0: pattern
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      ;; Row 1: tab bar
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " "
+            (if (= regex-wizard-tab-index 0) "[>Character<]" " [Character] ")
+            (if (= regex-wizard-tab-index 1) "[>Quantifier<]" " [Quantifier] ")
+            (if (= regex-wizard-tab-index 2) "[>Assertion<]" " [Assertion] ")
+            (if (= regex-wizard-tab-index 3) "[>Group<]" " [Group] "))))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      ;; Rows 2-8: component items
+      (set regex-wizard-tmp-labels
+        (if (= regex-wizard-tab-index 0) regex-wizard-tab0-labels
+          (if (= regex-wizard-tab-index 1) regex-wizard-tab1-labels
+            (if (= regex-wizard-tab-index 2) regex-wizard-tab2-labels
+              regex-wizard-tab3-labels))))
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 4
+      (if (> regex-wizard-tmp-size 4)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 4)
+              (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 4)
+            (set-panel-line-style regex-wizard-panel-name 6 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 5
+      (if (> regex-wizard-tmp-size 5)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 5)
+              (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 5)
+            (set-panel-line-style regex-wizard-panel-name 7 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 6
+      (if (> regex-wizard-tmp-size 6)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 6)
+              (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 6)
+            (set-panel-line-style regex-wizard-panel-name 8 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+;; Direct tab selection: keys 1-4
+(define-command "regex-wizard-tab-1"
+  (lambda ()
+    (begin
+      (set regex-wizard-tab-index 0)
+      (set regex-wizard-cursor 0)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " " "[>Character<]" " [Quantifier] " " [Assertion] " " [Group] ")))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      (set regex-wizard-tmp-labels regex-wizard-tab0-labels)
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 4
+      (if (> regex-wizard-tmp-size 4)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 4)
+              (str-concat (list " > " (nth 4 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 4)
+            (set-panel-line-style regex-wizard-panel-name 6 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 5
+      (if (> regex-wizard-tmp-size 5)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 5)
+              (str-concat (list " > " (nth 5 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 5)
+            (set-panel-line-style regex-wizard-panel-name 7 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 6
+      (if (> regex-wizard-tmp-size 6)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 6)
+              (str-concat (list " > " (nth 6 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 6)
+            (set-panel-line-style regex-wizard-panel-name 8 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+(define-command "regex-wizard-tab-2"
+  (lambda ()
+    (begin
+      (set regex-wizard-tab-index 1)
+      (set regex-wizard-cursor 0)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " " " [Character] " "[>Quantifier<]" " [Assertion] " " [Group] ")))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      (set regex-wizard-tmp-labels regex-wizard-tab1-labels)
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+(define-command "regex-wizard-tab-3"
+  (lambda ()
+    (begin
+      (set regex-wizard-tab-index 2)
+      (set regex-wizard-cursor 0)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " " " [Character] " " [Quantifier] " "[>Assertion<]" " [Group] ")))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      (set regex-wizard-tmp-labels regex-wizard-tab2-labels)
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 3
+      (if (> regex-wizard-tmp-size 3)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 3)
+              (str-concat (list " > " (nth 3 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 3)
+            (set-panel-line-style regex-wizard-panel-name 5 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
+
+(define-command "regex-wizard-tab-4"
+  (lambda ()
+    (begin
+      (set regex-wizard-tab-index 3)
+      (set regex-wizard-cursor 0)
+      ;; Inline full panel render
+      (clear-panel-lines regex-wizard-panel-name)
+      (clear-panel-line-styles regex-wizard-panel-name)
+      (set regex-wizard-tmp-line
+        (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+      (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 0 0
+        (str-length regex-wizard-tmp-line) theme-prompt)
+      (set regex-wizard-tmp-line
+        (str-concat
+          (list " " " [Character] " " [Quantifier] " " [Assertion] " "[>Group<]")))
+      (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 1 0
+        (str-length regex-wizard-tmp-line) theme-accent)
+      (set regex-wizard-tmp-labels regex-wizard-tab3-labels)
+      (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+      ;; Item 0
+      (if (> regex-wizard-tmp-size 0)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 0)
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 0 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 0)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 1
+      (if (> regex-wizard-tmp-size 1)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 1)
+              (str-concat (list " > " (nth 1 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 1)
+            (set-panel-line-style regex-wizard-panel-name 3 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Item 2
+      (if (> regex-wizard-tmp-size 2)
+        (begin
+          (set regex-wizard-tmp-line
+            (if (= regex-wizard-cursor 2)
+              (str-concat (list " > " (nth 2 regex-wizard-tmp-labels)))
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels)))))
+          (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line)
+          (if (= regex-wizard-cursor 2)
+            (set-panel-line-style regex-wizard-panel-name 4 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg)
+            nil))
+        nil)
+      ;; Row 9: hint line
+      (set regex-wizard-tmp-line
+        (str-concat (list " " (to-string regex-wizard-match-count)
+          " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+      (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+      (set-panel-line-style regex-wizard-panel-name 9 0
+        (str-length regex-wizard-tmp-line) theme-muted))))
 
 ;; ---------------------------------------------------------------------------
-;; Keymap — per-character bindings (same pattern as overlay-search)
+;; Keymap -- navigation bindings for component picker
 ;; ---------------------------------------------------------------------------
 
 (make-keymap "regex-wizard-input")
 (define-key "regex-wizard-input" "Escape" "regex-wizard-escape")
 (define-key "regex-wizard-input" "Backspace" "regex-wizard-backspace")
-(define-key "regex-wizard-input" "Ctrl:r" "regex-wizard-escape")
+(define-key "regex-wizard-input" "Tab" "regex-wizard-next-tab")
+(define-key "regex-wizard-input" "Enter" "regex-wizard-select")
+(define-key "regex-wizard-input" "Down" "regex-wizard-cursor-down")
+(define-key "regex-wizard-input" "Up" "regex-wizard-cursor-up")
+(define-key "regex-wizard-input" "Char:j" "regex-wizard-cursor-down")
+(define-key "regex-wizard-input" "Char:k" "regex-wizard-cursor-up")
+(define-key "regex-wizard-input" "Char:1" "regex-wizard-tab-1")
+(define-key "regex-wizard-input" "Char:2" "regex-wizard-tab-2")
+(define-key "regex-wizard-input" "Char:3" "regex-wizard-tab-3")
+(define-key "regex-wizard-input" "Char:4" "regex-wizard-tab-4")
 
-;; Per-character commands for lowercase a-z
-(define-command "regex-wizard-char-a" (lambda () (regex-wizard-append "a")))
-(define-command "regex-wizard-char-b" (lambda () (regex-wizard-append "b")))
-(define-command "regex-wizard-char-c" (lambda () (regex-wizard-append "c")))
-(define-command "regex-wizard-char-d" (lambda () (regex-wizard-append "d")))
-(define-command "regex-wizard-char-e" (lambda () (regex-wizard-append "e")))
-(define-command "regex-wizard-char-f" (lambda () (regex-wizard-append "f")))
-(define-command "regex-wizard-char-g" (lambda () (regex-wizard-append "g")))
-(define-command "regex-wizard-char-h" (lambda () (regex-wizard-append "h")))
-(define-command "regex-wizard-char-i" (lambda () (regex-wizard-append "i")))
-(define-command "regex-wizard-char-j" (lambda () (regex-wizard-append "j")))
-(define-command "regex-wizard-char-k" (lambda () (regex-wizard-append "k")))
-(define-command "regex-wizard-char-l" (lambda () (regex-wizard-append "l")))
-(define-command "regex-wizard-char-m" (lambda () (regex-wizard-append "m")))
-(define-command "regex-wizard-char-n" (lambda () (regex-wizard-append "n")))
-(define-command "regex-wizard-char-o" (lambda () (regex-wizard-append "o")))
-(define-command "regex-wizard-char-p" (lambda () (regex-wizard-append "p")))
-(define-command "regex-wizard-char-q" (lambda () (regex-wizard-append "q")))
-(define-command "regex-wizard-char-r" (lambda () (regex-wizard-append "r")))
-(define-command "regex-wizard-char-s" (lambda () (regex-wizard-append "s")))
-(define-command "regex-wizard-char-t" (lambda () (regex-wizard-append "t")))
-(define-command "regex-wizard-char-u" (lambda () (regex-wizard-append "u")))
-(define-command "regex-wizard-char-v" (lambda () (regex-wizard-append "v")))
-(define-command "regex-wizard-char-w" (lambda () (regex-wizard-append "w")))
-(define-command "regex-wizard-char-x" (lambda () (regex-wizard-append "x")))
-(define-command "regex-wizard-char-y" (lambda () (regex-wizard-append "y")))
-(define-command "regex-wizard-char-z" (lambda () (regex-wizard-append "z")))
+;; ---------------------------------------------------------------------------
+;; Alias: :regex opens the wizard (fully inlined)
+;; ---------------------------------------------------------------------------
 
-(define-key "regex-wizard-input" "Char:a" "regex-wizard-char-a")
-(define-key "regex-wizard-input" "Char:b" "regex-wizard-char-b")
-(define-key "regex-wizard-input" "Char:c" "regex-wizard-char-c")
-(define-key "regex-wizard-input" "Char:d" "regex-wizard-char-d")
-(define-key "regex-wizard-input" "Char:e" "regex-wizard-char-e")
-(define-key "regex-wizard-input" "Char:f" "regex-wizard-char-f")
-(define-key "regex-wizard-input" "Char:g" "regex-wizard-char-g")
-(define-key "regex-wizard-input" "Char:h" "regex-wizard-char-h")
-(define-key "regex-wizard-input" "Char:i" "regex-wizard-char-i")
-(define-key "regex-wizard-input" "Char:j" "regex-wizard-char-j")
-(define-key "regex-wizard-input" "Char:k" "regex-wizard-char-k")
-(define-key "regex-wizard-input" "Char:l" "regex-wizard-char-l")
-(define-key "regex-wizard-input" "Char:m" "regex-wizard-char-m")
-(define-key "regex-wizard-input" "Char:n" "regex-wizard-char-n")
-(define-key "regex-wizard-input" "Char:o" "regex-wizard-char-o")
-(define-key "regex-wizard-input" "Char:p" "regex-wizard-char-p")
-(define-key "regex-wizard-input" "Char:q" "regex-wizard-char-q")
-(define-key "regex-wizard-input" "Char:r" "regex-wizard-char-r")
-(define-key "regex-wizard-input" "Char:s" "regex-wizard-char-s")
-(define-key "regex-wizard-input" "Char:t" "regex-wizard-char-t")
-(define-key "regex-wizard-input" "Char:u" "regex-wizard-char-u")
-(define-key "regex-wizard-input" "Char:v" "regex-wizard-char-v")
-(define-key "regex-wizard-input" "Char:w" "regex-wizard-char-w")
-(define-key "regex-wizard-input" "Char:x" "regex-wizard-char-x")
-(define-key "regex-wizard-input" "Char:y" "regex-wizard-char-y")
-(define-key "regex-wizard-input" "Char:z" "regex-wizard-char-z")
-
-;; Per-character commands for uppercase A-Z
-(define-command "regex-wizard-char-A" (lambda () (regex-wizard-append "A")))
-(define-command "regex-wizard-char-B" (lambda () (regex-wizard-append "B")))
-(define-command "regex-wizard-char-C" (lambda () (regex-wizard-append "C")))
-(define-command "regex-wizard-char-D" (lambda () (regex-wizard-append "D")))
-(define-command "regex-wizard-char-E" (lambda () (regex-wizard-append "E")))
-(define-command "regex-wizard-char-F" (lambda () (regex-wizard-append "F")))
-(define-command "regex-wizard-char-G" (lambda () (regex-wizard-append "G")))
-(define-command "regex-wizard-char-H" (lambda () (regex-wizard-append "H")))
-(define-command "regex-wizard-char-I" (lambda () (regex-wizard-append "I")))
-(define-command "regex-wizard-char-J" (lambda () (regex-wizard-append "J")))
-(define-command "regex-wizard-char-K" (lambda () (regex-wizard-append "K")))
-(define-command "regex-wizard-char-L" (lambda () (regex-wizard-append "L")))
-(define-command "regex-wizard-char-M" (lambda () (regex-wizard-append "M")))
-(define-command "regex-wizard-char-N" (lambda () (regex-wizard-append "N")))
-(define-command "regex-wizard-char-O" (lambda () (regex-wizard-append "O")))
-(define-command "regex-wizard-char-P" (lambda () (regex-wizard-append "P")))
-(define-command "regex-wizard-char-Q" (lambda () (regex-wizard-append "Q")))
-(define-command "regex-wizard-char-R" (lambda () (regex-wizard-append "R")))
-(define-command "regex-wizard-char-S" (lambda () (regex-wizard-append "S")))
-(define-command "regex-wizard-char-T" (lambda () (regex-wizard-append "T")))
-(define-command "regex-wizard-char-U" (lambda () (regex-wizard-append "U")))
-(define-command "regex-wizard-char-V" (lambda () (regex-wizard-append "V")))
-(define-command "regex-wizard-char-W" (lambda () (regex-wizard-append "W")))
-(define-command "regex-wizard-char-X" (lambda () (regex-wizard-append "X")))
-(define-command "regex-wizard-char-Y" (lambda () (regex-wizard-append "Y")))
-(define-command "regex-wizard-char-Z" (lambda () (regex-wizard-append "Z")))
-
-(define-key "regex-wizard-input" "Char:A" "regex-wizard-char-A")
-(define-key "regex-wizard-input" "Char:B" "regex-wizard-char-B")
-(define-key "regex-wizard-input" "Char:C" "regex-wizard-char-C")
-(define-key "regex-wizard-input" "Char:D" "regex-wizard-char-D")
-(define-key "regex-wizard-input" "Char:E" "regex-wizard-char-E")
-(define-key "regex-wizard-input" "Char:F" "regex-wizard-char-F")
-(define-key "regex-wizard-input" "Char:G" "regex-wizard-char-G")
-(define-key "regex-wizard-input" "Char:H" "regex-wizard-char-H")
-(define-key "regex-wizard-input" "Char:I" "regex-wizard-char-I")
-(define-key "regex-wizard-input" "Char:J" "regex-wizard-char-J")
-(define-key "regex-wizard-input" "Char:K" "regex-wizard-char-K")
-(define-key "regex-wizard-input" "Char:L" "regex-wizard-char-L")
-(define-key "regex-wizard-input" "Char:M" "regex-wizard-char-M")
-(define-key "regex-wizard-input" "Char:N" "regex-wizard-char-N")
-(define-key "regex-wizard-input" "Char:O" "regex-wizard-char-O")
-(define-key "regex-wizard-input" "Char:P" "regex-wizard-char-P")
-(define-key "regex-wizard-input" "Char:Q" "regex-wizard-char-Q")
-(define-key "regex-wizard-input" "Char:R" "regex-wizard-char-R")
-(define-key "regex-wizard-input" "Char:S" "regex-wizard-char-S")
-(define-key "regex-wizard-input" "Char:T" "regex-wizard-char-T")
-(define-key "regex-wizard-input" "Char:U" "regex-wizard-char-U")
-(define-key "regex-wizard-input" "Char:V" "regex-wizard-char-V")
-(define-key "regex-wizard-input" "Char:W" "regex-wizard-char-W")
-(define-key "regex-wizard-input" "Char:X" "regex-wizard-char-X")
-(define-key "regex-wizard-input" "Char:Y" "regex-wizard-char-Y")
-(define-key "regex-wizard-input" "Char:Z" "regex-wizard-char-Z")
-
-;; Per-character commands for digits 0-9
-(define-command "regex-wizard-char-0" (lambda () (regex-wizard-append "0")))
-(define-command "regex-wizard-char-1" (lambda () (regex-wizard-append "1")))
-(define-command "regex-wizard-char-2" (lambda () (regex-wizard-append "2")))
-(define-command "regex-wizard-char-3" (lambda () (regex-wizard-append "3")))
-(define-command "regex-wizard-char-4" (lambda () (regex-wizard-append "4")))
-(define-command "regex-wizard-char-5" (lambda () (regex-wizard-append "5")))
-(define-command "regex-wizard-char-6" (lambda () (regex-wizard-append "6")))
-(define-command "regex-wizard-char-7" (lambda () (regex-wizard-append "7")))
-(define-command "regex-wizard-char-8" (lambda () (regex-wizard-append "8")))
-(define-command "regex-wizard-char-9" (lambda () (regex-wizard-append "9")))
-
-(define-key "regex-wizard-input" "Char:0" "regex-wizard-char-0")
-(define-key "regex-wizard-input" "Char:1" "regex-wizard-char-1")
-(define-key "regex-wizard-input" "Char:2" "regex-wizard-char-2")
-(define-key "regex-wizard-input" "Char:3" "regex-wizard-char-3")
-(define-key "regex-wizard-input" "Char:4" "regex-wizard-char-4")
-(define-key "regex-wizard-input" "Char:5" "regex-wizard-char-5")
-(define-key "regex-wizard-input" "Char:6" "regex-wizard-char-6")
-(define-key "regex-wizard-input" "Char:7" "regex-wizard-char-7")
-(define-key "regex-wizard-input" "Char:8" "regex-wizard-char-8")
-(define-key "regex-wizard-input" "Char:9" "regex-wizard-char-9")
-
-;; Per-character commands for regex-relevant symbols
-(define-command "regex-wizard-char-dot" (lambda () (regex-wizard-append ".")))
-(define-command "regex-wizard-char-star" (lambda () (regex-wizard-append "*")))
-(define-command "regex-wizard-char-plus" (lambda () (regex-wizard-append "+")))
-(define-command "regex-wizard-char-question" (lambda () (regex-wizard-append "?")))
-(define-command "regex-wizard-char-pipe" (lambda () (regex-wizard-append "|")))
-(define-command "regex-wizard-char-caret" (lambda () (regex-wizard-append "^")))
-(define-command "regex-wizard-char-dollar" (lambda () (regex-wizard-append "$")))
-(define-command "regex-wizard-char-backslash" (lambda () (regex-wizard-append backslash-char)))
-(define-command "regex-wizard-char-lbracket" (lambda () (regex-wizard-append "[")))
-(define-command "regex-wizard-char-rbracket" (lambda () (regex-wizard-append "]")))
-(define-command "regex-wizard-char-lparen" (lambda () (regex-wizard-append "(")))
-(define-command "regex-wizard-char-rparen" (lambda () (regex-wizard-append ")")))
-(define-command "regex-wizard-char-lbrace" (lambda () (regex-wizard-append "{")))
-(define-command "regex-wizard-char-rbrace" (lambda () (regex-wizard-append "}")))
-(define-command "regex-wizard-char-dash" (lambda () (regex-wizard-append "-")))
-(define-command "regex-wizard-char-underscore" (lambda () (regex-wizard-append "_")))
-(define-command "regex-wizard-char-space" (lambda () (regex-wizard-append " ")))
-(define-command "regex-wizard-char-colon" (lambda () (regex-wizard-append ":")))
-(define-command "regex-wizard-char-semicolon" (lambda () (regex-wizard-append ";")))
-(define-command "regex-wizard-char-comma" (lambda () (regex-wizard-append ",")))
-(define-command "regex-wizard-char-at" (lambda () (regex-wizard-append "@")))
-(define-command "regex-wizard-char-hash" (lambda () (regex-wizard-append "#")))
-(define-command "regex-wizard-char-ampersand" (lambda () (regex-wizard-append "&")))
-(define-command "regex-wizard-char-equals" (lambda () (regex-wizard-append "=")))
-(define-command "regex-wizard-char-exclaim" (lambda () (regex-wizard-append "!")))
-(define-command "regex-wizard-char-tilde" (lambda () (regex-wizard-append "~")))
-(define-command "regex-wizard-char-slash" (lambda () (regex-wizard-append "/")))
-(define-command "regex-wizard-char-percent" (lambda () (regex-wizard-append "%")))
-(define-command "regex-wizard-char-singlequote" (lambda () (regex-wizard-append "'")))
-(define-command "regex-wizard-char-doublequote" (lambda () (regex-wizard-append double-quote)))
-(define-command "regex-wizard-char-backtick" (lambda () (regex-wizard-append "`")))
-(define-command "regex-wizard-char-lt" (lambda () (regex-wizard-append "<")))
-(define-command "regex-wizard-char-gt" (lambda () (regex-wizard-append ">")))
-
-(define-key "regex-wizard-input" "Char:." "regex-wizard-char-dot")
-(define-key "regex-wizard-input" "Char:*" "regex-wizard-char-star")
-(define-key "regex-wizard-input" "Char:+" "regex-wizard-char-plus")
-(define-key "regex-wizard-input" "Char:?" "regex-wizard-char-question")
-(define-key "regex-wizard-input" "Char:|" "regex-wizard-char-pipe")
-(define-key "regex-wizard-input" "Char:^" "regex-wizard-char-caret")
-(define-key "regex-wizard-input" "Char:$" "regex-wizard-char-dollar")
-(define-key "regex-wizard-input" (str-concat (list "Char:" backslash-char)) "regex-wizard-char-backslash")
-(define-key "regex-wizard-input" "Char:[" "regex-wizard-char-lbracket")
-(define-key "regex-wizard-input" "Char:]" "regex-wizard-char-rbracket")
-(define-key "regex-wizard-input" "Char:(" "regex-wizard-char-lparen")
-(define-key "regex-wizard-input" "Char:)" "regex-wizard-char-rparen")
-(define-key "regex-wizard-input" "Char:{" "regex-wizard-char-lbrace")
-(define-key "regex-wizard-input" "Char:}" "regex-wizard-char-rbrace")
-(define-key "regex-wizard-input" "Char:-" "regex-wizard-char-dash")
-(define-key "regex-wizard-input" "Char:_" "regex-wizard-char-underscore")
-(define-key "regex-wizard-input" "Char: " "regex-wizard-char-space")
-(define-key "regex-wizard-input" "Char::" "regex-wizard-char-colon")
-(define-key "regex-wizard-input" "Char:;" "regex-wizard-char-semicolon")
-(define-key "regex-wizard-input" "Char:," "regex-wizard-char-comma")
-(define-key "regex-wizard-input" "Char:@" "regex-wizard-char-at")
-(define-key "regex-wizard-input" "Char:#" "regex-wizard-char-hash")
-(define-key "regex-wizard-input" "Char:&" "regex-wizard-char-ampersand")
-(define-key "regex-wizard-input" "Char:=" "regex-wizard-char-equals")
-(define-key "regex-wizard-input" "Char:!" "regex-wizard-char-exclaim")
-(define-key "regex-wizard-input" "Char:~" "regex-wizard-char-tilde")
-(define-key "regex-wizard-input" "Char:/" "regex-wizard-char-slash")
-(define-key "regex-wizard-input" "Char:%" "regex-wizard-char-percent")
-(define-key "regex-wizard-input" "SingleQuote" "regex-wizard-char-singlequote")
-(define-key "regex-wizard-input" "DoubleQuote" "regex-wizard-char-doublequote")
-(define-key "regex-wizard-input" "Char:`" "regex-wizard-char-backtick")
-(define-key "regex-wizard-input" "Char:<" "regex-wizard-char-lt")
-(define-key "regex-wizard-input" "Char:>" "regex-wizard-char-gt")
-
-;; Alias: :regex opens the wizard (inline logic — define-command
-;; callbacks have limited access to Lisp-defined functions)
 (define-command "regex"
   (lambda ()
     (if regex-wizard-open
+      ;; Inline close
       (begin
         (clear-match-highlights)
         (set-panel-size regex-wizard-panel-name 0)
         (set regex-wizard-open nil)
         (set regex-wizard-query (str-concat (list)))
         (set regex-wizard-match-count 0)
+        (set regex-wizard-tab-index 0)
+        (set regex-wizard-cursor 0)
         (set-mode "normal")
         (set-active-keymap "normal-mode"))
+      ;; Inline open with full panel render
       (begin
         (set regex-wizard-query (str-concat (list)))
         (set regex-wizard-match-count 0)
+        (set regex-wizard-tab-index 0)
+        (set regex-wizard-cursor 0)
         (set regex-wizard-open 1)
         (set-panel-size regex-wizard-panel-name regex-wizard-panel-height)
-        (set-panel-line regex-wizard-panel-name 0
-          (str-concat (list " Pattern: ")))
-        (set-panel-line regex-wizard-panel-name 1
-          (str-concat (list " 0 matches found")))
-        (set-panel-line regex-wizard-panel-name 2
-          (str-concat (list " [type pattern] [Esc: close]")))
+        ;; Inline full panel render
+        (clear-panel-lines regex-wizard-panel-name)
+        (clear-panel-line-styles regex-wizard-panel-name)
+        ;; Row 0: pattern
+        (set regex-wizard-tmp-line
+          (str-concat (list " Pattern: " regex-wizard-query " | " (to-string regex-wizard-match-count) " matches")))
+        (set-panel-line regex-wizard-panel-name 0 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 0 0
+          (str-length regex-wizard-tmp-line) theme-prompt)
+        ;; Row 1: tab bar (tab 0 active on open)
+        (set regex-wizard-tmp-line
+          (str-concat
+            (list " " "[>Character<]" " [Quantifier] " " [Assertion] " " [Group] ")))
+        (set-panel-line regex-wizard-panel-name 1 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 1 0
+          (str-length regex-wizard-tmp-line) theme-accent)
+        ;; Rows 2-8: tab0 items (cursor=0 on open)
+        (set regex-wizard-tmp-labels regex-wizard-tab0-labels)
+        (set regex-wizard-tmp-size (length regex-wizard-tmp-labels))
+        ;; Item 0 (cursor)
+        (if (> regex-wizard-tmp-size 0)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list " > " (nth 0 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 2 regex-wizard-tmp-line)
+            (set-panel-line-style regex-wizard-panel-name 2 0
+              (str-length regex-wizard-tmp-line) theme-highlight-bg))
+          nil)
+        ;; Item 1
+        (if (> regex-wizard-tmp-size 1)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 1 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 3 regex-wizard-tmp-line))
+          nil)
+        ;; Item 2
+        (if (> regex-wizard-tmp-size 2)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 2 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 4 regex-wizard-tmp-line))
+          nil)
+        ;; Item 3
+        (if (> regex-wizard-tmp-size 3)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 3 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 5 regex-wizard-tmp-line))
+          nil)
+        ;; Item 4
+        (if (> regex-wizard-tmp-size 4)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 4 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 6 regex-wizard-tmp-line))
+          nil)
+        ;; Item 5
+        (if (> regex-wizard-tmp-size 5)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 5 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 7 regex-wizard-tmp-line))
+          nil)
+        ;; Item 6
+        (if (> regex-wizard-tmp-size 6)
+          (begin
+            (set regex-wizard-tmp-line
+              (str-concat (list "   " (nth 6 regex-wizard-tmp-labels))))
+            (set-panel-line regex-wizard-panel-name 8 regex-wizard-tmp-line))
+          nil)
+        ;; Row 9: hint line
+        (set regex-wizard-tmp-line
+          (str-concat (list " " (to-string regex-wizard-match-count)
+            " matches | [Enter] add [BS] remove [Tab] next [Esc] close")))
+        (set-panel-line regex-wizard-panel-name 9 regex-wizard-tmp-line)
+        (set-panel-line-style regex-wizard-panel-name 9 0
+          (str-length regex-wizard-tmp-line) theme-muted)
         (set-active-keymap "regex-wizard-input")))))

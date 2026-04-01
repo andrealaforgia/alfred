@@ -52,7 +52,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     if let Some(path_str) = file_path {
         let path = Path::new(path_str);
         if !path.is_dir() {
-            // File argument: load into buffer (directory handled by browse-mode plugin)
+            // File argument: load into buffer (directory handling delegated to plugins)
             let buffer = Buffer::from_file(path)?;
             state.borrow_mut().buffer = buffer;
         }
@@ -105,7 +105,7 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
         }
     }
 
-    // Activate browse mode AFTER plugins load (vim-keybindings sets mode to "normal")
+    // Run the event loop after plugins have initialized mode and keymaps
     let mut highlighter = SyntaxHighlighter::new();
     alfred_tui::app::run(&state, &runtime, &mut highlighter)?;
 
