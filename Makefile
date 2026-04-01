@@ -15,6 +15,9 @@ install:
 	@command -v cargo >/dev/null 2>&1 || { echo "Rust not found. Install from https://rustup.rs"; exit 1; }
 	cargo build --release
 	cargo install --path crates/alfred-bin --force
+	@mkdir -p "$(HOME)/.config/alfred/plugins"
+	@cp -r plugins/* "$(HOME)/.config/alfred/plugins/"
+	@echo "Plugins installed to ~/.config/alfred/plugins/"
 	@if ! grep -qF '/.cargo/bin' "$(SHELL_RC)" 2>/dev/null; then \
 		echo '' >> "$(SHELL_RC)"; \
 		echo '# Added by Alfred editor' >> "$(SHELL_RC)"; \

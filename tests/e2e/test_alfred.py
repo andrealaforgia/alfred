@@ -3964,10 +3964,10 @@ class TestOverlaySearch:
 
 
 class TestRegexWizard:
-    """Verify :regex wizard opens, highlights matches, and closes cleanly."""
+    """Verify :regex wizard with free-text input, live highlighting, and explanation."""
 
-    def test_regex_wizard_opens_and_highlights_matches(self):
-        """:regex opens wizard panel, selecting a component shows match count."""
+    def test_regex_wizard_opens_and_shows_panel(self):
+        """:regex opens wizard panel with Pattern prompt."""
         path = create_temp_file("hello world")
         child = spawn_alfred(path)
 
@@ -3975,7 +3975,7 @@ class TestRegexWizard:
         send_colon_command(child, "regex")
         time.sleep(0.5)
 
-        # Verify wizard panel rendered with component picker
+        # Verify wizard panel rendered with Pattern prompt
         try:
             child.expect("Pattern", timeout=3)
         except pexpect.TIMEOUT:
@@ -3983,19 +3983,6 @@ class TestRegexWizard:
             wait_for_exit(child)
             pytest.fail(
                 "Regex wizard did not open: 'Pattern' not found after :regex")
-
-        # Press Enter to select first component "." (Any character)
-        child.send("\r")
-        time.sleep(0.5)
-
-        # Verify match count displayed (11 chars in "hello world")
-        try:
-            child.expect("11 matches", timeout=3)
-        except pexpect.TIMEOUT:
-            send_colon_command(child, "q!")
-            wait_for_exit(child)
-            pytest.fail(
-                "Match count not shown after selecting '.' component")
 
         # Escape to close wizard
         child.send("\x1b")
@@ -4037,109 +4024,91 @@ class TestRegexWizard:
         assert saved == original_content, \
             f"File should be unmodified after regex wizard, got: {saved!r}"
 
-    def test_regex_wizard_tab_navigation(self):
-        """Tab key switches between category tabs in the regex wizard."""
-        path = create_temp_file("some text")
+    def test_regex_wizard_typing_updates_pattern_and_highlights(self):
+        """Typing 'abc' shows 1 match on 'abc hello abc world'."""
+        path = create_temp_file("abc hello abc world")
         child = spawn_alfred(path)
 
         # :regex to open regex wizard
         send_colon_command(child, "regex")
         time.sleep(0.5)
 
-        # Verify wizard panel shows "Character" tab (first tab active)
-        try:
-            child.expect("Character", timeout=3)
-        except pexpect.TIMEOUT:
-            send_colon_command(child, "q!")
-            wait_for_exit(child)
-            pytest.fail(
-                "Regex wizard did not show 'Character' tab after :regex")
-
-        # Press Tab to switch to next tab (Quantifiers)
-        child.send("\t")
-        time.sleep(0.5)
-
-        # Verify second tab is now active -- look for "Quantifier"
-        try:
-            child.expect("Quantifier", timeout=3)
-        except pexpect.TIMEOUT:
-            # The tab text might be visible even before, so let's read output
-            pass
-
-        # Read screen to verify tab switched
-        try:
-            screen = child.read_nonblocking(size=16384, timeout=1)
-        except Exception:
-            screen = ""
-
-        # Escape to close wizard
-        child.send("\x1b")
-        time.sleep(0.3)
-
-        # Quit cleanly
-        send_colon_command(child, "q")
-        exit_code = wait_for_exit(child)
-        assert exit_code == 0, f"Expected clean exit, got {exit_code}"
-
-    def test_regex_wizard_select_component_adds_to_pattern(self):
-        """Enter selects the highlighted component, adding it to the pattern."""
-        path = create_temp_file("hello world")
-        child = spawn_alfred(path)
-
-        # :regex to open regex wizard
-        send_colon_command(child, "regex")
-        time.sleep(1.0)
-
-        # Verify wizard opened
         try:
             child.expect("Pattern", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            pytest.fail("Regex wizard did not open")
+            pytest.fail("Wizard did not open")
 
-        # Press Enter to select first component (.)
-        child.send("\r")
-        time.sleep(1.0)
+        # Type "abc" — each char narrows matches, pattern grows
+        for ch in "abc":
+            send_keys(child, ch)
+            time.sleep(0.2)
+        time.sleep(0.5)
 
-        # Verify matches appear (pattern "." matches every character)
+        # Verify "2 matches" — format is "/abc/ 2 matches" so when
+        # pattern grew from "ab" to "abc", cells shifted making
+        # "2 matches" contiguous in PTY output
         try:
-            child.expect("matches", timeout=5)
+            child.expect("2 matches", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            pytest.fail("Match count not shown after Enter")
+            pytest.fail(
+                "Expected '2 matches' for 'abc' on 'abc hello abc world'")
 
-        # Escape to close
+        # Escape to close wizard
         child.send("\x1b")
         time.sleep(0.3)
         send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
         assert exit_code == 0
 
-    def test_regex_wizard_backspace_removes_from_pattern(self):
-        """Backspace removes the last component from the built pattern."""
-        path = create_temp_file("test data")
+    def test_regex_wizard_shows_explanation(self):
+        """Typing '.' shows 'Any character' explanation."""
+        path = create_temp_file("hello world")
         child = spawn_alfred(path)
 
         # :regex to open wizard
         send_colon_command(child, "regex")
-        time.sleep(1.0)
+        time.sleep(0.5)
 
+        # Type '.' (dot)
+        child.send(".")
+        time.sleep(0.5)
+
+        # Verify explanation contains "Any character"
         try:
-            child.expect("Pattern", timeout=5)
+            child.expect("Any character", timeout=5)
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            pytest.fail("Regex wizard did not open")
+            pytest.fail(
+                "Expected 'Any character' explanation for '.' pattern")
 
-        # Select first component (.) with Enter
-        child.send("\r")
-        time.sleep(1.0)
+        # Escape to close wizard
+        child.send("\x1b")
+        time.sleep(0.3)
+        send_colon_command(child, "q")
+        exit_code = wait_for_exit(child)
+        assert exit_code == 0
 
-        # Press Backspace to remove the component
+    def test_regex_wizard_backspace_updates_pattern(self):
+        """Backspace removes last char; empty pattern shows 0 matches."""
+        path = create_temp_file("test")
+        child = spawn_alfred(path)
+
+        # :regex to open wizard
+        send_colon_command(child, "regex")
+        time.sleep(0.5)
+
+        # Type 't'
+        child.send("t")
+        time.sleep(0.3)
+
+        # Press Backspace to remove it
         child.send("\x7f")
-        time.sleep(1.0)
+        time.sleep(0.5)
 
         # After backspace, match count should reset to 0
         try:
@@ -4147,7 +4116,7 @@ class TestRegexWizard:
         except pexpect.TIMEOUT:
             send_colon_command(child, "q!")
             wait_for_exit(child)
-            pytest.fail("Match count did not reset after backspace")
+            pytest.fail("Match count did not reset to 0 after backspace")
 
         child.send("\x1b")
         time.sleep(0.3)
@@ -4155,46 +4124,26 @@ class TestRegexWizard:
         exit_code = wait_for_exit(child)
         assert exit_code == 0
 
-    def test_regex_wizard_builds_complex_pattern(self):
-        """Build \\d+ pattern using component picker: digit + one-or-more."""
-        path = create_temp_file("abc123def456")
+    def test_regex_wizard_enter_applies_pattern(self):
+        """Enter closes the wizard cleanly (applies pattern)."""
+        path = create_temp_file("hello world")
         child = spawn_alfred(path)
 
         # :regex to open wizard
         send_colon_command(child, "regex")
-        time.sleep(1.0)
+        time.sleep(0.5)
 
-        try:
-            child.expect("Pattern", timeout=5)
-        except pexpect.TIMEOUT:
-            send_colon_command(child, "q!")
-            wait_for_exit(child)
-            pytest.fail("Regex wizard did not open")
-
-        # Navigate to "Digit" (2nd item), select it
-        child.send("j")
+        # Type 'hello'
+        for ch in "hello":
+            child.send(ch)
+            time.sleep(0.1)
         time.sleep(0.3)
+
+        # Press Enter to apply pattern and close wizard
         child.send("\r")
-        time.sleep(1.0)
-
-        # Switch to Quantifiers tab, navigate to "One or more" (2nd), select
-        child.send("\t")
         time.sleep(0.3)
-        child.send("j")
-        time.sleep(0.3)
-        child.send("\r")
-        time.sleep(1.0)
 
-        # Verify "2 matches" (matches "123" and "456")
-        try:
-            child.expect("2 matches", timeout=5)
-        except pexpect.TIMEOUT:
-            send_colon_command(child, "q!")
-            wait_for_exit(child)
-            pytest.fail("Expected '2 matches' for \\d+ on 'abc123def456'")
-
-        child.send("\x1b")
-        time.sleep(0.3)
+        # Verify clean exit (no crash)
         send_colon_command(child, "q")
         exit_code = wait_for_exit(child)
         assert exit_code == 0

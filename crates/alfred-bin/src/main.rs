@@ -112,12 +112,22 @@ fn run_editor(file_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
-/// Discovers plugins from `plugins/` relative to CWD, resolves load order,
-/// and loads each plugin. Returns a list of error messages for any failures.
+/// Discovers plugins by searching multiple locations in priority order:
+/// 1. `./plugins/` relative to CWD (development)
+/// 2. Next to the binary (portable installs)
+/// 3. `~/.config/alfred/plugins/` (user install via `cargo install`)
+///
+/// Returns a list of error messages for any plugin load failures.
 fn load_plugins(runtime: &LispRuntime) -> Vec<String> {
-    let plugins_dir = Path::new("plugins");
+    let plugins_dir = find_plugins_dir().unwrap_or_else(|| PathBuf::from("plugins"));
 
-    let (discovered, discovery_errors) = discovery::scan(plugins_dir);
+    if !plugins_dir.is_dir() {
+        return vec![format!(
+            "Plugins directory not found. Looked in: ./plugins/, next to binary, ~/.config/alfred/plugins/"
+        )];
+    }
+
+    let (discovered, discovery_errors) = discovery::scan(&plugins_dir);
 
     let mut errors: Vec<String> = discovery_errors.iter().map(|e| e.to_string()).collect();
 
@@ -143,6 +153,41 @@ fn load_plugins(runtime: &LispRuntime) -> Vec<String> {
     let _ = reg;
 
     errors
+}
+
+/// Searches for the plugins directory in multiple locations:
+/// 1. `./plugins/` relative to CWD (development / running from source)
+/// 2. Next to the binary (portable install)
+/// 3. `~/.config/alfred/plugins/` (user install via `cargo install`)
+fn find_plugins_dir() -> Option<PathBuf> {
+    // 1. CWD/plugins/
+    let cwd_plugins = Path::new("plugins");
+    if cwd_plugins.is_dir() {
+        return Some(cwd_plugins.to_path_buf());
+    }
+
+    // 2. Next to binary
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let exe_plugins = exe_dir.join("plugins");
+            if exe_plugins.is_dir() {
+                return Some(exe_plugins);
+            }
+        }
+    }
+
+    // 3. ~/.config/alfred/plugins/
+    if let Ok(home) = std::env::var("HOME") {
+        let config_plugins = Path::new(&home)
+            .join(".config")
+            .join("alfred")
+            .join("plugins");
+        if config_plugins.is_dir() {
+            return Some(config_plugins);
+        }
+    }
+
+    None
 }
 
 /// Computes the path to the user config file from the home directory.

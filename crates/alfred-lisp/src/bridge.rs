@@ -2909,6 +2909,7 @@ pub fn register_regex_primitives(runtime: &LispRuntime, state: Rc<RefCell<Editor
 
     register_regex_find_all(env.clone(), state.clone());
     register_regex_valid(env.clone());
+    register_regex_explain(env.clone());
     register_clear_match_highlights(env, state);
 }
 
@@ -2980,6 +2981,197 @@ fn register_regex_valid(env: Rc<RefCell<Env>>) {
             Err(_) => Ok(Value::NIL),
         }
     });
+}
+
+/// Registers `regex-explain`: returns a human-readable explanation of a regex pattern.
+///
+/// Usage: `(regex-explain pattern)`
+///
+/// Takes a regex pattern string and returns a plain-English description of what
+/// each token in the pattern means. This is a pure function with no side effects.
+///
+/// Examples:
+/// - `"."` -> `"Any character"`
+/// - `"\\d+"` -> `"Digit (0-9), one or more times"`
+/// - `"^hello$"` -> `"Start of line, 'hello', End of line"`
+fn register_regex_explain(env: Rc<RefCell<Env>>) {
+    define_native_closure(&env, "regex-explain", move |_env, args| {
+        let pattern = extract_string_arg_at(&args, 0, "regex-explain", "pattern")?;
+        let explanation = explain_regex_pattern(&pattern);
+        Ok(Value::String(explanation))
+    });
+}
+
+/// Pure function: parse a regex pattern and produce a human-readable explanation.
+///
+/// Walks the pattern character by character, translating each recognized token
+/// into English. Tokens are joined with ", " to form a readable sentence.
+fn explain_regex_pattern(pattern: &str) -> String {
+    if pattern.is_empty() {
+        return String::new();
+    }
+
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut parts: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        match ch {
+            '\\' if i + 1 < chars.len() => {
+                let next = chars[i + 1];
+                let desc = match next {
+                    'd' => "Digit (0-9)".to_string(),
+                    'D' => "Non-digit".to_string(),
+                    'w' => "Word character (letter, digit, underscore)".to_string(),
+                    'W' => "Non-word character".to_string(),
+                    's' => "Whitespace".to_string(),
+                    'S' => "Non-whitespace".to_string(),
+                    'b' => "Word boundary".to_string(),
+                    'B' => "Non-word boundary".to_string(),
+                    _ => format!("'{}'", next),
+                };
+                parts.push(desc);
+                i += 2;
+            }
+            '.' => {
+                parts.push("Any character".to_string());
+                i += 1;
+            }
+            '*' => {
+                // Modify previous part if possible
+                if let Some(last) = parts.last_mut() {
+                    *last = format!("{}, zero or more times", last);
+                } else {
+                    parts.push("zero or more times".to_string());
+                }
+                i += 1;
+            }
+            '+' => {
+                if let Some(last) = parts.last_mut() {
+                    *last = format!("{}, one or more times", last);
+                } else {
+                    parts.push("one or more times".to_string());
+                }
+                i += 1;
+            }
+            '?' => {
+                if let Some(last) = parts.last_mut() {
+                    *last = format!("{}, zero or one time", last);
+                } else {
+                    parts.push("zero or one time".to_string());
+                }
+                i += 1;
+            }
+            '^' => {
+                parts.push("Start of line".to_string());
+                i += 1;
+            }
+            '$' => {
+                parts.push("End of line".to_string());
+                i += 1;
+            }
+            '[' => {
+                // Collect everything up to and including ']'
+                let start = i;
+                let negated = i + 1 < chars.len() && chars[i + 1] == '^';
+                i += 1;
+                // Skip past '^' in negated class
+                if negated && i < chars.len() {
+                    i += 1;
+                }
+                // Find closing ']'
+                while i < chars.len() && chars[i] != ']' {
+                    i += 1;
+                }
+                if i < chars.len() {
+                    i += 1; // skip ']'
+                }
+                let class_str: String = chars[start..i].iter().collect();
+                if negated {
+                    parts.push(format!("Any character NOT in {}", class_str));
+                } else {
+                    parts.push(format!("Any character in {}", class_str));
+                }
+            }
+            '(' => {
+                // Collect everything up to matching ')'
+                let start = i;
+                let mut depth = 1;
+                i += 1;
+                while i < chars.len() && depth > 0 {
+                    if chars[i] == '(' {
+                        depth += 1;
+                    } else if chars[i] == ')' {
+                        depth -= 1;
+                    }
+                    i += 1;
+                }
+                let group_str: String = chars[start..i].iter().collect();
+                parts.push(format!("Group: {}", group_str));
+            }
+            '|' => {
+                parts.push("OR".to_string());
+                i += 1;
+            }
+            '{' => {
+                // Collect everything up to '}'
+                let start = i;
+                i += 1;
+                while i < chars.len() && chars[i] != '}' {
+                    i += 1;
+                }
+                if i < chars.len() {
+                    i += 1; // skip '}'
+                }
+                let quantifier: String = chars[start + 1..i.saturating_sub(1)].iter().collect();
+                let desc = if let Some(comma_pos) = quantifier.find(',') {
+                    let n_str = &quantifier[..comma_pos];
+                    let m_str = quantifier[comma_pos + 1..].trim();
+                    if m_str.is_empty() {
+                        format!("{} or more times", n_str)
+                    } else {
+                        format!("between {} and {} times", n_str, m_str)
+                    }
+                } else {
+                    format!("exactly {} times", quantifier)
+                };
+                // Modify previous part if possible
+                if let Some(last) = parts.last_mut() {
+                    *last = format!("{}, {}", last, desc);
+                } else {
+                    parts.push(desc);
+                }
+            }
+            _ => {
+                // Literal character -- accumulate consecutive literals into one quoted string
+                let start = i;
+                while i < chars.len()
+                    && !matches!(
+                        chars[i],
+                        '\\' | '.'
+                            | '*'
+                            | '+'
+                            | '?'
+                            | '^'
+                            | '$'
+                            | '['
+                            | '('
+                            | '|'
+                            | '{'
+                            | '}'
+                            | ')'
+                    )
+                {
+                    i += 1;
+                }
+                let literal: String = chars[start..i].iter().collect();
+                parts.push(format!("'{}'", literal));
+            }
+        }
+    }
+
+    parts.join(", ")
 }
 
 /// Registers `clear-match-highlights`: removes all match highlight entries.
@@ -6764,6 +6956,86 @@ mod tests {
         assert!(
             editor.match_highlights.is_empty(),
             "regex-valid? should not modify match_highlights"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Unit tests: regex-explain returns human-readable descriptions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn given_dot_pattern_when_regex_explain_then_returns_any_character() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(regex-explain \".\")").unwrap();
+        let explanation = result.as_string().expect("should return a string");
+        assert!(
+            explanation.contains("Any character"),
+            "Explanation for '.' should contain 'Any character', got: {}",
+            explanation
+        );
+    }
+
+    #[test]
+    fn given_backslash_d_plus_when_regex_explain_then_describes_digits() {
+        // Test the pure Rust function directly to avoid needing str-concat for \d+
+        let explanation = explain_regex_pattern("\\d+");
+        assert!(
+            explanation.contains("Digit") || explanation.contains("digit"),
+            "Explanation for '\\d+' should mention digit, got: {}",
+            explanation
+        );
+        assert!(
+            explanation.contains("one or more"),
+            "Explanation for '\\d+' should mention 'one or more', got: {}",
+            explanation
+        );
+    }
+
+    #[test]
+    fn given_empty_pattern_when_regex_explain_then_returns_empty_string() {
+        // Test the pure Rust function directly
+        let explanation = explain_regex_pattern("");
+        assert_eq!(
+            explanation, "",
+            "Empty pattern should produce empty explanation"
+        );
+    }
+
+    #[test]
+    fn given_caret_dollar_when_regex_explain_then_describes_anchors() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(regex-explain \"^hello$\")").unwrap();
+        let explanation = result.as_string().expect("should return a string");
+        assert!(
+            explanation.contains("Start of line"),
+            "Explanation should contain 'Start of line', got: {}",
+            explanation
+        );
+        assert!(
+            explanation.contains("End of line"),
+            "Explanation should contain 'End of line', got: {}",
+            explanation
+        );
+    }
+
+    #[test]
+    fn given_character_class_when_regex_explain_then_describes_bracket() {
+        let state = Rc::new(RefCell::new(editor_state::new(80, 24)));
+        let runtime = LispRuntime::new();
+        register_regex_primitives(&runtime, state.clone());
+
+        let result = runtime.eval("(regex-explain \"[A-Z]\")").unwrap();
+        let explanation = result.as_string().expect("should return a string");
+        assert!(
+            explanation.contains("[A-Z]"),
+            "Explanation should preserve character class content, got: {}",
+            explanation
         );
     }
 }
