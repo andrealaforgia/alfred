@@ -54,13 +54,11 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
         .map(|p| p.size)
         .sum();
 
-    let has_bottom_panels = total_bottom_height > 0;
-
     terminal.draw(|frame| {
         let area = frame.area();
 
         // Compute text area: subtract top panels, bottom panels, and message row
-        let content_area = compute_text_area(area, state.message.is_some(), has_bottom_panels);
+        let content_area = compute_text_area(area, state.message.is_some(), total_bottom_height);
         let content_area = Rect {
             x: content_area.x,
             y: content_area.y + total_top_height,
@@ -267,10 +265,9 @@ fn collect_panel_lines(
 /// When a message is present, the last row is reserved for the message line.
 /// Bottom panel rows are reserved above the message line.
 /// The text area height is reduced accordingly.
-fn compute_text_area(total_area: Rect, has_message: bool, has_bottom_panels: bool) -> Rect {
+fn compute_text_area(total_area: Rect, has_message: bool, bottom_panel_height: u16) -> Rect {
     let message_rows = if has_message { 1 } else { 0 };
-    let bottom_rows = if has_bottom_panels { 1 } else { 0 };
-    let reserved = message_rows + bottom_rows;
+    let reserved = message_rows + bottom_panel_height;
     let text_height = total_area.height.saturating_sub(reserved);
     Rect {
         x: total_area.x,
