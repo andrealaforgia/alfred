@@ -26,6 +26,39 @@ pub struct Overlay {
     pub max_visible_items: usize,
     /// The scroll offset into the items list (first visible item index).
     pub scroll_offset: usize,
+    /// Foreground color for normal items (hex string like "#cdd6f4"), empty = default.
+    pub fg_color: String,
+    /// Background color for the overlay box (hex string), empty = default.
+    pub bg_color: String,
+    /// Foreground color for the highlighted/selected item, empty = default.
+    pub highlight_fg: String,
+    /// Background color for the highlighted/selected item, empty = default.
+    pub highlight_bg: String,
+    /// Foreground color for the input/prompt line, empty = default.
+    pub prompt_fg: String,
+    /// Border color (hex string), empty = default.
+    pub border_color: String,
+}
+
+/// Returns a new overlay with style colors updated.
+pub fn set_style(
+    overlay: &Overlay,
+    fg: &str,
+    bg: &str,
+    highlight_fg: &str,
+    highlight_bg: &str,
+    prompt_fg: &str,
+    border_color: &str,
+) -> Overlay {
+    Overlay {
+        fg_color: fg.to_string(),
+        bg_color: bg.to_string(),
+        highlight_fg: highlight_fg.to_string(),
+        highlight_bg: highlight_bg.to_string(),
+        prompt_fg: prompt_fg.to_string(),
+        border_color: border_color.to_string(),
+        ..overlay.clone()
+    }
 }
 
 /// Creates a new overlay with the given title, width, and max visible items.
@@ -46,13 +79,11 @@ pub fn create(title: &str, width: usize, max_visible_items: usize) -> Overlay {
 pub fn reset(overlay: &Overlay) -> Overlay {
     Overlay {
         visible: false,
-        title: overlay.title.clone(),
         input: String::new(),
         items: Vec::new(),
         cursor_index: 0,
-        width: overlay.width,
-        max_visible_items: overlay.max_visible_items,
         scroll_offset: 0,
+        ..overlay.clone()
     }
 }
 

@@ -1,6 +1,21 @@
 ;;; name: default-theme
-;;; version: 0.2.0
+;;; version: 0.3.0
 ;;; description: Default color theme for Alfred (Catppuccin Mocha-inspired)
+
+;; ---------------------------------------------------------------------------
+;; Shared theme variables — referenced by ALL plugins at render time.
+;; Users can override any of these in ~/.config/alfred/init.lisp via:
+;;   (set theme-fg "#e0def4")
+;; ---------------------------------------------------------------------------
+
+(define theme-fg "#cdd6f4")            ;; text foreground
+(define theme-bg "#1e1e2e")            ;; base background
+(define theme-surface "#313244")       ;; surface (status bar, panels)
+(define theme-accent "#89b4fa")        ;; blue — directories, links
+(define theme-highlight-fg "#1e1e2e")  ;; cursor/selected foreground
+(define theme-highlight-bg "#cdd6f4")  ;; cursor/selected background
+(define theme-prompt "#f5c2e7")        ;; pink — prompts, search
+(define theme-muted "#6c7086")         ;; gray — borders, gutter
 
 ;; UI colors
 (set-theme-color "text-fg" "default")

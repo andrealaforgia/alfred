@@ -1,7 +1,7 @@
 ;;; name: browse-mode
 ;;; version: 3.0.0
 ;;; description: File tree sidebar panel with browse and recursive search states
-;;; depends: vim-keybindings
+;;; depends: vim-keybindings, default-theme
 
 ;; ---------------------------------------------------------------------------
 ;; Constants
@@ -11,13 +11,6 @@
 (define browser-panel-name "filetree")
 (define browser-panel-width 30)
 (define browser-header-offset 2)
-
-;; Colors (Catppuccin Mocha)
-(define browser-color-blue "#89b4fa")
-(define browser-color-pink "#f5c2e7")
-(define browser-color-gray "#cdd6f4")
-(define browser-color-cursor-fg "#1e1e2e")
-(define browser-color-cursor-bg "#cdd6f4")
 
 ;; ---------------------------------------------------------------------------
 ;; State variables
@@ -92,14 +85,14 @@
     (if (= idx cursor)
       (set-panel-line-style browser-panel-name (+ idx browser-header-offset) 0
         (str-length (browser-format-entry entry idx cursor))
-        browser-color-pink)
+        theme-prompt)
       (if (= (nth 1 entry) "dir")
         (set-panel-line-style browser-panel-name (+ idx browser-header-offset) 0
           (str-length (browser-format-entry entry idx cursor))
-          browser-color-blue)
+          theme-accent)
         (set-panel-line-style browser-panel-name (+ idx browser-header-offset) 0
           (str-length (browser-format-entry entry idx cursor))
-          browser-color-gray)))))
+          theme-fg)))))
 
 ;; Recursively style all browse entries
 (define browser-style-browse-entries
@@ -126,10 +119,10 @@
     (if (= idx cursor)
       (set-panel-line-style browser-panel-name (+ idx browser-header-offset) 0
         (str-length (browser-format-search-result result idx cursor))
-        browser-color-pink)
+        theme-prompt)
       (set-panel-line-style browser-panel-name (+ idx browser-header-offset) 0
         (str-length (browser-format-search-result result idx cursor))
-        browser-color-gray))))
+        theme-fg))))
 
 ;; Recursively style all search results
 (define browser-style-search-results
@@ -152,7 +145,7 @@
     (set-panel-line browser-panel-name 0
       (str-concat (list " " browser-current-dir)))
     (set-panel-line-style browser-panel-name 0 0
-      (+ (str-length browser-current-dir) 1) browser-color-blue)
+      (+ (str-length browser-current-dir) 1) theme-accent)
     ;; Separator
     (set-panel-line browser-panel-name 1 (str-concat (list)))
     ;; Entries
@@ -173,7 +166,7 @@
     (set-panel-line browser-panel-name 0
       (str-concat (list " / " browser-search-query)))
     (set-panel-line-style browser-panel-name 0 0
-      (+ (str-length browser-search-query) 3) browser-color-pink)
+      (+ (str-length browser-search-query) 3) theme-prompt)
     ;; Separator
     (set-panel-line browser-panel-name 1 (str-concat (list)))
     ;; Results
@@ -205,7 +198,7 @@
           (- (panel-cursor-line browser-panel-name) browser-header-offset))
         (clear-panel-line-styles browser-panel-name)
         (set-panel-line-style browser-panel-name 0 0
-          (+ (str-length browser-search-query) 3) browser-color-pink)
+          (+ (str-length browser-search-query) 3) theme-prompt)
         (browser-style-search-results browser-search-results 0
           (- (panel-cursor-line browser-panel-name) browser-header-offset)))
       (begin
@@ -213,7 +206,7 @@
           (- (panel-cursor-line browser-panel-name) browser-header-offset))
         (clear-panel-line-styles browser-panel-name)
         (set-panel-line-style browser-panel-name 0 0
-          (+ (str-length browser-current-dir) 1) browser-color-blue)
+          (+ (str-length browser-current-dir) 1) theme-accent)
         (browser-style-browse-entries browser-entries 0
           (- (panel-cursor-line browser-panel-name) browser-header-offset))))))
 
@@ -239,7 +232,7 @@
         (define-panel browser-panel-name "left" browser-panel-width)
         (set-panel-priority browser-panel-name 10)
         (set browser-created 1)))
-    (set-panel-style browser-panel-name "#6c7086" "#1e1e2e")))
+    (set-panel-style browser-panel-name theme-muted theme-bg)))
 
 (define browser-show-panel
   (lambda ()

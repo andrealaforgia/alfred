@@ -82,8 +82,15 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
                     height: panel.size,
                 };
                 let style = resolve_panel_style(state, panel);
-                let widget = Paragraph::new(panel.content.as_str()).style(style);
-                frame.render_widget(widget, panel_area);
+                if panel.lines.is_empty() {
+                    let widget = Paragraph::new(panel.content.as_str()).style(style);
+                    frame.render_widget(widget, panel_area);
+                } else {
+                    let lines =
+                        collect_panel_lines(panel, panel.size as usize, None, panel_area.width);
+                    let widget = Paragraph::new(lines).style(style);
+                    frame.render_widget(widget, panel_area);
+                }
                 top_y += panel.size;
             }
         }
@@ -148,8 +155,18 @@ pub fn render_frame<B: Backend>(terminal: &mut Terminal<B>, state: &EditorState)
                     height: panel.size,
                 };
                 let style = resolve_panel_style(state, panel);
-                let widget = Paragraph::new(panel.content.as_str()).style(style);
-                frame.render_widget(widget, panel_area);
+                // Bottom panels may use per-line content (set-panel-line)
+                // or single-string content (set-panel-content). Use lines
+                // when populated, falling back to content string.
+                if panel.lines.is_empty() {
+                    let widget = Paragraph::new(panel.content.as_str()).style(style);
+                    frame.render_widget(widget, panel_area);
+                } else {
+                    let lines =
+                        collect_panel_lines(panel, panel.size as usize, None, panel_area.width);
+                    let widget = Paragraph::new(lines).style(style);
+                    frame.render_widget(widget, panel_area);
+                }
                 bottom_y += panel.size;
             }
         }

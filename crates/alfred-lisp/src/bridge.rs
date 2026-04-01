@@ -1765,6 +1765,16 @@ pub fn register_string_primitives(runtime: &LispRuntime) {
         Symbol("newline".to_string()),
         Value::String("\n".to_string()),
     );
+    // Double-quote and backslash cannot be expressed as string literals in
+    // rust_lisp (no escape-sequence support), so we provide them as constants.
+    env.borrow_mut().define(
+        Symbol("double-quote".to_string()),
+        Value::String("\"".to_string()),
+    );
+    env.borrow_mut().define(
+        Symbol("backslash-char".to_string()),
+        Value::String("\\".to_string()),
+    );
 }
 
 // ---------------------------------------------------------------------------

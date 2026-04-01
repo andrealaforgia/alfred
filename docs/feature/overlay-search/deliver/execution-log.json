@@ -1,146 +1,146 @@
 {
   "schema_version": "3.0",
-  "project_id": "regex-wizard",
+  "feature_id": "overlay-search",
   "events": [
     {
       "sid": "01-01",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T19:16:29Z"
+      "t": "2026-03-31T11:44:02Z"
     },
     {
       "sid": "01-01",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T19:18:20Z"
+      "t": "2026-03-31T11:44:45Z"
     },
     {
       "sid": "01-01",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T19:18:20Z"
+      "t": "2026-03-31T11:45:25Z"
     },
     {
       "sid": "01-01",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T19:20:40Z"
+      "t": "2026-03-31T11:47:14Z"
     },
     {
       "sid": "01-01",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T19:21:27Z"
+      "t": "2026-03-31T11:47:39Z"
     },
     {
-      "sid": "02-01",
+      "sid": "01-02",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:01:40Z"
+      "t": "2026-03-31T11:50:08Z"
     },
     {
-      "sid": "02-01",
+      "sid": "01-02",
       "p": "RED_ACCEPTANCE",
-      "s": "SKIPPED",
-      "d": "NOT_APPLICABLE: rendering verified by E2E in step 03-02",
-      "t": "2026-03-31T20:01:43Z"
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-31T11:51:29Z"
     },
     {
-      "sid": "02-01",
+      "sid": "01-02",
       "p": "RED_UNIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:02:25Z"
+      "t": "2026-03-31T11:51:34Z"
     },
     {
-      "sid": "02-01",
+      "sid": "01-02",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:03:58Z"
+      "t": "2026-03-31T11:53:36Z"
     },
     {
-      "sid": "02-01",
+      "sid": "01-02",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:04:33Z"
+      "t": "2026-03-31T11:54:02Z"
     },
     {
-      "sid": "03-01",
+      "sid": "01-03",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:17:46Z"
+      "t": "2026-03-31T11:56:19Z"
     },
     {
-      "sid": "03-01",
+      "sid": "01-03",
       "p": "RED_ACCEPTANCE",
       "s": "SKIPPED",
-      "d": "NOT_APPLICABLE: Lisp plugin tested via E2E in step 03-02",
-      "t": "2026-03-31T20:17:51Z"
+      "d": "NOT_APPLICABLE: rendering code verified via E2E tests in step 01-04",
+      "t": "2026-03-31T11:56:23Z"
     },
     {
-      "sid": "03-01",
+      "sid": "01-03",
       "p": "RED_UNIT",
-      "s": "SKIPPED",
-      "d": "NOT_APPLICABLE: no unit test framework for Lisp plugins",
-      "t": "2026-03-31T20:17:52Z"
+      "s": "EXECUTED",
+      "d": "PASS",
+      "t": "2026-03-31T11:57:26Z"
     },
     {
-      "sid": "03-01",
+      "sid": "01-03",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:19:46Z"
+      "t": "2026-03-31T12:00:47Z"
     },
     {
-      "sid": "03-01",
+      "sid": "01-03",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:20:15Z"
+      "t": "2026-03-31T12:01:05Z"
     },
     {
-      "sid": "03-02",
+      "sid": "01-04",
       "p": "PREPARE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:33:22Z"
+      "t": "2026-03-31T12:03:23Z"
     },
     {
-      "sid": "03-02",
+      "sid": "01-04",
       "p": "RED_ACCEPTANCE",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T20:33:23Z"
+      "t": "2026-03-31T12:03:42Z"
     },
     {
-      "sid": "03-02",
+      "sid": "01-04",
       "p": "RED_UNIT",
       "s": "SKIPPED",
-      "d": "NOT_APPLICABLE: E2E tests only for this step",
-      "t": "2026-03-31T20:33:27Z"
+      "d": "NOT_APPLICABLE: Lisp plugin has no unit test framework",
+      "t": "2026-03-31T12:03:47Z"
     },
     {
-      "sid": "03-02",
+      "sid": "01-04",
       "p": "GREEN",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T21:23:06Z"
+      "t": "2026-03-31T12:22:01Z"
     },
     {
-      "sid": "03-02",
+      "sid": "01-04",
       "p": "COMMIT",
       "s": "EXECUTED",
       "d": "PASS",
-      "t": "2026-03-31T21:23:06Z"
+      "t": "2026-03-31T12:22:31Z"
     }
   ]
 }

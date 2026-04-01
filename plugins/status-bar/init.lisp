@@ -1,10 +1,11 @@
 ;;; name: status-bar
-;;; version: 3.0.0
+;;; version: 3.1.0
 ;;; description: Status bar showing filename, position, mode — pure Lisp via panel system
+;;; depends: default-theme
 
 ;; Create a bottom panel for the status bar
 (define-panel "status" "bottom" 1)
-(set-panel-style "status" "#cdd6f4" "#313244")
+(set-panel-style "status" theme-fg theme-surface)
 
 ;; Build status text from editor state
 (define build-status

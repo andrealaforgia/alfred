@@ -1,6 +1,7 @@
 ;;; name: line-numbers
-;;; version: 3.0.0
+;;; version: 3.1.0
 ;;; description: Line numbers in the gutter — pure Lisp via panel system
+;;; depends: default-theme
 
 ;; Compute gutter width based on total line count
 (define compute-gutter-width
@@ -10,7 +11,7 @@
 ;; Create a left panel for line numbers
 (define-panel "gutter" "left" 4)
 (set-panel-priority "gutter" 100)
-(set-panel-style "gutter" "#6c7086" "default")
+(set-panel-style "gutter" theme-muted "default")
 
 ;; Update gutter content for visible lines
 (define update-gutter

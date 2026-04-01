@@ -1,0 +1,267 @@
+{
+  "roadmap": {
+    "project_id": "overlay-search",
+    "created_at": "2026-03-31T11:39:35Z",
+    "total_steps": 11,
+    "phases": 3
+  },
+  "phases": [
+    {
+      "id": "01",
+      "name": "Walking Skeleton -- end-to-end overlay search",
+      "steps": [
+        {
+          "id": "01-01",
+          "name": "Overlay data model and pure functions",
+          "description": "Create overlay.rs with algebraic data type (visible, title, input, items, cursor, width, max_visible_items, scroll_offset) and pure functions: create/reset, set-input, set-items, get-selected, cursor-up/down with clamping. Register module in lib.rs. Add overlay field to EditorState.",
+          "time_estimate_minutes": 45,
+          "dependencies": [],
+          "files_to_modify": [
+            "crates/alfred-core/src/overlay.rs",
+            "crates/alfred-core/src/lib.rs",
+            "crates/alfred-core/src/editor_state.rs"
+          ],
+          "criteria": [
+            "New overlay value created with visible=false and empty collections",
+            "Setting input text produces new overlay with updated input",
+            "Setting items produces new overlay with updated item list",
+            "Get-selected returns item at cursor index or nothing when empty",
+            "Cursor-down clamps at last item; cursor-up clamps at zero"
+          ]
+        },
+        {
+          "id": "01-02",
+          "name": "Overlay bridge primitives (minimal set)",
+          "description": "Register 5 bridge primitives in bridge.rs: open-overlay, close-overlay, overlay-set-input, overlay-set-items, overlay-get-selected. Each primitive reads/writes the overlay field on EditorState through the existing bridge dispatch pattern.",
+          "time_estimate_minutes": 60,
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/alfred-lisp/src/bridge.rs"
+          ],
+          "criteria": [
+            "open-overlay sets visible=true and resets input/items/cursor",
+            "close-overlay sets visible=false",
+            "overlay-set-input updates the input text in overlay state",
+            "overlay-set-items replaces the items list in overlay state",
+            "overlay-get-selected returns the highlighted item string"
+          ]
+        },
+        {
+          "id": "01-03",
+          "name": "Overlay rendering and cursor override",
+          "description": "After all existing rendering, check overlay visibility. If visible, draw centered bordered box with input line (prompt + query) and item list with cursor highlight. Override terminal cursor position to end of overlay input when visible.",
+          "time_estimate_minutes": 60,
+          "dependencies": [
+            "01-01"
+          ],
+          "files_to_modify": [
+            "crates/alfred-tui/src/renderer.rs",
+            "crates/alfred-tui/src/app.rs"
+          ],
+          "criteria": [
+            "Overlay renders centered over editor content when visible",
+            "Input line shows prompt character and current query text",
+            "Highlighted item row renders with distinct (reversed) style",
+            "Terminal cursor positioned at end of overlay input text",
+            "No overlay rendered when visible=false"
+          ]
+        },
+        {
+          "id": "01-04",
+          "name": "Overlay search plugin and browse-mode binding with WS E2E test",
+          "description": "Create overlay-search/init.lisp: on command overlay-file-search, call list-dir-recursive, open-overlay, populate items, switch keymap. Handle char input (append+filter+update), Enter (get-selected, open-file, close-overlay, restore mode), Escape (close-overlay, restore mode). Add Ctrl-p binding in browse-mode. Write WS-1 E2E test.",
+          "time_estimate_minutes": 120,
+          "dependencies": [
+            "01-02",
+            "01-03"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp",
+            "plugins/browse-mode/init.lisp",
+            "tests/e2e/test_alfred.py"
+          ],
+          "criteria": [
+            "Ctrl-p from browser panel opens overlay with file list",
+            "Typing characters filters results by substring match",
+            "Enter opens the highlighted file in the editor buffer",
+            "Escape dismisses overlay without opening a file",
+            "WS-1 E2E test passes: Ctrl-p, type fragment, Enter, edit+save"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "02",
+      "name": "Full overlay features -- navigation, filtering, lifecycle",
+      "steps": [
+        {
+          "id": "02-01",
+          "name": "Remaining bridge primitives and overlay title",
+          "description": "Register 5 remaining bridge primitives: overlay-set-title, overlay-get-input, overlay-cursor-down, overlay-cursor-up, overlay-visible?. Update plugin to use overlay-set-title for prompt and cursor primitives for arrow keys.",
+          "time_estimate_minutes": 45,
+          "dependencies": [
+            "01-04"
+          ],
+          "files_to_modify": [
+            "crates/alfred-lisp/src/bridge.rs",
+            "plugins/overlay-search/init.lisp"
+          ],
+          "criteria": [
+            "overlay-set-title updates the overlay header text",
+            "overlay-get-input returns the current query string",
+            "overlay-cursor-down/up move highlight with boundary clamping",
+            "overlay-visible? returns true when overlay is open",
+            "Plugin uses title primitive instead of hardcoded prompt"
+          ]
+        },
+        {
+          "id": "02-02",
+          "name": "Arrow navigation, cursor reset on query change, and scroll offset",
+          "description": "Wire Down/Up arrow keys in overlay keymap to cursor-down/cursor-up. Reset cursor to 0 when query text changes. Implement scroll offset so results beyond max_visible_items are reachable. Render visible window based on scroll_offset.",
+          "time_estimate_minutes": 60,
+          "dependencies": [
+            "02-01"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp",
+            "crates/alfred-core/src/overlay.rs"
+          ],
+          "criteria": [
+            "Down arrow moves highlight to next result in the list",
+            "Up arrow moves highlight to previous result in the list",
+            "Typing a character after navigating resets highlight to first result",
+            "Results beyond max_visible_items are scrollable via arrow keys",
+            "Scroll window adjusts when cursor moves past visible bounds"
+          ]
+        },
+        {
+          "id": "02-03",
+          "name": "Backspace, case-insensitive filtering, and empty-results handling",
+          "description": "Handle Backspace in overlay keymap: remove last character, re-filter, update overlay. Make substring matching case-insensitive. Handle Enter on empty results (no-op, overlay stays open). Handle Backspace on empty query (no-op).",
+          "time_estimate_minutes": 45,
+          "dependencies": [
+            "02-02"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp"
+          ],
+          "criteria": [
+            "Backspace removes last character and results update to match shorter query",
+            "Backspace on empty query leaves overlay open without crash",
+            "Typing uppercase query matches lowercase file paths",
+            "Enter on empty result list does not open a file or crash",
+            "Rapid type-delete-retype shows results matching final query"
+          ]
+        },
+        {
+          "id": "02-04",
+          "name": "Lifecycle edge cases and target/ exclusion",
+          "description": "Ensure overlay state resets fully on re-open (no stale query/items). Handle Ctrl-p while overlay already open (no-op or re-open). Filter out target/ directory from file list. Prevent typed characters from leaking to editor buffer on dismiss.",
+          "time_estimate_minutes": 45,
+          "dependencies": [
+            "02-03"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp",
+            "tests/e2e/test_alfred.py"
+          ],
+          "criteria": [
+            "Re-opening overlay after Escape shows clean state with no stale query",
+            "Ctrl-p while overlay is open does not crash the editor",
+            "Files inside target/ directory are excluded from search results",
+            "Characters typed in overlay do not appear in editor buffer after dismiss",
+            "Overlay search skips .git/ and other build artifact directories"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "03",
+      "name": "Browser integration, multi-mode support, and E2E coverage",
+      "steps": [
+        {
+          "id": "03-01",
+          "name": "Ctrl-p from normal mode and browser panel navigation",
+          "description": "Add Ctrl-p binding in normal-mode keymap. After file selection, update browser-current-dir to the opened file's parent directory. Ensure mode restores correctly to browse-mode or normal-mode depending on origin.",
+          "time_estimate_minutes": 60,
+          "dependencies": [
+            "02-04"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp",
+            "plugins/browse-mode/init.lisp"
+          ],
+          "criteria": [
+            "Ctrl-p from normal mode (file editing) opens the search overlay",
+            "After file selection, browser panel shows the file's parent directory",
+            "Escape from overlay returns to the originating mode (browse or normal)",
+            "Mode is normal after file selection regardless of origin",
+            "Browser panel remains visible underneath the overlay"
+          ]
+        },
+        {
+          "id": "03-02",
+          "name": "Regression guards and file-switch robustness",
+          "description": "Verify overlay works across consecutive file switches. Verify display renders correctly when switching between files of different sizes (gutter width changes). Verify editor commands work normally after overlay selection.",
+          "time_estimate_minutes": 30,
+          "dependencies": [
+            "03-01"
+          ],
+          "files_to_modify": [
+            "plugins/overlay-search/init.lisp",
+            "tests/e2e/test_alfred.py"
+          ],
+          "criteria": [
+            "Opening a second file via overlay after the first works correctly",
+            "Switching from large to small file via overlay has no display corruption",
+            "Normal-mode commands (i, A, dd) work after overlay file selection",
+            "Editor content matches selected file after each overlay search",
+            "Overlay search works after :q and reopen cycle"
+          ]
+        },
+        {
+          "id": "03-03",
+          "name": "Complete E2E test coverage for all milestones",
+          "description": "Write remaining E2E tests covering all 28 acceptance scenarios: lifecycle (M1-1 through M1-7), search/filtering (M2-1 through M2-8), navigation (M3-1 through M3-6), and browser integration (M4-1 through M4-6). Batch tests by class matching test-scenarios.md structure.",
+          "time_estimate_minutes": 90,
+          "dependencies": [
+            "03-02"
+          ],
+          "files_to_modify": [
+            "tests/e2e/test_alfred.py"
+          ],
+          "criteria": [
+            "All WS and M1 lifecycle tests pass (open, dismiss, re-open, no-crash, no-leak)",
+            "All M2 filtering tests pass (substring, backspace, case-insensitive, empty, target/)",
+            "All M3 navigation tests pass (down, up, boundary clamp, cursor reset on query change)",
+            "All M4 integration tests pass (browser nav, content, mode restore, file switch, display)",
+            "make ci-local and make e2e pass with zero failures"
+          ]
+        }
+      ]
+    }
+  ],
+  "implementation_scope": {
+    "source_directories": [
+      "crates/alfred-core/src/",
+      "crates/alfred-tui/src/",
+      "crates/alfred-lisp/src/",
+      "plugins/overlay-search/",
+      "plugins/browse-mode/"
+    ],
+    "test_directories": [
+      "tests/e2e/"
+    ],
+    "excluded_patterns": [
+      "target/**",
+      ".git/**"
+    ]
+  },
+  "validation": {
+    "status": "pending",
+    "reviewer": "solution-architect-reviewer",
+    "approved_at": null
+  }
+}

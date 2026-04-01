@@ -1,15 +1,28 @@
 ;;; name: overlay-search
 ;;; version: 0.1.0
 ;;; description: Overlay file search triggered by Ctrl-p
-;;; depends: browse-mode
+;;; depends: browse-mode, default-theme
 
 ;; ---------------------------------------------------------------------------
 ;; Constants
 ;; ---------------------------------------------------------------------------
 
-(define overlay-search-width 65)
-(define overlay-search-max-items 15)
+;; Compute overlay dimensions as 80% of terminal size
+(define overlay-search-compute-width
+  (lambda () (/ (* (viewport-width) 80) 100)))
+(define overlay-search-compute-max-items
+  (lambda () (- (/ (* (viewport-height) 80) 100) 3)))
 (define overlay-search-empty-str (str-concat (list)))
+
+;; Configurable list of directory names to exclude from search results.
+;; Users can override this in ~/.config/alfred/init.lisp via:
+;;   (set overlay-search-ignore-dirs (list "mutants.out" "mutants.out.old" "my-dir"))
+(define overlay-search-ignore-dirs
+  (list "mutants.out" "mutants.out.old"))
+
+;; Default list of directory names to always exclude (before .alfredignore merge).
+(define overlay-search-default-ignore-dirs
+  (list "mutants.out" "mutants.out.old"))
 
 ;; ---------------------------------------------------------------------------
 ;; State variables
@@ -18,20 +31,98 @@
 (define overlay-search-query (str-concat (list)))
 (define overlay-search-all-files (list))
 (define overlay-search-open nil)
+(define overlay-search-selected-path (str-concat (list)))
+
+;; Temporary variable holding the filepath currently being checked for ignored
+;; directories. Used by overlay-search-dir-segment-matches to avoid nested
+;; closures capturing local variables (rust_lisp bug workaround).
+(define overlay-search-current-check-path (str-concat (list)))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers -- pure utility functions
 ;; ---------------------------------------------------------------------------
+
+;; Temporary variable holding the current line being checked by the ignorefile
+;; filter predicate. Used to avoid nested closures (rust_lisp bug workaround).
+(define overlay-search-current-ignore-line (str-concat (list)))
+
+;; Predicate for filter: returns true if a line is NOT a comment and NOT blank.
+;; Reads overlay-search-current-ignore-line to avoid nested lambda captures.
+(define overlay-search-ignore-line-valid
+  (lambda (line)
+    (if (= (str-length line) 0)
+      nil
+      (if (str-starts-with line "#")
+        nil
+        1))))
+
+;; Parse .alfredignore file contents into a list of directory names.
+;; Splits on newline, trims each line, and filters out comments and blanks.
+(define overlay-search-parse-ignorefile
+  (lambda (contents)
+    (filter overlay-search-ignore-line-valid
+            (map str-trim (str-split contents newline)))))
+
+;; Load .alfredignore from the project root and merge with default ignore dirs.
+;; Sets overlay-search-ignore-dirs to the merged result.
+(define overlay-search-load-alfredignore
+  (lambda ()
+    (begin
+      (set overlay-search-ignore-dirs overlay-search-default-ignore-dirs)
+      (if (file-exists (path-join browser-root-dir ".alfredignore"))
+        (set overlay-search-ignore-dirs
+          (append overlay-search-ignore-dirs
+                  (overlay-search-parse-ignorefile
+                    (read-file (path-join browser-root-dir ".alfredignore")))))
+        nil))))
 
 ;; Check if an entry is a file (not a directory)
 (define overlay-search-is-file
   (lambda (entry)
     (= (nth 1 entry) "file")))
 
-;; Extract file paths from recursive directory listing
+;; Check if an ignored directory name appears as a path segment in the filepath
+;; stored in overlay-search-current-check-path. A directory name "foo" matches
+;; paths like "foo/bar.rs" (at start) or "src/foo/bar.rs" (in middle), but NOT
+;; "not-foo/bar.rs" or "foobar/baz.rs".
+;; Reads overlay-search-current-check-path directly to avoid nested lambda
+;; closures which trigger a rust_lisp bug with captured local variables.
+(define overlay-search-dir-segment-matches
+  (lambda (dirname)
+    (if (str-contains overlay-search-current-check-path
+                      (str-concat (list "/" dirname "/")))
+      1
+      (if (str-starts-with overlay-search-current-check-path
+                           (str-concat (list dirname "/")))
+        1
+        nil))))
+
+;; Check if a filepath contains any ignored directory segment.
+;; Sets the global overlay-search-current-check-path, then filters
+;; overlay-search-ignore-dirs to find matches. Returns true (non-nil)
+;; if at least one ignored dir matches.
+(define overlay-search-path-has-ignored-dir
+  (lambda (filepath)
+    (begin
+      (set overlay-search-current-check-path filepath)
+      (> (length (filter overlay-search-dir-segment-matches
+                         overlay-search-ignore-dirs))
+         0))))
+
+;; Predicate for filter: returns true if the filepath is NOT ignored.
+;; Reads the filepath argument directly (no closure capture needed).
+(define overlay-search-path-not-ignored
+  (lambda (filepath)
+    (if (overlay-search-path-has-ignored-dir filepath)
+      nil
+      1)))
+
+;; Extract file paths from recursive directory listing, excluding paths
+;; that contain any ignored directory segment.
 (define overlay-search-extract-files
   (lambda (entries)
-    (map first (filter overlay-search-is-file entries))))
+    (filter overlay-search-path-not-ignored
+            (map first (filter overlay-search-is-file entries)))))
 
 ;; Check if a file path contains the current query (case-insensitive).
 ;; Reads overlay-search-query directly to avoid nested lambda closures
@@ -78,9 +169,17 @@
       (begin
         (set overlay-search-open 1)
         (set overlay-search-query (str-concat (list)))
+        (overlay-search-load-alfredignore)
         (set overlay-search-all-files
           (overlay-search-extract-files (list-dir-recursive browser-root-dir)))
-        (open-overlay overlay-search-width overlay-search-max-items)
+        (open-overlay (overlay-search-compute-width) (overlay-search-compute-max-items))
+        (overlay-set-style
+          theme-fg
+          theme-bg
+          theme-highlight-fg
+          theme-highlight-bg
+          theme-prompt
+          theme-muted)
         (overlay-set-items overlay-search-all-files)
         (overlay-set-input overlay-search-query)
         (set-active-keymap "overlay-search-input")))))
@@ -91,7 +190,10 @@
     (if (= (overlay-get-selected) overlay-search-empty-str)
       (overlay-search-close)
       (begin
-        (open-file (path-join browser-root-dir (overlay-get-selected)))
+        (set overlay-search-selected-path
+          (path-join browser-root-dir (overlay-get-selected)))
+        (open-file overlay-search-selected-path)
+        (browser-load-dir (path-parent overlay-search-selected-path))
         (close-overlay)
         (set overlay-search-open nil)))))
 
